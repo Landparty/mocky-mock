@@ -5,6 +5,30 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- Runner meets the backend: recordings, reports, Docker output
+
+Bug hunt round 2 where the runner meets LegacyLens (Create / Run / Recreate
+tests, oracle jobs); each bug reproduced against a real backend, Postgres
+and GnuCOBOL 3.1.2 (oraclemix and ordmod). Tests:
+`tests/unit/test_bug_hunt_20261105_runner_backend.py`,
+`tests/unit/test_compile_diagnosis.py`.
+
+* A tests suite whose `--record-expectations` did not compile was still
+  reported `recorded`: the backend kept its `STUB EXPECT` `.cut` as the
+  module's tests (replacing a good recording on Recreate), and every later
+  run passed without checking anything. The runner now requires the
+  recorder's `recorded N, skipped M` line, else the suite is an error.
+* A USE REAL CALL program that does not compile was diagnosed as "the
+  program compiles on its own ... a mockymock bug": only the program under
+  test was probed. The probe now compiles the real programs with it and
+  names the one that fails (`_compile_failure_diagnosis(real_programs=)`).
+* `serve` posted a result once: a backend restarting as a job ended lost
+  the whole run and left the job "running" for two hours. Transient
+  failures are retried (`REPORT_RETRY_DELAYS`, about 8 minutes).
+* Docker backend `run_binary` captured stdout unbounded (400 MB printed,
+  1.2 GB peak); it now reads through the native capped reader
+  (`_exec_binary`, 145 MB peak). See [runtime](runtime.md).
+
 ## 2026-11-05 -- Resource mocks answer like the real statement
 
 Bug hunt over hand-written resource mocks; executed repros in

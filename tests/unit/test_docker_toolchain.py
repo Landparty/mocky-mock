@@ -686,7 +686,7 @@ def test_run_binary_execs_via_container_timeout(tmp_path):
 
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+            "mockymock.runtime.docker_toolchain._exec_binary", side_effect=fake_run
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
     ):
@@ -719,7 +719,7 @@ def test_run_binary_container_timeout_gets_explanatory_stderr(tmp_path):
     binary = source.parent / "PROG"
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run",
+            "mockymock.runtime.docker_toolchain._exec_binary",
             return_value=_completed([], returncode=TIMEOUT_EXIT_CODE),
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
@@ -734,7 +734,7 @@ def test_run_binary_host_side_hang_maps_to_timeout_exit_code(tmp_path):
     binary = source.parent / "PROG"
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run",
+            "mockymock.runtime.docker_toolchain._exec_binary",
             side_effect=subprocess.TimeoutExpired(
                 cmd=["docker"], timeout=40, output=None
             ),
@@ -751,7 +751,7 @@ def test_run_binary_docker_oserror_maps_to_not_found(tmp_path):
     binary = source.parent / "PROG"
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run",
+            "mockymock.runtime.docker_toolchain._exec_binary",
             side_effect=OSError("docker went away"),
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
@@ -926,7 +926,7 @@ def test_run_binary_sets_trace_env_pointing_into_the_sandbox(tmp_path):
 
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run",
+            "mockymock.runtime.docker_toolchain._exec_binary",
             side_effect=lambda argv, **kw: (calls.append(argv), _completed(argv))[1],
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
@@ -947,7 +947,7 @@ def test_run_binary_sets_no_trace_env_by_default(tmp_path):
 
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run",
+            "mockymock.runtime.docker_toolchain._exec_binary",
             side_effect=lambda argv, **kw: (calls.append(argv), _completed(argv))[1],
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),

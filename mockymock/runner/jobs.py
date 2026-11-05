@@ -59,6 +59,9 @@ KINDS = ("baseline", "compare", "tests")
 MAX_LOG_CHARS = 20_000
 #: Seconds one `mockymock generate` or `mockymock run` may take.
 DEFAULT_SUITE_TIMEOUT = 900
+#: What `mockymock run --record-expectations` prints once it has recorded
+#: (it never does when the suite did not compile or was refused).
+RECORDED_MARK = "--record-expectations: recorded "
 #: Largest pack the runner unpacks (compressed and uncompressed).
 MAX_PACK_BYTES = 200 * 1024 * 1024
 
@@ -522,11 +525,21 @@ def _run_tests_suite(
             duration_ms=step.duration_ms,
             command="mockymock run --record-expectations",
         )
-        if step.timed_out:
+        if step.timed_out or RECORDED_MARK not in step.log:
+            # No recording: the suite did not compile, was refused, or hung.
+            # Playing it now would report its STUB EXPECT placeholders as a
+            # recording (`recorded` was set whatever the step did), and the
+            # backend kept that .cut as the module's tests: every later run
+            # replayed it, never filling or checking them (2026-11-05).
             outcome.exit_code = step.exit_code
             outcome.cut_text = cut.read_text(encoding="utf-8", errors="replace")
             outcome.log = "".join(log)
-            outcome.error = "mockymock run --record-expectations timed out"
+            outcome.error = (
+                "mockymock run --record-expectations timed out"
+                if step.timed_out
+                else "mockymock run --record-expectations recorded nothing "
+                "(the suite did not compile or run; see its log)"
+            )
             return outcome
         outcome.recorded = True
     outcome.cut_text = cut.read_text(encoding="utf-8", errors="replace")
@@ -642,6 +655,42 @@ def without_nul(value: Any) -> Any:
     return value
 
 
+#: Seconds between the attempts to report a result the backend could not
+#: take (unreachable, restarting, a 5xx): about 8 minutes in all.
+REPORT_RETRY_DELAYS: tuple[float, ...] = (5, 15, 30, 60, 120, 240)
+
+
+def _transient(exc: RunnerClientError) -> bool:
+    """Whether a refused request is worth sending again: the backend was not
+    reached, or answered 429 or 5xx. A 4xx (job not running, bad payload)
+    is final."""
+    return exc.status is None or exc.status == 429 or exc.status >= 500
+
+
+def _report(
+    client: RunnerClient,
+    job_id: str,
+    payload: dict[str, Any],
+    sleep: Callable[[float], None],
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    """`client.report`, retried while the failure is transient: one try lost
+    the whole run when the backend restarted as the job ended, and the job
+    then sat "running" until the backend's job timeout (2026-11-05)."""
+    for delay in REPORT_RETRY_DELAYS:
+        try:
+            return client.report(job_id, payload)
+        except RunnerClientError as exc:
+            if not _transient(exc):
+                raise
+            logger.warning(
+                "cannot report the result, retrying",
+                extra={"job_id": job_id, "error": str(exc), "retry_in_s": delay},
+            )
+            sleep(delay)
+    return client.report(job_id, payload)
+
+
 def default_runner_name() -> str:
     return f"mockymock@{socket.gethostname()}"
 
@@ -731,7 +780,7 @@ def serve(
                 "log": job_log.text(),
             }
         try:
-            summary = client.report(job_id, payload)
+            summary = _report(client, job_id, payload, sleep, LOGGER)
         except RunnerClientError as exc:
             LOGGER.error(
                 "cannot report the result",
