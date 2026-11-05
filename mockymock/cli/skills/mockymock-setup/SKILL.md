@@ -35,24 +35,39 @@ lists combine").
 
 ## The rules
 
-1. **Detect first, then ask.** Never ask a question the repository already
-   answers. Ask about what you found ("I found copybooks in `CPY/` and
-   `common/copy/`; use both?"), not open-ended ("where are your
-   copybooks?").
-2. **Ask one topic at a time**, with your proposed answer as the default,
-   so the developer can reply "yes". Group small yes/no items together.
-3. **Show every file before writing it**, and never overwrite: merge into
-   an existing `cobol.yml`, `mockymock.toml` or `.vscode/settings.json`,
+1. **Detect first, then ask.** Never ask a question the repository or the
+   machine already answers: the OS, `gcc`, Docker and the extension are
+   all things you can check. Ask about what you found ("I found copybooks
+   in `CPY/` and `common/copy/`; use both?"), not open-ended ("where are
+   your copybooks?").
+2. **Few questions, each one worth asking.** A developer who asked for a
+   setup wants it done, and ten questions in a row reads like a form.
+   Aim for three to five: only the topics in step 2 that the inventory
+   left open, each with your proposed answer so "yes" is a full reply.
+   Everything that has a sensible default (AI mode, the optional editor
+   settings, a seed, extension recommendations, `.gitignore`) is not a
+   question: put it in the plan you show before writing, as "I'll also
+   ... -- say if you want any of it different", and accept silence as yes.
+3. **Show the plan before writing it, and never overwrite.** Merge into an
+   existing `cobol.yml`, `mockymock.toml` or `.vscode/settings.json`,
    keeping every key and comment you did not change. If a key already has
-   a different value, ask which one wins.
+   a different value, ask which one wins. Never rename, move or edit the
+   developer's source, copybooks or suites to make them resolve: aliases
+   and search paths exist so the export stays as it came from the
+   mainframe.
 4. **Write paths relative** to the file that holds them (`cobol.yml` paths
    resolve against `cobol.yml`'s folder), so the setup works on every
    clone. Absolute paths only for something outside the repository, and
    then prefer `~/...` or `${VAR}`.
 5. **Nothing outside the repository** without a yes: no installs, no
    `docker` commands, no user-level settings, no git commits.
-6. **Prove it.** The job ends with the check in step 5 passing, or with a
-   list of exactly what still fails and why.
+6. **It has to work outside the editor too.** The same suites run from a
+   terminal, from CI and from an AI assistant, none of which read
+   `.vscode/settings.json`. So the copybook list belongs in a config file
+   the CLI reads (`cobol.yml`, or `mockymock.toml`), never only in editor
+   settings.
+7. **Prove it.** The job ends with the check in step 5 passing from a
+   plain terminal, or with a list of exactly what still fails and why.
 
 `mockymock skills mode` changes how often you check in on test-writing
 work; this setup always asks, because every answer is a fact about the
@@ -110,15 +125,30 @@ I'll ask about 4 things, then write cobol.yml and .vscode/settings.json.
 
 Only the topics the inventory left open, in this order. Each one names the
 setting it fills; `reference/settings.md` has every setting's exact shape.
+Topics 1-4 are questions when the repository leaves them open; 5-7 are
+defaults you list in the plan (step 3) and change only if the developer
+says so.
 
 1. **Copybook folders** -> `project.copybook_path` in `cobol.yml`.
    Propose every folder that holds a member the programs use, in search
    order (first match wins when two folders hold the same member: ask
-   which comes first). Ask about folders outside the repository (a shared
-   copylib checkout, a network drive); those are the ones you cannot find.
-   If member files have odd names (`m0042.txt` holding `GTTLBI0A`), offer
-   `mockymock.copybook_aliases`; differently cased files and the
-   extensions above are matched automatically.
+   which comes first). In the same question, ask whether any copybooks
+   live outside the repository (a shared copylib checkout, a network
+   drive) -- those are the ones you cannot find. Members you could not
+   find anywhere are the strongest hint; name them.
+   If member files have odd names (`m0042.txt` holding `GTTLBI0A`), find
+   the file whose `01` level or content matches the member, and propose a
+   `mockymock.copybook_aliases` entry for it; differently cased files and
+   the extensions above are matched automatically.
+
+   **When the config file belongs to someone else** (a build team, a
+   shared template): adding one entry to `copybook_path` leaves every
+   setting they made as it was, so ask exactly that ("may I add
+   `shared/copy` to `project.copybook_path`? Nothing else changes"), not
+   "may I change cobol.yml". If the answer is still no, write the full
+   list as `copybook_path` in a `mockymock.toml` beside it (it layers over
+   `cobol.yml` for mockymock only) and say that cobol-parser will not see
+   the extra folder. Do not fall back to editor-only settings (rule 6).
 2. **Where the programs live** -> `mockymock.source_root`. Only needed
    when the programs are not under `src/` (or the repository root).
 3. **Where suites go** -> `mockymock.test_root`. Default `tests/`,
@@ -126,7 +156,8 @@ setting it fills; `reference/settings.md` has every setting's exact shape.
    Existing suites beside their programs keep working either way; ask
    only whether new ones should go to `tests/` or somewhere else.
 4. **How tests run** -> `mockymock.toolchain` in `.vscode/settings.json`.
-   Leave `auto` unless they have a reason: `auto` uses the GnuCOBOL bundled
+   Not a question when the machine answers it: check the OS, `gcc` and
+   Docker yourself and propose. Leave `auto` unless they have a reason: `auto` uses the GnuCOBOL bundled
    with the extension on Linux and Windows (needs `gcc` on Linux) and Docker
    elsewhere (macOS). `docker` runs every test in a locked-down container.
    For the terminal and CI, the same choice is the `MOCKYMOCK_TOOLCHAIN`
@@ -134,13 +165,15 @@ setting it fills; `reference/settings.md` has every setting's exact shape.
    set them.
 5. **AI assistant mode** -> `mockymock.ai_mode`: `hands-on`, `guided`
    (default) or `hands-off` (the `mockymock` skill's `reference/modes.md`).
-   Ask only if they will use an AI assistant to write suites.
-6. **Optional editor settings**, as one yes/no list: lint `.cut` files on
+   A default in the plan, unless the developer already said how hands-on
+   they want an assistant to be.
+6. **Optional editor settings**, one line in the plan: lint `.cut` files on
    save (`mockymock.lintOnSave`, on), one test case per paragraph in New
    Test Suite (`mockymock.newTestSuite.casePerParagraph`, off), runs at once
-   (`mockymock.maxParallelRuns`, 1). Mention them; do not push them.
-7. **Shared seed** -> `project.seed`, only if they want generated test
-   data to come out the same on every machine.
+   (`mockymock.maxParallelRuns`, 1). Write nothing for a default.
+7. **Shared seed** -> `project.seed`, and `.vscode/extensions.json` /
+   `.gitignore` (step 3): one line each in the plan, off unless the
+   developer wants them.
 
 Things you do not ask about: `mockymock.executablePath` (leave it empty so
 the bundled CLI matches the extension, unless they already use a
@@ -150,7 +183,18 @@ which is not part of an editor setup (see the end of
 
 ## Step 3: write
 
-Show the files, then write them. A typical result:
+Show the plan in one message: the files with their new content, then the
+defaults you are keeping, e.g.
+
+```
+I'll write cobol.yml (below) and set mockymock.toolchain to auto. Keeping
+the defaults: AI mode guided, lint on save, no shared seed. I'll also add
+.mockymock/ to .gitignore. Say if you want any of that different.
+```
+
+That one message is also the last question: the seed, the extension
+recommendation and `.gitignore` are lines in it, not questions of their
+own. A typical result:
 
 ```yaml
 # cobol.yml -- read by mockymock, cobol-parser and both VS Code extensions
