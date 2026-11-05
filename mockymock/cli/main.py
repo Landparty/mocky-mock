@@ -1742,11 +1742,14 @@ def _report_unsupported_boundaries(
     or `export`, which shares the same `surface` inspection but must not
     print a `generate` prefix in its own console output.
     """
-    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS
+    from mockymock.analysis.mock_surface import _TERMINATOR_LABELS, is_answered_site
 
     findings: list[str] = []
     terminator_findings: list[str] = []
     for site in surface.boundary_sites:
+        if is_answered_site(site):
+            # Answered with CONTINUE by the splicer (issue #422).
+            continue
         if site.category is None:
             if site.label in _TERMINATOR_LABELS:
                 terminator_findings.append(
