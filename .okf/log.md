@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-05 -- `mockymock` and `cobol-test` skills tuned from an eval run
+
+An eval run (four tasks, with and without the skill, scripted graders) found
+two gaps. The paragraph pass now says `generate --per-paragraph` (plain
+`generate` is the data-driven, whole-program shape), and a confirmed program
+bug moves, assertion unchanged, into `PROG.known-bugs.cut` so the main suite
+stays green for `mutate`/`report`. `cobol-test` step 7 adds the GnuCOBOL 3.1
+fallback (`run --json-report` + `mutate --json-report` + `report --run-json
+--mutation-json`) when `--execute` cannot measure coverage.
+
 ## 2026-11-05 -- CLI first-run friendliness
 
 `mockymock --help` lists each command once, grouped (now including

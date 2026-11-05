@@ -113,8 +113,9 @@ plan before writing anything (guided/hands-on), and journal it.
 
 Follow the `mockymock` skill: `mockymock init PROGRAM.cbl` (data-first,
 needs Docker for its recording half) or `mockymock generate PROGRAM.cbl`,
-then `generate --fill` from then on. Never re-run plain `generate` over a
-file you have edited.
+then `generate --fill` from then on. For the paragraph pass, `generate`
+needs `--per-paragraph` (plain `generate` writes one data-driven case per
+scenario instead). Never re-run `generate` over a file you have edited.
 
 Read what came out. Recorded values arrive labelled CHARACTERIZATION; they
 are a starting point, not the answer.
@@ -136,7 +137,11 @@ loop (`lint`, `run --case`, `run --case ... --trace`). When an INTENT
 assertion fails, stop on it: check your inputs and mocks with `--trace`
 first, and if the program really computes something else, report it as a
 suspected bug (paragraph, rule, expected, actual) and leave the assertion
-as it is. In hands-off, park it and keep going.
+as it is. In hands-off, park it and keep going. Once you are sure it is
+the program, move that case, assertion unchanged, into
+`PROGRAM.known-bugs.cut` (the `mockymock` skill's paragraph-first
+workflow, "Where a confirmed program bug lives"): the main suite has to be
+green for mutation testing in step 7, and the red suite is the finding.
 
 ### 6. Whole program
 
@@ -157,7 +162,14 @@ Docker, pass neither: the report still covers every static step (including
 the program analysis) and says what it could not run. If you already ran
 `mockymock run` (whole suite) and `mockymock mutate` on this exact program
 and suite, `--execute --mutate` reuse their saved results instead of
-running them again; `--rerun` forces a fresh run. `mockymock clean` removes
+running them again; `--rerun` forces a fresh run.
+
+`--execute` needs a GnuCOBOL that supports `--coverage` (3.2). On an older
+one (`cobc --version` says 3.1) it cannot run: run the suite yourself
+with `mockymock run PROGRAM.cbl --cut PROGRAM.cut --json-report run.json`,
+then `mockymock mutate ... --json-report mutation.json`, and pass them
+with `report --run-json run.json --mutation-json mutation.json`. Say in
+the hand-over that line coverage was not measured and why. `mockymock clean` removes
 the `.mockymock/` reports and saved results when you are done (journals are
 kept).
 

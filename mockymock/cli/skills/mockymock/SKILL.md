@@ -145,8 +145,12 @@ need Docker -- the paragraph pass's `lint` loop works without it.
 ### 1. Scaffold once
 
 ```bash
-mockymock generate PROGRAM.cbl     # one TESTCASE per paragraph, placeholder mocks
+mockymock generate PROGRAM.cbl --per-paragraph   # one TESTCASE per paragraph, placeholder mocks
 ```
+
+Pass `--per-paragraph`: plain `generate` is the data-driven mode (one
+case per scenario through the entry point, values from generated data),
+which is the whole-program shape, not the paragraph pass.
 
 Cases come out named `"<PARAGRAPH> boundaries: <categories>"`, each
 mocking every boundary reachable from that paragraph.
