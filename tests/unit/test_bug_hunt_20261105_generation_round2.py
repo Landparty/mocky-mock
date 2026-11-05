@@ -97,7 +97,9 @@ def _case(cut: str, name: str) -> str:
 
 def test_priming_and_loop_calls_get_their_own_rows(tmp_path):
     cut = _generate(tmp_path, "PRIMED", PRIMED, "--seed", "1", "--scenarios", "all")
-    case = _case(cut, "2000-SCAN: EVALUATE@33 WHEN OTHER")
+    # WHEN GB, not WHEN OTHER: the published cobol-parser plans no WHEN OTHER
+    # case here (fixed by the cobol-parser PR of this round).
+    case = _case(cut, "2000-SCAN: EVALUATE@33 WHEN GB")
     body = _mock(case, 'MOCK CALL "CBLTDLI"')
     prime = body.index('UT-CALLING-PARAGRAPH = "1000-PRIME"')
     scan = body.index('UT-CALLING-PARAGRAPH = "2000-SCAN"')
