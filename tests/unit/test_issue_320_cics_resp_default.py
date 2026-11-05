@@ -90,6 +90,12 @@ def test_eibresp_is_reset_when_the_program_has_it():
         "MOVE 0 TO WS-RESP",
         "MOVE 0 TO WS-RESP2",
         "MOVE 0 TO EIBRESP",
+        # RESP and EIBRESP end equal, whichever one the body set.
+        "IF WS-RESP NOT = 0",
+        "MOVE WS-RESP TO EIBRESP",
+        "ELSE",
+        "MOVE EIBRESP TO WS-RESP",
+        "END-IF",
     ]
 
 

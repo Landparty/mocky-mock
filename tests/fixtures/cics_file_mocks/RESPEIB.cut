@@ -1,0 +1,28 @@
+TESTSUITE "RESPEIB"
+
+*> Real CICS copies EIBRESP into the RESP field (EIBRESP2 into RESP2),
+*> so after a mock body sets one of them both must read the same.
+TESTCASE "a RESP set by the mock is in EIBRESP too"
+    MOCK CICS "READ FILE"
+        MOVE DFHRESP(NOTFND) TO WS-RESP
+        MOVE 1 TO WS-RESP2
+    END-MOCK
+    PERFORM READ-PARA
+    EXPECT WS-EIB TO BE "EIB-NOTFND"
+    EXPECT WS-EIB2 TO BE 1
+    EXPECT WS-OWN TO BE "OWN-NOTFND"
+
+TESTCASE "an EIBRESP set by the mock is in the RESP field too"
+    MOCK CICS "READ FILE"
+        MOVE DFHRESP(NOTFND) TO EIBRESP
+    END-MOCK
+    PERFORM READ-PARA
+    EXPECT WS-EIB TO BE "EIB-NOTFND"
+    EXPECT WS-OWN TO BE "OWN-NOTFND"
+
+TESTCASE "an empty mock is NORMAL in both"
+    MOCK CICS "READ FILE"
+    END-MOCK
+    PERFORM READ-PARA
+    EXPECT WS-EIB TO BE "EIB-OTHER"
+    EXPECT WS-OWN TO BE "OWN-OTHER"

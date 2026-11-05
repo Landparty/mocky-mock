@@ -914,6 +914,20 @@ exhausted_moves=<TERMINAL MOVEs>)`. Worked example:
 `examples/real-world/ACCTPRG/ACCTPRG.cut`'s two "then stops at GB" cases;
 tests: `tests/unit/test_call_sequencing.py`.
 
+**A re-OPEN rewinds READ and FETCH rows (2026-11-05, round 2).** A `MOCK
+READ <file> ROWS` and a `MOCK SQL "FETCH ..." ROWS` hand out row
+`tally - rewind` (`TallyRegistry.row_cursor` / `rewind_name`, a `-REW`
+twin of the tally, zeroed at each case start). Every OPEN site naming the
+file, and every EXEC SQL OPEN of the cursor all of the FETCH key's sites
+fetch from (`orchestrator._open_rewind_lines`, `_sql_cursor`), moves the
+tally into it, so the rows start again at row 1 -- a real file is read
+again from its first record after CLOSE and OPEN, and a cursor fetched
+again from its first row. Before, the second pass got end of data at
+once. VERIFY still counts every call (the tally never rewinds). BEFORE-ALL
+hands a case its rows counted from its own last OPEN (`-START` minus the
+rewind). Behaviour change: a suite whose rows ran on across a re-OPEN
+now sees them again.
+
 **ROWS cursor across hooks (issue #223).** The tally is both the ROWS
 cursor and the VERIFY count. A case's tally starts at 0 -- or, for a key it
 inherits from BEFORE-ALL, at the count the BEFORE-ALL steps left
