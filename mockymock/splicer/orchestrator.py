@@ -45,7 +45,11 @@ from mockymock.analysis.clause_bodies import (
 )
 from mockymock.analysis.declaratives import MODE_CODES, USE_GUARD
 from mockymock.analysis.flow_mocks import FlowMockPlan
-from mockymock.analysis.mock_surface import ANSWERED_LABELS, BoundarySite, MockSurface
+from mockymock.analysis.mock_surface import (
+    BoundarySite,
+    MockSurface,
+    is_answered_site,
+)
 from mockymock.analysis.refusal import (
     GotoExitPlan,
     TerminatorPlan,
@@ -442,12 +446,18 @@ def splice_program(
 
     # STOP <literal> (waits for the operator) and a screen DISPLAY (would
     # switch GnuCOBOL to screen mode): under a test the console answers at
-    # once, CONTINUE. A nested one, or one with no safe span, is refused by
-    # the gate when a case reaches it, and left as written otherwise.
+    # once, CONTINUE. One nested in an IF / EVALUATE / inline PERFORM is
+    # spliced through its validated span (issue #422); one nested in another
+    # boundary's clause body, or with no safe span, is refused by the gate
+    # when a case reaches it, and left as written otherwise.
     for site in surface.boundary_sites:
-        if site.label not in ANSWERED_LABELS or site.nested or site.unspliceable_reason:
+        if not is_answered_site(site):
             continue
-        start, end = statement_span(site.statement, boundaries, last_line, lines)
+        if site.nested:
+            assert site.span is not None  # is_answered_site
+            start, end = site.span
+        else:
+            start, end = statement_span(site.statement, boundaries, last_line, lines)
         replacement = ["           CONTINUE"]
         if _span_ends_sentence(lines, start, end):
             replacement = replacement[:-1] + [replacement[-1] + "."]

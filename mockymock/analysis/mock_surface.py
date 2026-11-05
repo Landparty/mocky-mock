@@ -560,6 +560,19 @@ _TERMINATOR_LABELS = frozenset({"STOP RUN", "GOBACK", "EXIT PROGRAM"})
 # DISPLAY would switch GnuCOBOL to screen mode).
 ANSWERED_LABELS = frozenset({"STOP literal", "screen DISPLAY"})
 
+
+def is_answered_site(site: BoundarySite) -> bool:
+    """Whether the splicer answers this site with CONTINUE: an
+    `ANSWERED_LABELS` site at the top level that owns its line, or one
+    nested in an IF / EVALUATE / inline PERFORM with a validated `span`
+    (`annotate_nested_sites`). One nested in another boundary's clause body
+    has no span -- splicing that statement would remove it -- and is
+    refused when a case reaches it (issue #422)."""
+    if site.label not in ANSWERED_LABELS or site.unspliceable_reason:
+        return False
+    return not site.nested or site.span is not None
+
+
 # EXEC CICS commands that never give control back to the next statement
 # (issue #215): RETURN ends the task (or returns to the LINKing program),
 # XCTL transfers to another program for good, ABEND ends the task. They
