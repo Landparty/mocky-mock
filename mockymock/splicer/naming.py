@@ -90,6 +90,10 @@ class TallyRegistry:
                 suffix += 1
             taken.add(name)
             self._names[(category, key)] = name
+        # Per-site call counters (`UT-SITE-TALLY` in a mock body), filled
+        # in by the injector as it splices each site that uses one and
+        # declared by the driver, which is built after the injection.
+        self._site_tallies: dict[int, str] = {}
 
     def name(self, category: MockCategory, key: str) -> str:
         return self._names[(category, key)]
@@ -132,6 +136,22 @@ class TallyRegistry:
 
     def items(self) -> list[tuple[tuple[MockCategory, str], str]]:
         return list(self._names.items())
+
+    def site_tally(self, line: int) -> str:
+        """The counter of the calls the site at `line` answered in the
+        running case (`UT-SITE-TALLY` in a mock body). Its twin
+        `site_case` holds the case it counts for, so the site resets it
+        itself when another case reaches it."""
+        name = f"UT-SITE-{line}-TALLY"
+        self._site_tallies[line] = name
+        return name
+
+    @staticmethod
+    def site_case(line: int) -> str:
+        return f"UT-SITE-{line}-CASE"
+
+    def site_tallies(self) -> list[tuple[int, str]]:
+        return sorted(self._site_tallies.items())
 
 
 def truth_set(value: str, target: str) -> str | None:

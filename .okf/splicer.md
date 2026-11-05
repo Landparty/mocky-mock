@@ -1862,4 +1862,11 @@ compile.
 `UT-PASSED-ARG-<n>` in a mock body (`passed_argument_names`) becomes the
 quoted name of the site's n-th USING argument, so one MOCK answering several
 CALL sites can tell them apart (the generator's DL/I row dispatch uses
-`UT-PASSED-ARG-2 = "DB-PCB"`).
+`UT-PASSED-ARG-2 = "DB-PCB"`). `UT-CALLING-PARAGRAPH` likewise becomes the
+quoted name of the site's paragraph. `UT-SITE-TALLY` becomes the site's own
+call counter `UT-SITE-<line>-TALLY` (`TallyRegistry.site_tally`): a site
+whose answering body uses it first runs `site_tally_lines` (restart the
+count when `UT-SITE-<line>-CASE` names another case, then add 1), and the
+driver declares every counter the injection asked for
+(`TallyRegistry.site_tallies`), since it is built after the splice. Unlike
+the key's tally it does not count the key's other sites.

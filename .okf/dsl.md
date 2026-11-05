@@ -1697,6 +1697,14 @@ placeholder's end-of-file body. Design:
   fixtures `_dli_rows_directive` dispatches on the captured function code
   (and `UT-PASSED-ARG-2` when one function is used on several PCBs): each call
   gets the row the bundle generated for it, and a pinned PCB status is kept.
+  One function on one PCB called from several paragraphs (a priming GHN in
+  1000-INITIALIZE and the loop's GHN in 2500-GET-NEXT) is also dispatched on
+  `UT-CALLING-PARAGRAPH`; the scenario's pinned status goes only to the call
+  in the paragraph of the branch it targets (`_target_paragraph`, from the
+  intent), the other calls answer success, and the end-of-data reply is
+  gated on `UT-SITE-TALLY > 1` (that call's own count) instead of the key's
+  tally. Before, the priming call returned the loop's status, so the loop
+  never ran while ACCTPRG/LNRECOV's 2500 cases were reported verified.
 - The end-of-data reply (`_call_loop_end_lines`) goes only to the calls a
   loop guard watches; a function/PCB gate is used when another call of the
   key would otherwise receive it (`_dli_needs_gate`), the plain tally gate
