@@ -49,7 +49,12 @@ _ITEM_RE = re.compile(
 
 def shared_names(registry: TallyRegistry) -> set[str]:
     """Every driver field a real program's splice may reference."""
-    return {*_SHARED_FIXED, *(tally for _, tally in registry.items())}
+    return {
+        *_SHARED_FIXED,
+        *(tally for _, tally in registry.items()),
+        # A real program's ROWS blocks read the rewind its OPENs set.
+        *(registry.rewind_name(*key) for key in registry.rewound_keys()),
+    }
 
 
 def share_driver_state(

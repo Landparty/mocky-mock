@@ -302,7 +302,7 @@ def test_run_binary_decodes_non_utf8_stdout_without_newline_translation(tmp_path
 
     with (
         mock.patch(
-            "mockymock.runtime.docker_toolchain.subprocess.run", side_effect=fake_run
+            "mockymock.runtime.docker_toolchain._exec_binary", side_effect=fake_run
         ),
         mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
     ):

@@ -1127,6 +1127,16 @@ op's implicit `MOVE "00"` to its FILE STATUS. This is the splice-side
 default for hand-written mocks; #253 is the separate
 `generate` scaffold fix that stopped writing a random RESP value.
 
+After the body (and after a ROWS block's row or TERMINAL MOVEs),
+`cics_resp.cics_resp_mirror` (2026-11-05, round 2) keeps the RESP field and
+EIBRESP equal (RESP2 and EIBRESP2 too) when the command has the option and
+the program has the EIB field: `IF <resp> NOT = 0 MOVE <resp> TO EIBRESP
+ELSE MOVE EIBRESP TO <resp>`. Both start at 0, so whichever one the body
+set is the condition; the RESP field wins when the body set both. Real
+CICS copies EIBRESP into the RESP field, and a program testing `EIBRESP`
+after a command written with RESP(...) used to read NORMAL for a mocked
+NOTFND.
+
 `CONDITION IS X` (2026-11-05) then moves X's `DFHRESP_VALUES` number to
 `EIBRESP` (when the program has one) before the `GO TO` of the HANDLE
 CONDITION label, or with nothing after it for an IGNOREd condition: real
@@ -1139,6 +1149,14 @@ The same rule for the other boundaries whose outcome lives in a shared
 field (`injector._success_defaults`, emitted right after the CICS
 defaults, before captures and the body):
 
+- an MQI call (`BoundarySite.is_mq`, or `mq_target`: a dynamic CALL whose
+  identifier cobol-parser's `DynamicCallAnalyzer` can only resolve to MQI
+  entry points, `mock_surface._mark_dynamic_mq_calls`) also moves 0
+  (MQCC_OK / MQRC_NONE) to its CompCode and Reason, its last two USING
+  arguments (`injector._mq_reply_fields`; round 2, 2026-11-05). An empty
+  `MOCK MQ "MQOPEN"` left the program's own initial CompCode, and MQGET
+  ROWS that only set the buffer never counted a message. This is the
+  splice-side twin of the generator's #205 reply.
 - a static or dynamic CALL mock moves 0 to `RETURN-CODE`: a real CALL sets
   the caller's RETURN-CODE from the callee's (0 unless the callee sets
   one; verified under GnuCOBOL), and a mock left the caller's own earlier
@@ -1365,8 +1383,14 @@ UT-EARLY-EXIT` + `GOBACK` (`build_terminator_neutralization("RETURN")`),
 which leaves every PERFORM the program has open, from any depth, as the
 real STOP RUN does; GnuCOBOL keeps the PERFORM stack per CALL, so the next
 case starts clean (verified on cobc 3.1 `-std=mvs`). One RETURN plan serves
-every case and replaces a plan an earlier case made. Refused
-(`_plans._return_problem`): an EXEC CICS terminator; a terminator an XML
+every case and replaces a plan an earlier case made. An EXEC CICS
+RETURN/XCTL/ABEND gets it too (round 2, 2026-11-05; it used to be refused,
+which made every HANDLE CONDITION handler ending in RETURN or XCTL
+untestable, since the handler is a GO TO target): its dispatch is wrapped by
+`build_cics_terminator_exit("RETURN")` (`GOBACK`, inside `IF <resp> = 0`
+with RESP/NOHANDLE), and a main-line "PROGRAM" plan by `GO TO
+UT-PROGRAM-END` the same way. Refused (`_plans._return_problem`): a
+terminator an XML
 PARSE procedure can reach (the parser would be left inside the statement;
 `_perform_frame_reach(procedures_only=True)`); one that cannot be spliced
 (shares its line); and one a hook PERFORM step reaches, since hooks run

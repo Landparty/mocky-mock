@@ -56,12 +56,29 @@ def tally_name(category: MockCategory, key: str) -> str:
     return f"UT-{stem}-{digest[:_HASH_DIGITS].upper()}-TALLY"
 
 
+def rewinds_on_open(category: MockCategory, key: str) -> bool:
+    """Whether a ROWS mock of (category, key) models data an OPEN starts
+    again from the top: a READ of a file, or an EXEC SQL FETCH."""
+    if category is MockCategory.READ:
+        return True
+    return category is MockCategory.SQL and key.split()[:1] == ["FETCH"]
+
+
 class TallyRegistry:
     """Assigns and remembers the tally field name for every (category, key)
     mocked anywhere in a suite."""
 
     def __init__(self, suite: MockTestSuite) -> None:
         self._names: dict[tuple[MockCategory, str], str] = {}
+        #: The keys whose ROWS a re-OPEN rewinds (`rewind_name`): a READ
+        #: ROWS mock (a file read again from its first record after CLOSE
+        #: and OPEN) and a FETCH ROWS mock (a cursor's result set fetched
+        #: again from its first row after CLOSE and OPEN).
+        self._rewound: set[tuple[MockCategory, str]] = set()
+        for case in suite.test_cases:
+            for mock in case.mocks:
+                if mock.rows is not None and rewinds_on_open(mock.category, mock.key):
+                    self._rewound.add((mock.category, mock.key))
         taken: set[str] = set()
         for category, key in suite.all_mock_keys():
             name = tally_name(category, key)
@@ -93,6 +110,26 @@ class TallyRegistry:
         """The field holding a BEFORE-ALL mock's tally as BEFORE-ALL left it:
         each case inheriting the mock resumes its ROWS cursor there."""
         return self.name(category, key).removesuffix("-TALLY") + "-START"
+
+    def rewind_name(self, category: MockCategory, key: str) -> str:
+        """The field holding the tally's value at the last OPEN of the
+        key's file or cursor: its ROWS hand out row `tally - rewind`, so a
+        re-OPEN starts them again at row 1, while the tally keeps counting
+        for VERIFY. Zero at every case start."""
+        return self.name(category, key).removesuffix("-TALLY") + "-REW"
+
+    def rewound(self, category: MockCategory, key: str) -> bool:
+        return (category, key) in self._rewound
+
+    def rewound_keys(self) -> list[tuple[MockCategory, str]]:
+        return [key for key in self._names if key in self._rewound]
+
+    def row_cursor(self, category: MockCategory, key: str) -> str:
+        """The expression a ROWS block numbers its rows by."""
+        tally = self.name(category, key)
+        if (category, key) in self._rewound:
+            return f"{tally} - {self.rewind_name(category, key)}"
+        return tally
 
     def known(self, category: MockCategory, key: str) -> bool:
         return (category, key) in self._names

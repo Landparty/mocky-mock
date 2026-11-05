@@ -107,6 +107,101 @@ def _span_ends_sentence(lines: list[str], start: int, end: int) -> bool:
 _SQLSTATE_RE = re.compile(r"(?<![\w-])SQLSTATE(?![\w-])", re.IGNORECASE)
 
 
+_SQL_WORD_RE = re.compile(r"[A-Za-z0-9_#@$-]+")
+#: FETCH orientation / sensitivity words before the cursor name;
+#: ABSOLUTE / RELATIVE also take an operand.
+_FETCH_LEAD_WORDS = frozenset(
+    {
+        "NEXT",
+        "PRIOR",
+        "FIRST",
+        "LAST",
+        "CURRENT",
+        "BEFORE",
+        "AFTER",
+        "SENSITIVE",
+        "INSENSITIVE",
+        "WITH",
+        "CONTINUE",
+        "ROWSET",
+        "STARTING",
+        "AT",
+        "FROM",
+    }
+)
+
+
+def _sql_cursor(text: str | None) -> str | None:
+    """The cursor an EXEC SQL `OPEN` / `FETCH` statement names, from its
+    normalized text, or None for any other statement."""
+    words = [w.upper() for w in _SQL_WORD_RE.findall(text or "")]
+    if len(words) < 2:
+        return None
+    if words[0] == "OPEN":
+        return words[1]
+    if words[0] != "FETCH":
+        return None
+    index = 1
+    while index < len(words):
+        word = words[index]
+        if word in ("ABSOLUTE", "RELATIVE"):
+            index += 2
+        elif word in _FETCH_LEAD_WORDS:
+            index += 1
+        else:
+            return word
+    return None
+
+
+def _open_rewind_lines(
+    surface: MockSurface, registry: TallyRegistry
+) -> dict[int, list[str]]:
+    """id(OPEN statement) -> the MOVEs that start the ROWS of what it opens
+    again at row 1 (`TallyRegistry.rewind_name`): a file OPEN rewinds the
+    READ ROWS mocks of that file, an EXEC SQL OPEN the FETCH ROWS mocks
+    whose FETCH sites all fetch from that cursor. A real file is read
+    again from its first record after CLOSE and OPEN, and a cursor's
+    result set is fetched again from its first row; the mocks handed out
+    "end of data" for the whole second pass instead."""
+    keys = registry.rewound_keys()
+    if not keys:
+        return {}
+    from mockymock.analysis.refusal._gates import directive_matches_site
+    from mockymock.dsl.model import MockDirective
+
+    by_file: dict[str, list[tuple[MockCategory, str]]] = {}
+    by_cursor: dict[str, list[tuple[MockCategory, str]]] = {}
+    for category, key in keys:
+        if category is MockCategory.READ:
+            by_file.setdefault(key.upper(), []).append((category, key))
+            continue
+        probe = MockDirective(category=category, key=key)
+        cursors = {
+            _sql_cursor(site.match_text)
+            for site in surface.boundary_sites
+            if directive_matches_site(probe, site)
+        }
+        if len(cursors) == 1 and None not in cursors:
+            by_cursor.setdefault(cursors.pop() or "", []).append((category, key))
+    rewinds: dict[int, list[str]] = {}
+    for site in surface.boundary_sites:
+        if site.category is MockCategory.OPEN:
+            found = [k for name in site.keys for k in by_file.get(name.upper(), [])]
+        elif site.category is MockCategory.SQL:
+            cursor = _sql_cursor(site.match_text)
+            words = _SQL_WORD_RE.findall(site.match_text or "")
+            is_open = bool(words) and words[0].upper() == "OPEN"
+            found = by_cursor.get(cursor or "", []) if is_open else []
+        else:
+            continue
+        if found:
+            rewinds[id(site.statement)] = [
+                f"           MOVE {registry.name(*k)} TO {registry.rewind_name(*k)}"
+                for k in dict.fromkeys(found)
+            ]
+    return rewinds
+
+
 def splice_program(
     lines: list[str],
     boundaries: list[int],
@@ -154,6 +249,7 @@ def splice_program(
     # Baselines: a mocked `OPEN cursor` also records the cursor's DECLARE
     # host variables (splicer.behaviour).
     cursor_hosts = cursor_host_variables(lines) if behaviour else None
+    open_rewinds = _open_rewind_lines(surface, registry)
     # EXEC CICS RETURN/XCTL/ABEND plans (issue #215): the site keeps its
     # ordinary dispatch below, wrapped with the early exit.
     cics_terminators = {
@@ -275,7 +371,12 @@ def splice_program(
             behaviour=behaviour,
             cursor_hosts=cursor_hosts,
         )
-        replacement = use_before + replacement + use_after
+        replacement = (
+            use_before
+            + replacement
+            + use_after
+            + open_rewinds.get(id(site.statement), [])
+        )
         if site.sort_procedure is not None:
             # A mixed-form SORT/MERGE: the mock answers its file side, and
             # its procedure runs on the other side, as the SORT runs it.

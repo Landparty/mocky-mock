@@ -37,7 +37,11 @@ FAKE_MOCKYMOCK = textwrap.dedent("""
             sys.exit(0 if same else 1)
         cut = Path(after("--cut"))
         if "--record-expectations" in args:
+            if "NOCOMPILE" in cut.read_text():
+                print("mockymock run: compile failed:")
+                sys.exit(1)
             cut.write_text(cut.read_text().replace("*> STUB EXPECT X", "EXPECT X TO BE 1"))
+            print("mockymock run: --record-expectations: recorded 1, skipped 0")
         if after("--json-report"):
             status = "passed" if "EXPECT X TO BE 1" in cut.read_text() else "failed"
             Path(after("--json-report")).write_text(json.dumps(

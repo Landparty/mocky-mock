@@ -242,6 +242,19 @@ _RESP_OPERAND_RE = re.compile(
 EIB_RESP_NAMES = ("EIBRESP", "EIBRESP2")
 
 
+def _resp_options(statement: object) -> dict[str, str]:
+    """option ("RESP" / "RESP2") -> the single data name an EXEC CICS
+    command's `RESP(...)` / `RESP2(...)` option names, first one each. A
+    subscripted or reference-modified operand is left out."""
+    text = str(getattr(statement, "cics_text", "") or "")
+    found: dict[str, str] = {}
+    for match in _RESP_OPERAND_RE.finditer(text):
+        if text[match.end() :].lstrip().startswith("("):
+            continue
+        found.setdefault(match.group(1).upper(), match.group(2).upper())
+    return found
+
+
 def resp_operands(statement: object) -> list[str]:
     """The data names in an EXEC CICS command's `RESP(...)` and
     `RESP2(...)` options, in that order, each once. A subscripted or
@@ -269,3 +282,33 @@ def cics_success_defaults(
     the previous command's condition in them. `eib_names` is whichever of
     `EIB_RESP_NAMES` the program has (declared, or synthesized)."""
     return [f"MOVE 0 TO {name}" for name in [*resp_operands(statement), *eib_names]]
+
+
+def cics_resp_mirror(statement: object, eib_names: tuple[str, ...] = ()) -> list[str]:
+    """The lines that keep a mocked EXEC CICS command's RESP / RESP2 field
+    and EIBRESP / EIBRESP2 equal after its mock body ran.
+
+    Real CICS sets EIBRESP and copies it into the RESP field (EIBRESP2
+    into RESP2), so the two always agree. A mock body (or a ROWS row /
+    TERMINAL group) sets one of them, usually the RESP field, and the
+    other kept the NORMAL default: a program testing `EIBRESP` after a
+    command written with RESP(...) saw NORMAL for a mocked NOTFND. Both
+    start at 0 (`cics_success_defaults`), so whichever one the body set
+    to a non-zero value is the condition, and it is copied to the other
+    (the RESP field wins when the body set both). `eib_names` is whichever
+    of `EIB_RESP_NAMES` the program has; with none, or no RESP option,
+    there is nothing to mirror."""
+    options = _resp_options(statement)
+    lines: list[str] = []
+    for option, eib in (("RESP", "EIBRESP"), ("RESP2", "EIBRESP2")):
+        field = options.get(option)
+        if field is None or eib not in eib_names or field == eib:
+            continue
+        lines += [
+            f"IF {field} NOT = 0",
+            f"    MOVE {field} TO {eib}",
+            "ELSE",
+            f"    MOVE {eib} TO {field}",
+            "END-IF",
+        ]
+    return lines

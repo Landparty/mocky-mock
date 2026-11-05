@@ -16,6 +16,75 @@ targeted branch's paragraph, and the end reply counts `UT-SITE-TALLY`. See
 `tests/unit/test_bug_hunt_20261105_generation_round2.py`,
 `tests/integration/test_bug_hunt_20261105_generation_round2.py`.
 
+## 2026-11-05 -- Runner meets the backend: recordings, reports, Docker output
+
+Bug hunt round 2 where the runner meets LegacyLens (Create / Run / Recreate
+tests, oracle jobs); each bug reproduced against a real backend, Postgres
+and GnuCOBOL 3.1.2 (oraclemix and ordmod). Tests:
+`tests/unit/test_bug_hunt_20261105_runner_backend.py`,
+`tests/unit/test_compile_diagnosis.py`.
+
+* A tests suite whose `--record-expectations` did not compile was still
+  reported `recorded`: the backend kept its `STUB EXPECT` `.cut` as the
+  module's tests (replacing a good recording on Recreate), and every later
+  run passed without checking anything. The runner now requires the
+  recorder's `recorded N, skipped M` line, else the suite is an error.
+* A USE REAL CALL program that does not compile was diagnosed as "the
+  program compiles on its own ... a mockymock bug": only the program under
+  test was probed. The probe now compiles the real programs with it and
+  names the one that fails (`_compile_failure_diagnosis(real_programs=)`).
+* `serve` posted a result once: a backend restarting as a job ended lost
+  the whole run and left the job "running" for two hours. Transient
+  failures are retried (`REPORT_RETRY_DELAYS`, about 8 minutes).
+* Docker backend `run_binary` captured stdout unbounded (400 MB printed,
+  1.2 GB peak); it now reads through the native capped reader
+  (`_exec_binary`, 145 MB peak). See [runtime](runtime.md).
+
+## 2026-11-05 -- CICS, MQ, file and cursor mocks answer like the real statement (round 2)
+
+Second bug hunt over hand-written mocks; executed repros in
+`tests/fixtures/cics_file_mocks/`
+(`tests/integration/test_cics_file_mock_bugs_20261105.py`, unit side
+`tests/unit/test_cics_file_mock_defaults_20261105.py`).
+
+* A mock body setting a CICS command's RESP field left EIBRESP at NORMAL
+  (and the other way round): `cics_resp.cics_resp_mirror` keeps them equal,
+  RESP2 / EIBRESP2 too. See [splicer](splicer.md).
+* An MQI call's CompCode / Reason kept the program's own value under an
+  empty `MOCK MQ` (or MQGET ROWS that set only the buffer): they now answer
+  MQCC_OK / MQRC_NONE first, also for a dynamic CALL that can only reach
+  MQI entry points (`BoundarySite.mq_target`).
+* CLOSE then OPEN of a file, or of a cursor, did not start its READ /
+  FETCH ROWS again: the second pass got end of data at once. A re-OPEN now
+  rewinds them (`-REW` field). See [dsl](dsl.md).
+* An EXEC CICS RETURN / XCTL in a HANDLE CONDITION handler (a GO TO
+  target), or under a PERFORM ... TIMES, was refused
+  UNSUPPORTED_TERMINATOR_LAYOUT: CICS terminators now take the GOBACK
+  call-frame fallback (and the main-line end) like STOP RUN.
+
+## 2026-11-05 -- Assertions and reports on names declared twice
+
+* `record_rewrite.field_pictures` dropped every name declared more than
+  once (`_data_item_index` omits them), so `AMT OF IN-REC` / `AMT OF
+  OUT-REC` from a record copybook COPYed twice had no PICTURE:
+  `--record-expectations` wrote the raw DISPLAY image as the golden
+  (`-0002468` for -24.68, `0025` for 2.5), which failed the next run, the
+  console/JSON showed that image, and an EXPECT on a numeric-edited one
+  compared as edited text. It now keys each declaration by its dotted
+  qualified name too and keeps the plain key when the PICTUREs agree;
+  `picture_for` and the driver's numeric-edited check resolve `OF`/`IN`
+  qualification (`mockymock/_qualified.py`). The `generate` EXPECT
+  renderer passes the whole qualified ref.
+* An abbreviated combined EXPECT on a numeric-edited field
+  (`TO BE GREATER THAN 0 AND LESS THAN 10`, `TO BE 5 OR 6`) with only
+  numeric operands is de-edited like the single relation
+  (`driver._combined_by_value`); it compared `"  5"` with 0 as text.
+* `run --junit-xml` writes the readable failure reasons the console shows
+  (`got -24.68 (displayed as -0002468)`), not the raw image.
+* Tests: `tests/unit/test_qualified_names.py`,
+  `tests/integration/test_qualified_names_declared_twice.py` (fixture
+  `fixtures/qualified_twice/`, a copybook COPYed twice).
+
 ## 2026-11-05 -- Resource mocks answer like the real statement
 
 Bug hunt over hand-written resource mocks; executed repros in

@@ -1,0 +1,37 @@
+TESTSUITE "HANDRET"
+
+*> The HANDLE CONDITION handler is entered by GO TO, so no EXIT chain can
+*> carry its XCTL / RETURN back to the test: they end the case with
+*> GOBACK, as a STOP RUN there does. Both used to be refused
+*> UNSUPPORTED_TERMINATOR_LAYOUT.
+TESTCASE "MAPFAIL goes to the handler, whose XCTL ends the task"
+    MOCK CICS "RECEIVE MAP"
+        CONDITION IS MAPFAIL
+    END-MOCK
+    MOCK CICS "XCTL"
+    END-MOCK
+    MOCK CICS "RETURN"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-MSG TO BE "MAPFAIL"
+    EXPECT WS-AFTER TO BE SPACES
+
+TESTCASE "a failed XCTL returns control to the handler"
+    MOCK CICS "RECEIVE MAP"
+        CONDITION IS MAPFAIL
+    END-MOCK
+    MOCK CICS "XCTL"
+        MOVE DFHRESP(PGMIDERR) TO WS-RESP
+    END-MOCK
+    MOCK CICS "RETURN"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-AFTER TO BE "XCTL-FAILED"
+
+TESTCASE "a normal RECEIVE ends at the RETURN"
+    MOCK CICS "RECEIVE MAP"
+    END-MOCK
+    MOCK CICS "RETURN"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT WS-MSG TO BE "RECEIVED"

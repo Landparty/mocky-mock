@@ -129,6 +129,7 @@ def _suite_harness_words(suite: MockTestSuite) -> set[str]:
                 tally,
                 registry.base_name(category, key),
                 registry.start_name(category, key),
+                registry.rewind_name(category, key),
             }
         )
     for directive in _all_mocks(suite):

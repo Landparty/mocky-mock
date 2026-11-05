@@ -68,6 +68,16 @@ recorded with and `baselines/<ENTRY>.json`.
   `.cut` files as the module's tests and sends them back, unrecorded, on
   every later run, so a failing case means the code no longer does what it
   did when the tests were created.
+  `recorded` is set only when `--record-expectations` printed its
+  `recorded N, skipped M` line: a suite that did not compile (or was
+  refused) is that suite's `error`, not played, so its `STUB EXPECT`
+  placeholders never become the module's tests (2026-11-05).
+
+A result the backend cannot take (not reachable, 429 or 5xx) is posted
+again after 5, 15, 30, 60, 120 and 240 seconds before the runner gives up;
+a 4xx (job not running, bad payload) is final. The backend in turn keeps
+the late result of a job it timed out while the runner was still working,
+unless a newer job of the same kind was queued for the module since.
 
 Every `generate` and `run` is a child process with a timeout, so a suite
 that hangs or crashes is one suite's error, not a dead runner. The runner

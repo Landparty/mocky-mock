@@ -38,7 +38,11 @@ from mockymock.dsl.model import (
     MockTestSuite,
 )
 from mockymock.splicer.behaviour import site_lines as behaviour_site_lines
-from mockymock.splicer.cics_resp import DFHRESP_VALUES, cics_success_defaults
+from mockymock.splicer.cics_resp import (
+    DFHRESP_VALUES,
+    cics_resp_mirror,
+    cics_success_defaults,
+)
 from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
 from mockymock.splicer.naming import TallyRegistry, assign
@@ -231,13 +235,37 @@ def dispatch_entries(suite: MockTestSuite) -> list[tuple[str, list]]:
     return entries
 
 
+def _mq_reply_fields(site: BoundarySite) -> list[str]:
+    """An MQI call's CompCode and Reason arguments -- by the MQI's fixed
+    convention its last two USING arguments -- or [] when `site` is no MQ
+    call (or they are not plain data names)."""
+    if not (site.is_mq or site.mq_target):
+        return []
+    using = list(getattr(site.statement, "using_parameters", None) or [])
+    names = [str(getattr(param, "name", "") or "") for param in using]
+    if len(names) < 2:
+        return []
+    reply = names[-2:]
+    if any(
+        not name or reported_literal(name) is not None or name[0].isdigit()
+        for name in reply
+    ):
+        return []
+    return reply
+
+
 def _success_defaults(
-    category: MockCategory, sqlcode: bool, sqlstate: bool, dibstat: bool
+    category: MockCategory,
+    sqlcode: bool,
+    sqlstate: bool,
+    dibstat: bool,
+    site: BoundarySite | None = None,
 ) -> list[str]:
     """The MOVEs that report success for a mocked CALL, EXEC SQL or EXEC
     DLI statement before its own body runs (see `build_site_dispatch`)."""
     if category in (MockCategory.CALL, MockCategory.DYNCALL):
-        return ["MOVE 0 TO RETURN-CODE"]
+        mq = _mq_reply_fields(site) if site is not None else []
+        return ["MOVE 0 TO RETURN-CODE"] + [f"MOVE 0 TO {name}" for name in mq]
     if category is MockCategory.SQL and sqlcode:
         return ["MOVE 0 TO SQLCODE"] + (
             ['MOVE "00000" TO SQLSTATE'] if sqlstate else []
@@ -278,6 +306,12 @@ def build_site_dispatch(
       program names it) when `sqlcode` says the program has an SQLCA: DB2
       sets them on every statement, so an empty `MOCK SQL "CLOSE C1"`
       after a cursor loop ended by 100 used to report 100 for the CLOSE.
+    - an MQI call (`MOCK MQ`, or a dynamic CALL that can only reach MQI
+      entry points) also moves 0 (MQCC_OK / MQRC_NONE) to its CompCode
+      and Reason, its last two USING arguments: the queue manager sets
+      them on every call, and an empty `MOCK MQ "MQOPEN"` left the
+      program's own initial value there, sending it down its
+      `IF WS-COMPCODE NOT = MQCC-OK` exit.
     - an EXEC DLI mock moves SPACES to DIBSTAT when `dibstat` says the
       program has a DIB: a blank status is IMS's "call succeeded", and the
       GB a get-next loop ended on used to answer the next call too.
@@ -442,7 +476,7 @@ def build_site_dispatch(
         lines.extend(
             f"                   {move}"
             for move in _success_defaults(
-                directive.category, sqlcode, sqlstate, dibstat
+                directive.category, sqlcode, sqlstate, dibstat, site
             )
         )
         if directive.category in FILE_STATUS_CATEGORIES:
@@ -576,7 +610,7 @@ def build_site_dispatch(
             lines.extend(
                 f"                   {body}"
                 for body in build_rows_block(
-                    tally_name,
+                    registry.row_cursor(directive.category, directive.key),
                     directive.rows,
                     row_suffix_moves=[copy_into] if copy_into else [],
                     exhausted_moves=exhausted_moves,
@@ -599,7 +633,7 @@ def build_site_dispatch(
             lines.extend(
                 f"                   {body}"
                 for body in build_rows_block(
-                    tally_name,
+                    registry.row_cursor(directive.category, directive.key),
                     directive.rows,
                     row_suffix_moves=[],
                     exhausted_moves=[
@@ -611,7 +645,7 @@ def build_site_dispatch(
             lines.extend(
                 f"                   {body}"
                 for body in build_rows_block(
-                    tally_name,
+                    registry.row_cursor(directive.category, directive.key),
                     directive.rows,
                     # Before the row's own MOVEs, not after: a row that
                     # sets SQLCODE itself (an error mid-cursor) must win.
@@ -654,6 +688,11 @@ def build_site_dispatch(
                 )
                 if label:
                     lines.append(f"                   GO TO {label}")
+        if directive.category is MockCategory.CICS:
+            lines.extend(
+                f"                   {line}"
+                for line in cics_resp_mirror(site.statement, eib_resp_names)
+            )
         if lifted_clauses:
             outcome_status = file_status_fields.get(directive.file_key.upper())
             if outcome_status and directive.category in FILE_STATUS_CATEGORIES:
@@ -1054,6 +1093,21 @@ def build_terminator_neutralization(
     ]
 
 
+def _exit_statement(exit_kind: str) -> str:
+    """The statement that ends the run under test for a terminator plan's
+    `exit_kind`: EXIT PARAGRAPH/SECTION back through the planned chain, GO
+    TO the appended end paragraph ("PROGRAM"), or GOBACK out of the
+    driver's call frame ("RETURN"), as `build_terminator_neutralization`
+    ends a STOP RUN/GOBACK."""
+    if exit_kind == "PROGRAM":
+        from mockymock.analysis.refusal import PROGRAM_END_PARAGRAPH
+
+        return f"           GO TO {PROGRAM_END_PARAGRAPH}"
+    if exit_kind == "RETURN":
+        return "           GOBACK"
+    return f"           EXIT {exit_kind}"
+
+
 def build_cics_terminator_exit(
     exit_kind: str = "PARAGRAPH", resp_field: str | None = None
 ) -> tuple[list[str], list[str]]:
@@ -1070,7 +1124,7 @@ def build_cics_terminator_exit(
     0."""
     exit_lines = [
         '           MOVE "Y" TO UT-EARLY-EXIT',
-        f"           EXIT {exit_kind}",
+        _exit_statement(exit_kind),
     ]
     if resp_field is None:
         return [], exit_lines

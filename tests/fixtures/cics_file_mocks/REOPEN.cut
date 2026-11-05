@@ -1,0 +1,33 @@
+TESTSUITE "REOPEN"
+
+*> CLOSE then OPEN starts a file again at its first record, and a cursor
+*> again at its first row: the second pass gets the ROWS again instead of
+*> end of data at once. VERIFY still counts every READ / FETCH.
+TESTCASE "a re-opened file is read again from the first row"
+    MOCK OPEN SEQF
+    END-MOCK
+    MOCK CLOSE SEQF
+    END-MOCK
+    MOCK READ SEQF ROWS
+        ( S-REC = "A" )
+        ( S-REC = "B" )
+    END-MOCK
+    PERFORM TWO-PASS
+    EXPECT WS-N1 TO BE 2
+    EXPECT WS-N2 TO BE 2
+    EXPECT WS-FIRST2 TO BE "A"
+    VERIFY READ SEQF WAS CALLED 6 TIMES
+
+TESTCASE "a re-opened cursor is fetched again from the first row"
+    MOCK SQL "OPEN C1"
+    END-MOCK
+    MOCK SQL "CLOSE C1"
+    END-MOCK
+    MOCK SQL "FETCH C1" ROWS
+        ( WS-NAME = "X" )
+        ( WS-NAME = "Y" )
+    END-MOCK
+    PERFORM CURSOR-TWICE
+    EXPECT WS-C1 TO BE 2
+    EXPECT WS-C2 TO BE 2
+    VERIFY SQL "FETCH C1" WAS CALLED 6 TIMES

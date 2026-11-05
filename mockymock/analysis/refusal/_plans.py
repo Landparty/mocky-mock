@@ -1082,6 +1082,7 @@ def find_terminator_plans(
                         site=terminator_sites[key],
                         exit_kind="PROGRAM",
                         return_code=_terminator_return_code(site.statement)[0],
+                        resp_field=_cics_resp_field(site.statement)[0],
                     )
                     continue
                 if (
@@ -1133,6 +1134,7 @@ def find_terminator_plans(
                         site=terminator_sites[key],
                         exit_kind="RETURN",
                         return_code=_terminator_return_code(site.statement)[0],
+                        resp_field=_cics_resp_field(site.statement)[0],
                     )
                     continue
                 problem += f"; nor can it GOBACK to the test: it {return_problem}"
@@ -1233,8 +1235,6 @@ def _return_problem(site, perform_entered: dict[str, str]) -> str | None:
     case's SORT of the same file runs from the start (verified on
     GnuCOBOL 3.1, 2026-11-03). An XML PARSE procedure is not: the parser
     would be left inside the statement."""
-    if site.category is not None:
-        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
     via = perform_entered.get(site.paragraph_name, "")
     if "XML PARSE" in via:
         return (
@@ -1251,7 +1251,10 @@ def _return_problem(site, perform_entered: dict[str, str]) -> str | None:
             f"{site.unspliceable_reason} -- splicing it would corrupt "
             f"sibling code sharing its line(s)"
         )
-    return _terminator_return_code(site.statement)[1]
+    return (
+        _terminator_return_code(site.statement)[1]
+        or _cics_resp_field(site.statement)[1]
+    )
 
 
 def _main_line_end_problem(
@@ -1267,8 +1270,6 @@ def _main_line_end_problem(
     inside a PERFORM of the program's own (any PERFORM, THRU range, SECTION
     PERFORM or SORT/MERGE/XML procedure that can reach its paragraph), or
     the jump would leave that PERFORM's range for good."""
-    if site.category is not None:
-        return "is an EXEC CICS command, not a STOP RUN/GOBACK"
     if site.paragraph_name in declarative_names:
         return (
             "is inside DECLARATIVES, which run under a PERFORM of their "
@@ -1290,7 +1291,10 @@ def _main_line_end_problem(
             f"{site.unspliceable_reason} -- splicing it would corrupt "
             f"sibling code sharing its line(s)"
         )
-    return _terminator_return_code(site.statement)[1]
+    return (
+        _terminator_return_code(site.statement)[1]
+        or _cics_resp_field(site.statement)[1]
+    )
 
 
 def _perform_edges(
