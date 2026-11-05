@@ -1671,6 +1671,14 @@ in a generated `DISPLAY "..."` literal — without it, an EXPECT/VERIFY
 value containing a quote (e.g. an expected string `OK"`) would split the
 literal and cobc would read the remainder as undefined identifiers.
 
+**Long names in DISPLAY markers (2026-11-05 bug hunt).** The TESTSUITE and
+CASE START markers, the TRUE/FALSE and value FAIL lines and the VERIFY FAIL
+line embed user text (a suite or case name, an expected value, a MOCK SQL
+key) that has no length limit. They go through `_display_lines`, which writes
+one quoted operand per `_LITERAL_CHUNK` characters once the text passes
+`_LONG_LITERAL`, so the DISPLAY output is unchanged but no line passes 512
+bytes; a TESTCASE name of ~450 characters used to fail the compile.
+
 **Long literals (2026-10-16, found while fixing #188).** cobc compiles the
 spliced copy `-free`, where a source line over 512 bytes is truncated. A
 recorded golden can be far longer (DEPTMQC's 336-byte MQMD is a 675-character

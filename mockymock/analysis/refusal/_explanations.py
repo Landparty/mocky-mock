@@ -210,6 +210,15 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "would reject the generated driver. Fix the spelling, or quote the "
         'value if it is meant as text (TO BE "Y", not TO BE Y).'
     ),
+    "AMBIGUOUS_DATA_NAME": (
+        "A MOVE target, EXPECT data-name or bare-word value in the .cut "
+        "names an item the program declares more than once (the same "
+        "field under two records, often from one copybook COPYed twice) "
+        "without enough qualification, or qualifies it by a group it is "
+        "not in. cobc would reject the generated driver as 'ambiguous; "
+        "needs qualification'. Qualify the name the COBOL way: "
+        "CUST-ID OF CUST-REC."
+    ),
     "UNSUPPORTED_SOURCE_FORMAT": (
         "The program is free-format COBOL. mockymock edits and compiles "
         "fixed-format source only (code in columns 8-72), so a free-format "
