@@ -131,15 +131,20 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 - `EXPECT <numeric-edited field> [NOT] TO BE [<comparison>] <unquoted
   number>` compares the de-edited value (issue #350): a numeric-edited
   item compares as its edited text, so `TO BE 100.00` never matched
-  `"      100.00"`. `driver._compares_by_value` picks these (the leaf name
-  is in `record_rewrite.numeric_edited_fields`, from the PICTURE via
+  `"      100.00"`. `driver._compares_by_value` picks these (the name,
+  `OF`/`IN` qualification resolved by `_qualified.qualified_member`, is in
+  `record_rewrite.numeric_edited_fields`, from the PICTURE via
   `is_numeric_edited_picture`; the value is a plain signed decimal, its
   point a period or, for a `DECIMAL-POINT IS COMMA` program, a comma; no
   reference modification), and the driver emits `MOVE <field> TO
   UT-DEEDIT-VALUE` (`PIC S9(18)V9(13)`, the de-editing MOVE, verified
   under GnuCOBOL with CR/DB, `*` and `$`) then the relation on that.
-  A quoted value, a data-name or a combined condition keeps the direct
-  compare. The FAIL line still shows the edited text.
+  An abbreviated combined condition whose operands are all unquoted
+  numbers (`TO BE GREATER THAN 0 AND LESS THAN 10`, `TO BE 5 OR 6`) is
+  de-edited the same way (`driver._combined_by_value`, 2026-11-05: it
+  compared the edited text `"  5"` with 0 and failed). A quoted value or a
+  data-name keeps the direct compare. The FAIL line still shows the edited
+  text.
 - `EXPECT <88-name> [NOT] TO BE TRUE|FALSE` tests a level-88
   condition-name (issue #189). TRUE/FALSE are not values any data item
   compares with, so `driver._condition_name_truth` emits `IF NOT <name>`

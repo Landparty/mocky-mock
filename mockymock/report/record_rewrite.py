@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from mockymock._decimal import delocalize_numeric, localize_numeric
 from mockymock._lines import split_cut_lines
+from mockymock._qualified import qualified_lookup
 from mockymock.analysis.stub_expectations import (
     SkippedStub,
     StubExpectation,
@@ -432,6 +433,16 @@ def clock_value_fields(program) -> dict[str, str]:
     return fields
 
 
+def _item_picture(item: dict) -> str | None:
+    """The PICTURE an EXPECT on `item` compares by: its own for an
+    elementary item, `X(length)` for a group (see `field_pictures`)."""
+    if item.get("is_group"):
+        length = item.get("byte_length")
+        return f"X({length})" if length else "X"
+    picture = item.get("picture")
+    return str(picture) if picture else None
+
+
 def field_pictures(program, captures=()) -> dict[str, str]:
     """Name (uppercased, unqualified) -> PICTURE for every elementary data
     item in `program`, plus every synthesized `UT-CAP-` capture target
@@ -440,22 +451,39 @@ def field_pictures(program, captures=()) -> dict[str, str]:
     maps to `X(length)`: it is compared as alphanumeric text whatever its
     content, so `1.5` held in a group must render quoted, never bare
     (issue #194). Best-effort: a layout walk that fails leaves the map
-    empty, and rendering falls back to the text-shape check."""
-    from mockymock.splicer.captures import _data_item_index
+    empty, and rendering falls back to the text-shape check.
+
+    A name declared more than once (a record copybook COPYed for input and
+    output, `AMT OF IN-REC` / `AMT OF OUT-REC`) keeps its plain key only
+    when every declaration has the same PICTURE; each declaration is also
+    keyed by its dotted qualified name (`OUT-REC.AMT`), which `picture_for`
+    resolves an `OF`/`IN`-qualified data-name against. Without them every
+    such field had no PICTURE at all: `--record-expectations` wrote the raw
+    DISPLAY image as the golden (`-0002468` for -24.68), which failed the
+    very next run, and the report showed that image instead of the
+    value."""
+    from cobolparser.generators.data.layout_offsets import (
+        compute_program_data_items,
+    )
 
     try:
-        index = _data_item_index(program)
+        items = compute_program_data_items(program).get("items", [])
     except Exception:  # pragma: no cover - never break a run over this
         return {}
-    pictures = {
-        name: str(item["picture"])
-        for name, item in index.items()
-        if item.get("picture") and not item.get("is_group")
-    }
-    for name, item in index.items():
-        if item.get("is_group"):
-            length = item.get("byte_length")
-            pictures[name] = f"X({length})" if length else "X"
+    by_name: dict[str, set[str | None]] = {}
+    pictures: dict[str, str] = {}
+    for item in items:
+        name = str(item.get("name") or "").upper()
+        if not name or name == "FILLER":
+            continue
+        picture = _item_picture(item)
+        by_name.setdefault(name, set()).add(picture)
+        qualified = str(item.get("qualified_name") or "").upper()
+        if picture is not None and "." in qualified:
+            pictures[qualified] = picture
+    for name, seen in by_name.items():
+        if len(seen) == 1 and (picture := next(iter(seen))) is not None:
+            pictures[name] = picture
     for plan in captures:
         # A capture shared by several call sites names them all ("WS-HIN,
         # WS-HOUT", one layout); a literal's names none. Either way the
@@ -555,7 +583,7 @@ def picture_for(data_name: str, pictures: dict[str, str] | None) -> str | None:
     base, paren, subscript = data_name.partition("(")
     if paren and ":" in subscript:
         return None
-    return pictures.get(_leaf_name(base))
+    return qualified_lookup(base, pictures)
 
 
 def _leaf_name(data_name: str) -> str:

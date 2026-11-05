@@ -27,6 +27,29 @@ Second bug hunt over hand-written mocks; executed repros in
   UNSUPPORTED_TERMINATOR_LAYOUT: CICS terminators now take the GOBACK
   call-frame fallback (and the main-line end) like STOP RUN.
 
+## 2026-11-05 -- Assertions and reports on names declared twice
+
+* `record_rewrite.field_pictures` dropped every name declared more than
+  once (`_data_item_index` omits them), so `AMT OF IN-REC` / `AMT OF
+  OUT-REC` from a record copybook COPYed twice had no PICTURE:
+  `--record-expectations` wrote the raw DISPLAY image as the golden
+  (`-0002468` for -24.68, `0025` for 2.5), which failed the next run, the
+  console/JSON showed that image, and an EXPECT on a numeric-edited one
+  compared as edited text. It now keys each declaration by its dotted
+  qualified name too and keeps the plain key when the PICTUREs agree;
+  `picture_for` and the driver's numeric-edited check resolve `OF`/`IN`
+  qualification (`mockymock/_qualified.py`). The `generate` EXPECT
+  renderer passes the whole qualified ref.
+* An abbreviated combined EXPECT on a numeric-edited field
+  (`TO BE GREATER THAN 0 AND LESS THAN 10`, `TO BE 5 OR 6`) with only
+  numeric operands is de-edited like the single relation
+  (`driver._combined_by_value`); it compared `"  5"` with 0 as text.
+* `run --junit-xml` writes the readable failure reasons the console shows
+  (`got -24.68 (displayed as -0002468)`), not the raw image.
+* Tests: `tests/unit/test_qualified_names.py`,
+  `tests/integration/test_qualified_names_declared_twice.py` (fixture
+  `fixtures/qualified_twice/`, a copybook COPYed twice).
+
 ## 2026-11-05 -- Resource mocks answer like the real statement
 
 Bug hunt over hand-written resource mocks; executed repros in

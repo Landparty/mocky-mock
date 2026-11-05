@@ -59,7 +59,7 @@ def test_operators_and_subscripts_carry_over():
     [
         ExpectDirective("WS-BAL", '"    100.00"'),  # quoted: byte-exact
         ExpectDirective("WS-BAL", "WS-OTHER"),  # a data-name
-        ExpectDirective("WS-BAL", "> 0 AND < 10"),  # combined condition
+        ExpectDirective("WS-BAL", '"  1" OR "  2"'),  # combined, text operands
         ExpectDirective("WS-BAL(1:3)", "100"),  # reference-modified
         ExpectDirective("WS-PLAIN", "100"),  # not numeric-edited
     ],

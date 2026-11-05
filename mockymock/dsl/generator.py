@@ -4322,9 +4322,9 @@ def _render_expectation(
         # The PICTURE decides bare vs quoted, exactly as it does for
         # `run --record-expectations`: a folded "-3" / "1.5" / "007" held in
         # a PIC X field rendered bare is an EXPECT that fails on the very
-        # first run (GnuCOBOL compares it as text). `A OF B` qualification
-        # is looked up by its first word, the item itself.
-        picture = picture_for(expectation.ref.split()[0], pictures)
+        # first run (GnuCOBOL compares it as text). `A OF B` resolves to
+        # the declaration it qualifies (`picture_for`).
+        picture = picture_for(expectation.ref, pictures)
         rendered = render_expect_value(
             str(expectation.value),
             picture,
