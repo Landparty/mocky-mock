@@ -2018,15 +2018,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     under --record-expectations (2026-11-03, NIST IX102A: a looping happy
     path hid five cases). Those cases are built and run again on their
     own, and again after each further crash, so one bad case costs only
-    itself. A --json-report gets their results merged in."""
+    itself. The --json-report, and the result saved for `mockymock
+    report`, get their results merged in.
+
+    The left-over cases are picked by their position in the suite, never
+    by name: TESTCASE names need not be unique, and a name shared with the
+    case that crashed reran that case instead of the ones left over."""
     exit_code = _cmd_run_suite(args)
     remaining = list(getattr(args, "not_run_after_crash", None) or [])
     if not remaining or not _can_rerun_left_over_cases(args):
         return exit_code
     import copy
-    import tempfile
+    import json
 
-    reports: list[str] = []
+    reruns: list[tuple[dict, list[int | None]]] = []
     stalled = 0
     for _ in range(_MAX_ISOLATION_RERUNS):
         print(
@@ -2035,17 +2040,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"stopped it"
         )
         sub_args = copy.copy(args)
-        sub_args.case = remaining
+        sub_args.case_positions = remaining
         sub_args.not_run_after_crash = None
-        with tempfile.TemporaryDirectory(prefix="mockymock-rerun-") as tmp:
-            if args.json_report:
-                sub_args.json_report = str(Path(tmp) / "report.json")
-            exit_code = _cmd_run_suite(sub_args) or exit_code
-            if args.json_report:
-                try:
-                    reports.append(Path(sub_args.json_report).read_text("utf-8"))
-                except OSError:
-                    pass
+        sub_args.run_report = None
+        # The rerun's report is merged into the first run's below, never
+        # written over the user's --json-report file.
+        sub_args.json_report = None
+        exit_code = _cmd_run_suite(sub_args) or exit_code
+        if getattr(sub_args, "run_report", None) is not None:
+            reruns.append(sub_args.run_report)
         left = list(getattr(sub_args, "not_run_after_crash", None) or [])
         if not left or len(left) >= len(remaining):
             break
@@ -2062,8 +2065,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
             )
             break
         remaining = left
-    if args.json_report and reports:
-        _merge_rerun_reports(Path(args.json_report), reports)
+    first = getattr(args, "run_report", None)
+    if first is None or not reruns:
+        return exit_code
+    merged = _merge_rerun_reports(first, reruns)
+    text = json.dumps(merged, indent=2) + "\n"
+    if args.json_report:
+        _write_report_file("run", "--json-report", args.json_report, text)
+    saved = getattr(args, "saved_run_report", None)
+    if saved is not None and Path(saved).is_file():
+        try:
+            Path(saved).write_text(text, encoding="utf-8")
+        except OSError:
+            pass
     return exit_code
 
 
@@ -2088,43 +2102,43 @@ def _can_rerun_left_over_cases(args: argparse.Namespace) -> bool:
     return not any(getattr(args, flag, None) for flag in whole_binary)
 
 
-def _merge_rerun_reports(path: Path, reruns: list[str]) -> None:
-    """The --json-report at `path` with each not-run case replaced by the
-    entry a rerun reported for it, and its summary counted again."""
-    import json
-
-    try:
-        report = json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError):
-        return
-    for text in reruns:
-        try:
-            rerun = json.loads(text)
-        except ValueError:
-            continue
-        found: dict[tuple[str, object], list[dict]] = {}
-        for entry in rerun.get("cases", []):
-            if entry.get("status") != "not_run":
-                found.setdefault((entry.get("name"), entry.get("line")), []).append(
-                    entry
-                )
-        cases = []
-        for entry in report.get("cases", []):
-            key = (entry.get("name"), entry.get("line"))
-            if entry.get("status") == "not_run" and found.get(key):
-                entry = dict(found[key].pop(0), rerun=True)
-            cases.append(entry)
-        report["cases"] = cases
-    statuses = [entry.get("status") for entry in report.get("cases", [])]
-    summary = report.setdefault("summary", {})
+def _merge_rerun_reports(
+    first: tuple[dict, list[int | None]],
+    reruns: list[tuple[dict, list[int | None]]],
+) -> dict:
+    """The first run's JSON report with each not-run case replaced by the
+    entry a rerun reported for it, and its summary counted again. Each
+    report comes with the suite position of every case entry
+    (`json_report.report_case_positions`), which is how an entry is
+    matched: a name can be shared, and `--record-expectations` moves
+    every line below a recorded value between the runs."""
+    report, positions = first
+    report = dict(report)
+    cases = list(report.get("cases", []))
+    by_position = {
+        position: index
+        for index, position in enumerate(positions)
+        if position is not None and index < len(cases)
+    }
+    for rerun, rerun_positions in reruns:
+        for entry, position in zip(
+            rerun.get("cases", []), rerun_positions, strict=False
+        ):
+            index = by_position.get(position) if position is not None else None
+            if index is None or entry.get("status") == "not_run":
+                continue
+            if cases[index].get("status") == "not_run":
+                cases[index] = dict(entry, rerun=True)
+    report["cases"] = cases
+    statuses = [entry.get("status") for entry in cases]
+    summary = dict(report.get("summary") or {})
     summary["testsRun"] = sum(1 for status in statuses if status != "not_run")
     summary["casesFailed"] = statuses.count("failed")
     summary["casesCrashed"] = statuses.count("crashed")
     summary["casesNotRun"] = statuses.count("not_run")
-    summary["casesRisky"] = sum(
-        1 for entry in report.get("cases", []) if entry.get("risky")
-    )
-    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    summary["casesRisky"] = sum(1 for entry in cases if entry.get("risky"))
+    report["summary"] = summary
+    return report
 
 
 def _cmd_run_suite(args: argparse.Namespace) -> int:
@@ -2163,7 +2177,9 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         build_json_report,
         format_json_report,
         not_run_case_names,
+        not_run_case_positions,
         readable_suite,
+        report_case_positions,
         risky_case_ids,
     )
     from mockymock.report.record_rewrite import (
@@ -2219,9 +2235,10 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     _apply_config_to_args(args, source_path)
     # Taken before anything runs: `--record-expectations` rewrites the .cut,
     # and the saved result belongs to the suite as it ran (issue #352).
+    case_positions = getattr(args, "case_positions", None)
     saved_inputs = (
         fingerprint(source_path, cut_path, args.copybook_path)
-        if not args.case and not args.tag
+        if not args.case and not args.tag and not case_positions
         else None
     )
 
@@ -2263,6 +2280,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         args.copybook_path,
         case_names=args.case,
         tag_names=args.tag,
+        case_positions=case_positions,
     )
     for note in checked.notes:
         print(f"mockymock run: {note}")
@@ -2563,9 +2581,24 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     else:
         crash_detail = None
     not_run = not_run_case_names(suite_result, suite)
+
+    def suite_position(position: int | None) -> int | None:
+        """A position in the selected cases as one in the whole suite."""
+        if position is None or not case_positions:
+            return position
+        chosen = sorted(set(case_positions))
+        return chosen[position - 1] if 0 < position <= len(chosen) else None
+
     if crash_detail is not None and not_run:
-        # For `_cmd_run`: the cases this crash kept from running.
-        args.not_run_after_crash = list(not_run)
+        # For `_cmd_run`: the cases this crash kept from running, by their
+        # position in the whole suite.
+        args.not_run_after_crash = [
+            position
+            for position in (
+                suite_position(p) for p in not_run_case_positions(suite_result, suite)
+            )
+            if position is not None
+        ]
     # Under --record-expectations the run exists to fill in the missing
     # assertions, so labelling its cases risky would only be noise.
     risky = [] if stub_scan is not None else risky_case_ids(suite_result, suite)
@@ -2638,23 +2671,30 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             format_junit_xml(suite_result, crash_detail=crash_detail, not_run=not_run),
         )
 
-    run_json_text = format_json_report(
-        build_json_report(
-            suite_result,
-            cut_suite=suite,
-            crash_detail=crash_detail,
-            cut_file=str(cut_path),
-            program_file=str(source_path),
-            pictures=pictures,
-            decimal_comma=decimal_comma,
-        )
+    run_report = build_json_report(
+        suite_result,
+        cut_suite=suite,
+        crash_detail=crash_detail,
+        cut_file=str(cut_path),
+        program_file=str(source_path),
+        pictures=pictures,
+        decimal_comma=decimal_comma,
     )
+    # For `_cmd_run`, which merges the reruns of left-over cases into it.
+    args.run_report = (
+        run_report,
+        [suite_position(p) for p in report_case_positions(suite_result, suite)],
+    )
+    run_json_text = format_json_report(run_report)
     if args.json_report:
         _write_report_file("run", "--json-report", args.json_report, run_json_text)
     if saved_inputs is not None:
+        from mockymock.report.artifacts import artifact_path
+
         _save_result(
             "run", cut_path, source_path, "run", run_json_text, args, saved_inputs
         )
+        args.saved_run_report = artifact_path(cut_path, "run")
 
     # The original-.cbl remap is what BOTH the console headline and the
     # --coverage-fail-under gate read, so it is computed once here for

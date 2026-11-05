@@ -49,11 +49,11 @@ def test_native_run_passes_the_clock(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         seen.update(kwargs.get("env") or {})
-        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        return 0, b"", b"", 0
 
     monkeypatch.delenv("COB_CURRENT_DATE", raising=False)
     monkeypatch.delenv(CURRENT_DATE_ENV, raising=False)
-    monkeypatch.setattr(native_toolchain, "_run", fake_run)
+    monkeypatch.setattr(native_toolchain, "_run_capped", fake_run)
     monkeypatch.setattr(native_toolchain, "_require_home", lambda: tmp_path)
     binary = tmp_path / "PROG"
     binary.write_text("")
