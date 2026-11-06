@@ -70,8 +70,11 @@ then an end-to-end case through 0000-MAIN. Starting with
 ## 2. Scaffold once
 
 ```bash
-mockymock generate PROGRAM.cbl
+mockymock generate PROGRAM.cbl --per-paragraph
 ```
+
+(Plain `generate` is the data-driven mode: one case per scenario through
+the entry point. `--per-paragraph` is the paragraph pass.)
 
 One `TESTCASE` per paragraph **that touches at least one boundary**,
 named `"<PARAGRAPH> boundaries: <categories>"`, each with placeholder
@@ -193,6 +196,14 @@ In order, and say which one you're doing:
    after the same trace/explain loop, with the expected and actual
    values written down, and go on to the next paragraph. A parked
    paragraph is a reported finding, never a quietly relaxed assertion.
+6. **Where a confirmed program bug lives**: move the case that shows it,
+   with its assertion unchanged, into a second suite of the same program,
+   `PROG.known-bugs.cut` beside the main one (mockymock pairs
+   `PROG.<topic>.cut` with `PROG.cbl` by name; elsewhere, give it a
+   `PROGRAM` line). The main suite then stays green, which `mutate` and `report`
+   need (mutation compares against a passing baseline), and the bug suite
+   stays red until the program is fixed, which is the point. Say both in
+   the report.
 
 ## 4. Graduating to the whole program
 

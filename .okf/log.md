@@ -5,6 +5,27 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-06 -- `cobol-test` takes real subprograms after the program
+
+`/cobol-test PROGRAM.cbl SUB.cbl ...`: every program after the first runs
+for real. The skill adds a load-module suite (`generate --name module
+--real SUB.cbl`, mocks filled before any run, `run --json-report` +
+`report --run-json` since `mutate` refuses `USE REAL CALL`), a second plan
+list for the subprograms' rules (cited `SUB:BR-001`), one journal per
+suite, `mockymock suites` for the suite path, the native toolchain as a
+way to run, and the GnuCOBOL 3.1 behaviour of `report --execute`. Tested
+on `examples/paymod` (unit 7/7, module 6/6).
+
+## 2026-11-05 -- `mockymock` and `cobol-test` skills tuned from an eval run
+
+An eval run (four tasks, with and without the skill, scripted graders) found
+two gaps. The paragraph pass now says `generate --per-paragraph` (plain
+`generate` is the data-driven, whole-program shape), and a confirmed program
+bug moves, assertion unchanged, into `PROG.known-bugs.cut` so the main suite
+stays green for `mutate`/`report`. `cobol-test` step 7 adds the GnuCOBOL 3.1
+fallback (`run --json-report` + `mutate --json-report` + `report --run-json
+--mutation-json`) when `--execute` cannot measure coverage.
+
 ## 2026-11-05 -- CLI first-run friendliness
 
 `mockymock --help` lists each command once, grouped (now including
