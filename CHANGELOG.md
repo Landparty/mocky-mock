@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.1](https://github.com/Landparty/mocky-mock/compare/v0.16.0...v0.16.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* hunt bugs [#430](https://github.com/Landparty/mocky-mock/issues/430) and [#434](https://github.com/Landparty/mocky-mock/issues/434) ([379b983](https://github.com/Landparty/mocky-mock/commit/379b9837a0268be480c55aaae05ce08c1b081e84))
+* no per-site counts in file-status scenarios; mutation ignores PROCEDURE DIVISION inside literals ([ad4daba](https://github.com/Landparty/mocky-mock/commit/ad4daba09c78e37717ee429be5ddc535c7232a01))
+
 ## [0.16.0](https://github.com/Landparty/mocky-mock/compare/v0.15.0...v0.16.0) (2026-11-06)
 
 
