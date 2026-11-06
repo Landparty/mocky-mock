@@ -215,16 +215,23 @@ def _index_names(checked: StaticCheckResult) -> list[str]:
 NO_ASSERTION = "NO_ASSERTION"
 
 
-def no_assertion_warnings(suite: MockTestSuite) -> list[str]:
+def no_assertion_warnings(
+    suite: MockTestSuite, cut_text: str | None = None
+) -> list[str]:
     """One pre-formatted, unprefixed warning line per TESTCASE with no
     EXPECT and no VERIFY. Warnings, not problems: such a case is valid and
     passes whenever its PERFORM runs, so lint flags it without failing
     (like PHPUnit's "risky" status) and `run` marks its result the same
     way. The `.cut line N` wording is what lets an editor place the
     diagnostic on the TESTCASE header. PROVIDER rows expand to cases that
-    share one header line, so each line is reported once."""
+    share one header line, so each line is reported once.
+
+    With `cut_text`, a case that still holds `*> STUB EXPECT` comments is
+    told so: it is the same case `generate` leaves out of its "asserts
+    nothing" count, and `run --record-expectations` is what fixes it."""
     warnings: list[str] = []
     seen_lines: set[int] = set()
+    stubbed = stub_case_lines(cut_text, suite) if cut_text is not None else {}
     for case in suite.test_cases:
         if case.assertion_count:
             continue
@@ -233,12 +240,35 @@ def no_assertion_warnings(suite: MockTestSuite) -> list[str]:
                 continue
             seen_lines.add(case.line)
         where = f".cut line {case.line}: " if case.line else ""
+        stubs = stubbed.get(case.line, 0) if case.line else 0
+        if stubs:
+            warnings.append(
+                f'warning ({NO_ASSERTION}): {where}TESTCASE "{case.name}" asserts '
+                f"nothing yet -- its {stubs} `*> STUB EXPECT` comment(s) become "
+                f"EXPECTs when you run `mockymock run --record-expectations`"
+            )
+            continue
         warnings.append(
             f'warning ({NO_ASSERTION}): {where}TESTCASE "{case.name}" asserts '
             f"nothing -- it passes whenever its PERFORM runs. Add an EXPECT "
             f"on what it writes or a VERIFY on what it calls"
         )
     return warnings
+
+
+def stub_case_lines(cut_text: str, suite: MockTestSuite) -> dict[int, int]:
+    """TESTCASE header line -> how many `*> STUB EXPECT` comments that
+    case's block holds (cases with none are absent). The block runs from
+    the header to the line before the next TESTCASE header."""
+    lines = split_cut_lines(cut_text)
+    starts = sorted({case.line for case in suite.test_cases if case.line})
+    counts: dict[int, int] = {}
+    for index, start in enumerate(starts):
+        end = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
+        found = sum(1 for line in lines[start - 1 : end] if "*> STUB EXPECT" in line)
+        if found:
+            counts[start] = found
+    return counts
 
 
 def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
@@ -254,8 +284,7 @@ def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
         suite = parse_cut(cut_text)
     except CutParseError:
         return []
-    lines = split_cut_lines(cut_text)
-    starts = sorted({case.line for case in suite.test_cases if case.line})
+    stubbed = stub_case_lines(cut_text, suite)
     found: list[str] = []
     seen: set[int] = set()
     for case in suite.test_cases:
@@ -263,12 +292,8 @@ def cases_asserting_nothing(cut_text: str, *, stubs_count: bool) -> list[str]:
             continue
         if case.line:
             seen.add(case.line)
-        if stubs_count and case.line:
-            following = [s for s in starts if s > case.line]
-            end = following[0] - 1 if following else len(lines)
-            block = lines[case.line - 1 : end]
-            if any("*> STUB EXPECT" in line for line in block):
-                continue
+        if stubs_count and case.line and case.line in stubbed:
+            continue
         where = f".cut line {case.line}: " if case.line else ""
         found.append(f'{where}TESTCASE "{case.name}"')
     return found

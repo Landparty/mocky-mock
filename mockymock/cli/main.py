@@ -1432,6 +1432,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     print(f"mockymock generate: wrote {case_count} test case(s) -> {output_path}")
     _warn_asserting_nothing("generate", cut_text, stubs_count=True)
+    _note_pending_stubs("generate", cut_text)
     if case_count == 0 and bundle is not None:
         # The bundle had scenarios (zero is refused above) yet none became
         # a TESTCASE; the empty suite would run as "0 run, 0 failed" and
@@ -1552,6 +1553,39 @@ def _warn_asserting_nothing(command: str, cut_text: str, *, stubs_count: bool) -
     for label in empty:
         print(f"  {label}")
     return len(empty)
+
+
+def _note_pending_stubs(command: str, cut_text: str) -> None:
+    """Name the cases that assert nothing yet but hold `*> STUB EXPECT`
+    comments: `generate` leaves them out of its "asserts nothing" warning,
+    while `lint` reports them as NO_ASSERTION until the stubs are recorded,
+    so without this line the two counts disagree with no explanation."""
+    from mockymock.cli.checks import stub_case_lines
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    try:
+        suite = parse_cut(cut_text)
+    except CutParseError:
+        return
+    stubbed = stub_case_lines(cut_text, suite)
+    pending: list[str] = []
+    seen: set[int] = set()
+    for case in suite.test_cases:
+        if case.assertion_count or not case.line or case.line in seen:
+            continue
+        seen.add(case.line)
+        if case.line in stubbed:
+            pending.append(f'.cut line {case.line}: TESTCASE "{case.name}"')
+    if not pending:
+        return
+    print(
+        f"mockymock {command}: {len(pending)} test case(s) have no EXPECT yet, "
+        "only `*> STUB EXPECT` comments; `mockymock lint` reports them as "
+        "NO_ASSERTION until `mockymock run --record-expectations` turns the "
+        "comments into EXPECTs:"
+    )
+    for label in pending:
+        print(f"  {label}")
 
 
 def _refused_cases(source_path: Path, cut_path: Path, cut_text: str, args) -> int:
@@ -3091,6 +3125,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
                 build_copybook_line_map(
                     instrumented, normalized_lines, checked.source_location_map
                 ),
+                original_lines=split_source_lines(read_utf8_source(source_path)),
             )
             if args.trace_json:
                 _write_report_file("run", "--trace-json", args.trace_json, trace_json)
@@ -3693,7 +3728,11 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         except Exception:  # noqa: BLE001 -- already reported as a problem
             suite = None
     warnings = list(result.warnings)
-    warnings += no_assertion_warnings(suite) if suite is not None else []
+    try:
+        lint_cut_text: str | None = read_utf8_source(cut_path)
+    except (OSError, UnicodeDecodeError):
+        lint_cut_text = None
+    warnings += no_assertion_warnings(suite, lint_cut_text) if suite is not None else []
     try:
         warnings += orphan_label_warnings(read_utf8_source(cut_path))
     except (OSError, UnicodeDecodeError):

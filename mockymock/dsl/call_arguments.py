@@ -125,7 +125,12 @@ def fill_call_arguments(
             specs = None
         if not specs:
             continue
-        if _add_fields(bundle, category, key, arg_text, specs, seed):
+        direction = (
+            "BIDIRECTIONAL"
+            if "BIDIRECTIONAL" in argument.directions or len(argument.directions) > 1
+            else next(iter(argument.directions), "BIDIRECTIONAL")
+        )
+        if _add_fields(bundle, category, key, arg_text, specs, seed, direction):
             if "BIDIRECTIONAL" in argument.directions:
                 _add_stub(bundle, category, key, argument, outbound=False)
             dropped.add(note)
@@ -276,6 +281,7 @@ def _add_fields(
     arg_text: str,
     specs: list[Any],
     seed: int,
+    direction: str = "BIDIRECTIONAL",
 ) -> bool:
     """Add `specs` (and a generated value per scenario) to every scenario's
     fixture for (category, key), creating the fixture where the generator
@@ -307,7 +313,7 @@ def _add_fields(
                 "key": key,
                 "paragraph": None,
                 "line": None,
-                "direction": "",
+                "direction": direction,
                 "layout": [],
                 "sequence": [{}],
                 "terminal": None,
@@ -316,6 +322,14 @@ def _add_fields(
                 "unresolved": [],
             }
             scenario.setdefault("fixtures", []).append(fixture)
+        # A CALL fixture's direction is its arguments' (the schema has no
+        # empty value; older cobol-parser left it ""): one more argument
+        # going another way makes it BIDIRECTIONAL.
+        current = fixture.get("direction") or ""
+        if not current:
+            fixture["direction"] = direction
+        elif current != direction:
+            fixture["direction"] = "BIDIRECTIONAL"
         fixture.setdefault("layout", []).extend(layout)
         rows = fixture.setdefault("sequence", [])
         if not rows:

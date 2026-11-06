@@ -133,15 +133,27 @@ def format_trace_json(
     cut_file: str,
     program_file: str,
     copybook_lines: dict[int, tuple[str, int]] | None = None,
+    original_lines: list[str] | None = None,
 ) -> str:
     """The machine-readable contract consumed by the VS Code extension.
 
     `copybook_lines` (`coverage.build_copybook_line_map`) places a
     statement a COPY brought in: its entry carries the copybook's `file`
     name and its line there (issue #242). Entries without `file` are lines
-    of `programFile`."""
+    of `programFile`.
+
+    A statement the splicer replaced (a mocked boundary, a USE REAL CALL,
+    a neutralized GOBACK) runs as a block of inserted statements that all
+    map to the statement's own line. They are reported as ONE entry for
+    that line, with `"spliced": true` and, given `original_lines`, the
+    statement's own verb, so the path reads as the program's path and not
+    the instrumentation's (cobol-test run on PAYMAIN, 2026-11-06)."""
     path: list[dict[str, object]] = []
     truncated = False
+    # The open spliced block: (path index, first instrumented line, last
+    # instrumented line) of the entry the block's statements collapse into.
+    block: tuple[int, int, int] | None = None
+    path_inst: list[int] = []  # instrumented line of each `path` entry
     for entry in entries:
         original = line_map.get(entry.line)
         where: dict[str, object]
@@ -152,6 +164,28 @@ def format_trace_json(
             where = {"file": copybook, "line": copybook_line}
         else:
             continue  # splicer-inserted line: not the user's code
+        if entry.paragraph is None and path:
+            last = path[-1]
+            same_line = (
+                "statement" in last
+                and last.get("line") == where.get("line")
+                and last.get("file") == where.get("file")
+            )
+            if same_line and block is not None and block[0] == len(path) - 1:
+                index, first, _ = block
+                if entry.line != first:  # still inside the same block
+                    block = (index, first, entry.line)
+                    continue
+            elif same_line and entry.line != path_inst[-1]:
+                # A second instrumented line standing for the same source
+                # line: the statement was replaced by a splice block.
+                last["spliced"] = True
+                if "file" not in last and original_lines is not None:
+                    verb = _statement_verb(original_lines, int(str(last["line"])))
+                    if verb:
+                        last["statement"] = verb
+                block = (len(path) - 1, path_inst[-1], entry.line)
+                continue
         if len(path) >= TRACE_ENTRY_CAP:
             truncated = True
             break
@@ -159,6 +193,7 @@ def format_trace_json(
             path.append({**where, "paragraph": entry.paragraph})
         else:
             path.append({**where, "statement": entry.statement})
+        path_inst.append(entry.line)
 
     payload = {
         "version": TRACE_JSON_VERSION,
@@ -167,12 +202,47 @@ def format_trace_json(
         "case": {"name": case_name, "line": case_line},
         "path": path,
         "mocks": [
-            {"order": index, "label": label}
-            for index, label in enumerate(mock_hits, start=1)
+            _mock_entry(index, label) for index, label in enumerate(mock_hits, start=1)
         ],
         "truncated": truncated,
     }
     return json.dumps(payload, indent=2) + "\n"
+
+
+#: What the splicer appends to the firing label of a USE REAL CALL site
+#: (`splicer.injector.REAL_SUFFIX`; kept here so the report has no splicer
+#: import).
+_REAL_SUFFIX = " (real)"
+
+#: Verbs a splice can replace, looked for on the statement's source line.
+_SPLICED_VERBS = frozenset(
+    "CALL READ WRITE REWRITE DELETE START OPEN CLOSE RETURN RELEASE SORT MERGE "
+    "EXEC GOBACK STOP EXIT ACCEPT DISPLAY GO PERFORM CANCEL INVOKE".split()
+)
+
+
+def _statement_verb(original_lines: list[str], line: int) -> str | None:
+    """The verb of the statement on `line` of the program: the first
+    spliceable verb on that line (fixed format: columns 8-72), else the
+    line's first word."""
+    if not 1 <= line <= len(original_lines):
+        return None
+    text = original_lines[line - 1]
+    if len(text) > 6 and text[:6].strip().isdigit() or text[:6] == " " * 6:
+        text = text[7:72]
+    words = [word.rstrip(".").upper() for word in text.split()]
+    for word in words:
+        if word in _SPLICED_VERBS:
+            return "EXEC" if word == "EXEC" else word
+    return words[0] if words else None
+
+
+def _mock_entry(order: int, label: str) -> dict[str, object]:
+    """One `mocks` entry. A USE REAL CALL firing keeps its place in the
+    timeline but is marked `"real": true`, without the label suffix."""
+    if label.endswith(_REAL_SUFFIX):
+        return {"order": order, "label": label[: -len(_REAL_SUFFIX)], "real": True}
+    return {"order": order, "label": label}
 
 
 def format_trace_console(payload: dict) -> str:
@@ -180,9 +250,16 @@ def format_trace_console(payload: dict) -> str:
     case = payload["case"]
     lines = [f"Execution trace for case: {case['name']}"]
     if payload["mocks"]:
-        lines.append("  mocks fired, in order:")
+        has_real = any(entry.get("real") for entry in payload["mocks"])
+        lines.append(
+            "  mocks and real calls, in order:"
+            if has_real
+            else "  mocks fired, in order:"
+        )
         lines.extend(
-            f"    {entry['order']}. {entry['label']}" for entry in payload["mocks"]
+            f"    {entry['order']}. {entry['label']}"
+            + (" (real program, not mocked)" if entry.get("real") else "")
+            for entry in payload["mocks"]
         )
     else:
         lines.append("  mocks fired: none")
@@ -196,7 +273,9 @@ def format_trace_console(payload: dict) -> str:
                 f"    line {entry['line']:>6}  paragraph  {entry['paragraph']}{origin}"
             )
         else:
+            spliced = " (mocked or linked by mockymock)" if entry.get("spliced") else ""
             lines.append(
-                f"    line {entry['line']:>6}             {entry['statement']}{origin}"
+                f"    line {entry['line']:>6}             {entry['statement']}"
+                f"{spliced}{origin}"
             )
     return "\n".join(lines)

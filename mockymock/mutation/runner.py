@@ -584,6 +584,13 @@ def run_mutation(
             None,
             all_notes,
         )
+    from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+
+    if baseline.phase == "checks" and baseline.detail == REAL_CALL_UNSUPPORTED:
+        # Not a red suite: mutate cannot link USE REAL CALL programs yet.
+        # Saying "baseline is not green ... fix the suite first" sent people
+        # to fix a suite that passes (cobol-test run on PAYMAIN, 2026-11-06).
+        return ([REAL_CALL_UNSUPPORTED], None, all_notes)
     excluded: tuple[str, ...] = ()
     if baseline.status == "failed" and baseline.failing_cases:
         # A suite with a known-failing case is still worth scoring: the

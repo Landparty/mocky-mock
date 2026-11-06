@@ -16,6 +16,17 @@ statement coverage from the GnuCOBOL trace; `report/branch_coverage.py`).
 Designs: docs/2026-11-06-branch-coverage-design.md,
 docs/2026-11-06-real-files-and-job-runs-design.md.
 
+## 2026-11-06 -- gaps from the cobol-test run on PAYMAIN + PAYCALC
+
+[report](report.md): `run --trace` shows a spliced statement as one
+`"spliced": true` entry with its own verb, and a `USE REAL CALL` firing as
+`"real": true` ("real program, not mocked"). [cli](cli.md): lint's
+NO_ASSERTION names pending `*> STUB EXPECT` comments and `generate` lists
+those cases, so their counts agree; `mutate` on a `USE REAL CALL` suite
+says why without "fix the suite first". `dsl/call_arguments` gives a CALL
+fixture it fills a `direction` (older cobol-parser left `""`). Repro:
+`tests/fixtures/open_gaps_2026_11_06/`.
+
 ## 2026-11-06 -- `cobol-test` takes real subprograms after the program
 
 `/cobol-test PROGRAM.cbl SUB.cbl ...`: every program after the first runs
