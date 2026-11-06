@@ -304,9 +304,24 @@ independent channels compose into one report, and the split is load-bearing:
    blocks are exactly those lines, so the trace file structurally cannot
    report which mocks fired.
 
-A consequence worth knowing when reading a report: mocked statements never
-appear in the path, so it shows gaps precisely where mocks fired. The two
-lists are meant to be read together.
+A consequence worth knowing when reading a report: a mocked statement's
+dispatch block maps back onto the statement's own line, so its inserted
+statements (`EVALUATE`/`WHEN`/`ADD`/`DISPLAY`, the mock body) would each read
+as that line. `format_trace_json` collapses a run of entries that map to one
+source line from more than one instrumented line into **one** entry with
+`"spliced": true` and, given `original_lines`, the statement's own verb
+(`_statement_verb`); the console prints it as `READ (mocked or linked by
+mockymock)`. A block run again (a loop) starts a new entry when its first
+instrumented line comes back. Two statements on one instrumented line stay
+two entries (2026-11-06, cobol-test run on PAYMAIN).
+
+A `USE REAL CALL` site prints its firing as `CALL PAYCALC (real)`
+(`splicer.injector.REAL_SUFFIX`): it keeps its place in the timeline, and
+`_mock_entry` turns it into `{"label": "CALL PAYCALC", "real": true}`. The
+console header becomes `mocks and real calls, in order:` and the entry
+reads `CALL PAYCALC (real program, not mocked)`; before, a real subprogram
+was listed as a mock that fired. Both keys are additive to
+`TRACE_JSON_VERSION = 1`.
 
 `format_trace_json` emits the versioned contract (`TRACE_JSON_VERSION = 1`)
 the VS Code extension consumes; `format_trace_console` renders the same

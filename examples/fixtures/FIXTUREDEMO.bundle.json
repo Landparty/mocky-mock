@@ -34,7 +34,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             }
           ],
           "sequence": [
@@ -103,7 +105,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             },
             {
               "name": "WS-CUSTOMER-ID",
@@ -124,7 +128,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             }
           ],
           "sequence": [
@@ -145,7 +151,7 @@
           "key": "LOGALERT",
           "paragraph": "MAIN-PROCESS",
           "line": 52,
-          "direction": "",
+          "direction": "BIDIRECTIONAL",
           "layout": [
             {
               "name": "WS-ALERT-STATUS",
@@ -166,7 +172,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             }
           ],
           "sequence": [
@@ -205,7 +213,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             },
             {
               "name": "ORDER-QTY",
@@ -226,7 +236,9 @@
               "redefines": null,
               "sign_clause": null,
               "synchronized": false,
-              "occurs_depending_on": null
+              "occurs_depending_on": null,
+              "odo_controls": [],
+              "odo_counter_bounds": null
             }
           ],
           "sequence": [
@@ -349,7 +361,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       }
     ],
     "WS-CUST-NAME": [
@@ -372,7 +386,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       },
       {
         "name": "WS-CUSTOMER-ID",
@@ -393,7 +409,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       }
     ],
     "LOGALERT": [
@@ -416,7 +434,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       }
     ],
     "ORDER-RECORD": [
@@ -439,7 +459,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       },
       {
         "name": "ORDER-QTY",
@@ -460,7 +482,9 @@
         "redefines": null,
         "sign_clause": null,
         "synchronized": false,
-        "occurs_depending_on": null
+        "occurs_depending_on": null,
+        "odo_controls": [],
+        "odo_counter_bounds": null
       }
     ]
   },

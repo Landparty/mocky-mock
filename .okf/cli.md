@@ -325,7 +325,10 @@ program becomes one `USE REAL CALL ... FROM` in BEFORE-EACH (CAPTURE
 targets of the dropped block go with it), and every boundary of the real
 programs gets a `directive_snippet` placeholder there. `run`/`lint` link
 the programs (`checked.real_programs`); `debug`, `export` and `mutate`
-refuse such a suite (`checks.REAL_CALL_UNSUPPORTED`). See
+refuse such a suite (`checks.REAL_CALL_UNSUPPORTED`). `mutate` prints that
+sentence as is: `run_mutation` returns it before the "baseline run is not
+green ... fix the suite first" branch, which used to wrap it and sent people
+to fix a green suite (2026-11-06). See
 [docs/2026-11-01-real-call-integration-design.md](../docs/2026-11-01-real-call-integration-design.md).
 
 Scaffolds a starter `.cut` test file from a COBOL program. Does **not** touch
@@ -1291,7 +1294,15 @@ without a daemon.
 `mockymock lint: warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts
 nothing ...` line per TESTCASE with no EXPECT/VERIFY
 (`MockTestCase.assertion_count == 0`; PROVIDER rows sharing a header line
-report once), then `N warning(s).`. Warnings never change the exit code.
+report once), then `N warning(s).`. `_cmd_lint` passes the `.cut` text too
+(`no_assertion_warnings(suite, cut_text)`), so a case whose block holds
+`*> STUB EXPECT` comments (`checks.stub_case_lines`) reads `asserts nothing
+yet -- its N ... comment(s) become EXPECTs when you run mockymock run
+--record-expectations`. `generate` leaves those cases out of its own
+"assert nothing" warning (`stubs_count=True`) and names them in a second
+line, `_note_pending_stubs` ("N test case(s) have no EXPECT yet, only
+`*> STUB EXPECT` comments; lint reports them as NO_ASSERTION ..."), so the
+two commands' counts add up (2026-11-06). Warnings never change the exit code.
 They print even when a refusal stopped `run_static_checks` before it parsed
 the `.cut` (`_cmd_lint` re-parses it quietly), since the check is
 `.cut`-only. The `.cut line N` wording is what lets the extension place the

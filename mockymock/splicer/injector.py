@@ -65,6 +65,11 @@ _QUALIFIERS = frozenset({"OF", "IN"})
 _ADDRESS_WORDS = frozenset({"ADDRESS", "LENGTH"})
 
 
+#: Appended to a `__MOCKYMOCK__ MOCK:` firing label when the site ran a
+#: `USE REAL CALL` program instead of a mock (see report.trace).
+REAL_SUFFIX = " (real)"
+
+
 def _literal_inner(token: str) -> str:
     """The value cobolparser before 3.1 reports for a quoted literal token:
     prefix and quotes removed, doubled quotes collapsed."""
@@ -452,10 +457,15 @@ def build_site_dispatch(
             # timeline. directive.key is what the author actually wrote in
             # the .cut, so the pair names the firing unambiguously and
             # points straight back at the directive that caused it.
+            #
+            # A USE REAL CALL is no mock: its firing is labelled REAL_SUFFIX
+            # so the timeline does not list a subprogram that ran for real
+            # as a mocked one (cobol-test run on PAYMAIN, 2026-11-06).
             for fired in matches:
                 lines.append(
                     f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
-                    f'{site.label} {fired.key}"'
+                    f"{site.label} {fired.key}"
+                    f'{REAL_SUFFIX if fired.is_real else ""}"'
                 )
         if directive.is_real:
             if real_statement is None:
@@ -962,7 +972,7 @@ def _route_real_dynamic_calls(
         if trace:
             out.append(
                 f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
-                f'{site.label} {name}"'
+                f'{site.label} {name}{REAL_SUFFIX}"'
             )
         out.extend(f"                   {text}" for text in real_statement)
     out.append("               WHEN OTHER")
