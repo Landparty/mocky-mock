@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.16.0](https://github.com/Landparty/mocky-mock/compare/v0.15.0...v0.16.0) (2026-11-06)
+
+
+### Features
+
+* branch coverage, real-file tests (level 2) and whole-job runs (level 3) ([51226c8](https://github.com/Landparty/mocky-mock/commit/51226c8e386d0d4383d5e57a9d0ad1ac71143555))
+* branch coverage, real-file tests (level 2) and whole-job runs (level 3) ([8f4e9a6](https://github.com/Landparty/mocky-mock/commit/8f4e9a623737d5a296e2f1e9e7ac822197e6d075))
+* **cli:** friendlier mockymock help, typo hints and toolchain errors ([04fbcbf](https://github.com/Landparty/mocky-mock/commit/04fbcbf024bee36ac17e65e72843642d09ea6d73))
+* **cli:** friendlier mockymock help, typo hints and toolchain errors ([f87b96b](https://github.com/Landparty/mocky-mock/commit/f87b96bbf033562303d44eb51d9d49b66a1c1ea5))
+* **skills:** add mockymock-setup skill to set a repo up for the VS Code extension ([1075c97](https://github.com/Landparty/mocky-mock/commit/1075c975b8068efa882370dee3ea2704992971e7))
+* **skills:** add mockymock-setup skill to set a repo up for the VS Code extension ([9d16462](https://github.com/Landparty/mocky-mock/commit/9d164629240d4bf58eb48c98cb247567e8b8744f))
+* **skills:** cobol-test runs listed subprograms for real ([fbeef54](https://github.com/Landparty/mocky-mock/commit/fbeef54b61b5627ab627e1315f09f14fd1042b78))
+
+
+### Bug Fixes
+
+* assertions and reports on names declared twice, edited combined EXPECTs, JUnit values ([3f772fd](https://github.com/Landparty/mocky-mock/commit/3f772fd0bdf0a747375f615680e3d45981df4cd9))
+* assertions and reports on names declared twice, edited combined EXPECTs, JUnit values ([9ac09df](https://github.com/Landparty/mocky-mock/commit/9ac09df5220e3f9308cf04878e144b76a2e0aca3))
+* CICS RESP/EIBRESP, MQ CompCode, re-OPEN rewinds ROWS, CICS RETURN/XCTL in HANDLE handlers ([a7f4bbb](https://github.com/Landparty/mocky-mock/commit/a7f4bbb2586140da40bf761792330d0e4f8aa97d))
+* CICS RESP/EIBRESP, MQ CompCode, re-OPEN rows rewind, CICS terminators in handlers ([b139a6c](https://github.com/Landparty/mocky-mock/commit/b139a6c6eae5f1df0126e3a73db6737c48a5bd3e))
+* **dsl:** six .cut language and CLI bugs found in a bug hunt ([cfff309](https://github.com/Landparty/mocky-mock/commit/cfff30984cbbba3d9cea8e99ef238a5cfab766c5))
+* **dsl:** six .cut language and CLI bugs from a bug hunt ([df9c22c](https://github.com/Landparty/mocky-mock/commit/df9c22cb641a1ad8f473bcd577bb12fb8960bbc0))
+* **generate:** a DL/I priming call and the loop's call get their own rows ([0b3bce9](https://github.com/Landparty/mocky-mock/commit/0b3bce924df03d2beba7a5899345721851a70d98))
+* **generate:** a DL/I priming call and the loop's call get their own rows ([cf82a65](https://github.com/Landparty/mocky-mock/commit/cf82a65ef1c94d6fd96a92c2d27de7bd29dd2268))
+* **generate:** an empty keyed READ mock finds no record (23) ([8e7eb61](https://github.com/Landparty/mocky-mock/commit/8e7eb61c5c9e9662d48e9c4a0c49799b71e36faa))
+* **generate:** an empty keyed READ mock finds no record (23) ([6207983](https://github.com/Landparty/mocky-mock/commit/6207983515d44912a587e0a833b33226da4218d8)), closes [#415](https://github.com/Landparty/mocky-mock/issues/415)
+* **generate:** make generated suites survive hangs and GnuCOBOL quirks ([afef600](https://github.com/Landparty/mocky-mock/commit/afef600a6f03449977d4e18a53192ace9a13d4be))
+* **generate:** no not-found reply for an INVALID KEY retry; stop stalled reruns ([edd1e6b](https://github.com/Landparty/mocky-mock/commit/edd1e6b4eb5020696fec821555fe8b4527b3c92c))
+* **runner:** no recording without a recording, retry reports, bounded Docker output ([69ed826](https://github.com/Landparty/mocky-mock/commit/69ed826826b7a14b757c2a805ecd797041d76bd8))
+* **runner:** no recording without a recording, retry reports, bounded Docker output ([b7953fc](https://github.com/Landparty/mocky-mock/commit/b7953fc58a5217f3f59cf2e09a807300123d336c))
+* **run:** rerun left-over cases by position, bound output memory, harden the runner ([eaaecaa](https://github.com/Landparty/mocky-mock/commit/eaaecaa4ed8d6452c0c819e783b25f8efb525346))
+* **run:** rerun left-over cases by position, bound output memory, harden the runner ([237b35e](https://github.com/Landparty/mocky-mock/commit/237b35e88c056f4120b48dafd5bbcd17a7b57c9c))
+* **skills:** tune mockymock-setup from an eval run ([f18e873](https://github.com/Landparty/mocky-mock/commit/f18e8733c18f0e6a2bee3e01dbe201073b6b79fa))
+* **splicer:** resource mocks answer like the real statement ([ca4ffe8](https://github.com/Landparty/mocky-mock/commit/ca4ffe8d876e0d00676cbe73ff90a35ced570666))
+* **splicer:** resource mocks answer like the real statement ([7bd8a52](https://github.com/Landparty/mocky-mock/commit/7bd8a522343efe4e8b9d860aa6431e72d2c8ac2d))
+* status EOF for split READ files; answer nested screen DISPLAY / STOP literal ([ec5c6d8](https://github.com/Landparty/mocky-mock/commit/ec5c6d8bb24d80a8fe2b86dcab1df14f4b8353b3))
+* status EOF for split READ files; answer nested screen DISPLAY / STOP literal ([cb7465f](https://github.com/Landparty/mocky-mock/commit/cb7465f002fc58192e1e996c3aaacd83fd148885))
+* trace shows real calls and spliced statements honestly; lint/generate agree on stubs; mutate's real-call message ([be5c963](https://github.com/Landparty/mocky-mock/commit/be5c9634534d4a131621228669d19b2d8f37a7a3))
+* trace shows real calls and spliced statements honestly; lint/generate agree on stubs; mutate's real-call message ([48c6ad1](https://github.com/Landparty/mocky-mock/commit/48c6ad14c15418bada90590fcc7bc8c3250e95ae))
+
+
+### Documentation
+
+* **skills:** tune mockymock and cobol-test skills from an eval run ([3e0f46e](https://github.com/Landparty/mocky-mock/commit/3e0f46e2abca954c63f6e88d9ea88abcfd922bca))
+
 ## [0.15.0](https://github.com/Landparty/mocky-mock/compare/v0.14.0...v0.15.0) (2026-11-03)
 
 
