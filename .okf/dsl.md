@@ -1275,8 +1275,9 @@ paragraph-grouped path described above, unchanged. A real
   count per mocked key, so `_with_site_call_counts` first gives each key
   the bundle left uncounted its per-site counts back; the analysis then
   demotes or corrects them as it always did. A count the bundle wrote is
-  kept, and an `error status:` scenario is left alone (the bundle drops
-  its counts because the failure path makes them untrue). On an older
+  kept, and an `error status:` or `file status NN:` scenario is left alone
+  (`_is_failure_path_scenario`; the bundle drops its counts because the
+  failure path makes them untrue, #430). On an older
   bundle every key is counted already, so nothing is added.
 - **Expectations** render via `_render_expectation(expectation,
   declared_keys, call_count_overrides=None, counted_boundaries=None)`:

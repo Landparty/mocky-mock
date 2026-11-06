@@ -567,3 +567,53 @@ def test_verb_swap_ignores_a_nested_statements_terminator():
     # open a level that END-ADD closes, so it has no terminator of its own.
     assert len(mutants) == 1
     assert "END-ADD" not in mutants[0].mutated
+
+
+def test_program_boundary_inside_a_literal_does_not_stop_discovery():
+    """#434: DISPLAY 'Q: END PROGRAM REACHED' is not a program boundary."""
+    with_trace = _procedure(
+        "           DISPLAY 'Q: END PROGRAM REACHED'",
+        "           IF WS-A > 0 MOVE 1 TO WS-B END-IF",
+        "           GOBACK.",
+    )
+    without = _procedure(
+        "           IF WS-A > 0 MOVE 1 TO WS-B END-IF",
+        "           GOBACK.",
+    )
+    assert _ops(generate_mutants(with_trace)) == _ops(generate_mutants(without))
+    assert any(m.line == 6 for m in generate_mutants(with_trace))
+
+
+def test_boundary_in_inline_comment_or_id_division_literal_is_ignored():
+    lines = _procedure(
+        '           DISPLAY "ID DIVISION"  *> IDENTIFICATION DIVISION follows',
+        "           IF WS-A > 0 MOVE 1 TO WS-B END-IF",
+    )
+    assert any(m.line == 6 for m in generate_mutants(lines))
+
+
+def test_procedure_division_inside_a_literal_does_not_start_discovery():
+    lines = [
+        "       IDENTIFICATION DIVISION.",
+        "       PROGRAM-ID. SAMPLE.",
+        "       DATA DIVISION.",
+        "       WORKING-STORAGE SECTION.",
+        "       01 WS-T PIC X(30) VALUE 'SEE PROCEDURE DIVISION'.",
+        # Not valid in WORKING-STORAGE, but would yield mutants if discovery
+        # had been switched on by the literal above.
+        "           IF WS-A > 0 MOVE 1 TO WS-B END-IF",
+    ]
+    assert generate_mutants(lines) == []
+
+
+def test_real_end_program_still_stops_discovery():
+    lines = _procedure(
+        "           GOBACK.",
+        "       END PROGRAM SAMPLE.",
+        "       IDENTIFICATION DIVISION.",
+        "       PROGRAM-ID. OTHER.",
+        "       DATA DIVISION.",
+        "       WORKING-STORAGE SECTION.",
+        "       01 WS-A PIC 9(4) VALUE 3.",
+    )
+    assert generate_mutants(lines) == []

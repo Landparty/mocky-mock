@@ -4838,6 +4838,20 @@ def _endless_read_keys(
 #: uncounted on purpose: the program's error path may skip the READ loop or
 #: the CLOSE, so only the failed boundary's own count is known.
 _ERROR_STATUS_SCENARIO_PREFIX = "error status:"
+#: The file-status family (`file status 23: START CUST`): one statement is
+#: given a status the program tests, so its flow after that statement is the
+#: failure path too -- a browse loop driven by the status a failed START
+#: leaves behind never runs (issue #430).
+_FILE_STATUS_SCENARIO = re.compile(r"^file status \w{2}:", re.IGNORECASE)
+
+
+def _is_failure_path_scenario(name: str) -> bool:
+    """Whether a scenario injects a failing status, so that cobol-parser
+    leaves the counts after it uncounted on purpose and no per-site count
+    may be restored (`_with_site_call_counts`)."""
+    return name.lower().startswith(_ERROR_STATUS_SCENARIO_PREFIX) or bool(
+        _FILE_STATUS_SCENARIO.match(name)
+    )
 
 
 #: The cobol-parser note on a keyed READ whose key it cannot know; a
@@ -4991,12 +5005,14 @@ def _with_site_call_counts(
     it needs a count to start from for every mocked key: a key the bundle
     left uncounted gets the per-site counts back, and the analysis demotes
     them to a commented VERIFY or corrects them as before. A count the
-    bundle did write is kept as it is. An "error status" scenario is left
-    alone: there the bundle drops counts because the failure path makes
-    them untrue, which no per-site count can repair."""
+    bundle did write is kept as it is. An "error status" or "file status"
+    scenario is left alone: there the bundle drops counts because the
+    failure path makes them untrue, which no per-site count can repair --
+    a happy-path READ NEXT count on a case whose START failed is a VERIFY
+    the generated case cannot pass (issue #430)."""
     scenarios = []
     for scenario in bundle.scenarios:
-        if scenario.name.lower().startswith(_ERROR_STATUS_SCENARIO_PREFIX):
+        if _is_failure_path_scenario(scenario.name):
             scenarios.append(scenario)
             continue
         counted = {e.ref for e in scenario.expectations if e.kind == "call_count"}
