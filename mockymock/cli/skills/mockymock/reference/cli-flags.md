@@ -255,7 +255,10 @@ Warnings never change the exit code. The main ones:
 
 - `warning (NO_ASSERTION): .cut line N: TESTCASE "X" asserts nothing ...`
   for a test case with no `EXPECT` or `VERIFY`. It passes whenever its
-  `PERFORM` runs, and `run` reports it as risky.
+  `PERFORM` runs, and `run` reports it as risky. When the case still holds
+  `*> STUB EXPECT` comments the line says `asserts nothing yet` and points
+  at `run --record-expectations`; `generate` lists those cases separately
+  from the ones with nothing at all, so the two counts add up.
 - `warning (FALLTHROUGH_BOUNDARY): CALL boundary at line N ... is reachable
   only by falling through from a GO TO target ...`: a boundary the case
   could only reach by falling off the end of a paragraph some `GO TO`
