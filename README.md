@@ -226,10 +226,14 @@ rest each add one distinctive feature.
 | [`examples/regnavg/`](examples/regnavg/) | 2-D `OCCURS` tables, `REDEFINES`, `DIVIDE ... GIVING ... ROUNDED`, `run --trace` |
 | [`examples/real-world/`](examples/real-world/) | Four business-flavored programs (IMS DL/I, IMS MPP, MQ) plus `--coverage` |
 | [`examples/nist-cobol85/`](examples/nist-cobol85/) | Static `CALL` against real, unmodified NIST COBOL-85 validation-suite programs |
+| [`examples/jobflow/`](examples/jobflow/) | A whole JCL job run end to end with `mockymock job`: IEFBR14, a COBOL extract on real files with DB2 mocked, a SORT, a report step, `COND=` on the real return code |
 
 ### Beyond pass/fail
 
 - `USE REAL CALL "X" FROM "x.cbl"` -- load-module integration: the real subprogram is linked into the test binary and only the boundaries leaving the module are mocked, its own included; `mockymock generate MAIN.cbl --real X.cbl` scaffolds such a suite ([design](docs/2026-11-01-real-call-integration-design.md))
+- `USE REAL FILE F FROM "data.dat"` / `EXPECT FILE F MATCHES "golden.dat"` -- integration tests level 2: sequential files are real, staged per case and compared record by record after the run; `mockymock generate PROG.cbl --real-files` scaffolds such a suite from the generated READ data, and `--record-expectations` records the golden files ([design](docs/2026-11-06-real-files-and-job-runs-design.md))
+- `mockymock job JOB.jcl --src src --data data --expected expected [--record]` -- integration tests level 3: runs a whole JCL job (COBOL steps on real files, IEFBR14 / IEBGENER / SORT emulated, `COND=` and `IF` on the real return codes) and compares every dataset it wrote; needs `pip install 'mockymock[jcl]'` ([design](docs/2026-11-06-real-files-and-job-runs-design.md))
+- `mockymock run --branch-coverage FILE` — paragraph, IF / EVALUATE outcome and statement coverage of the suite, read from the GnuCOBOL trace (works on GnuCOBOL 3.1, measures real subprograms too) ([design](docs/2026-11-06-branch-coverage-design.md))
 - `mockymock run --coverage` — line coverage via GnuCOBOL/gcov ([design](docs/2026-07-17-coverage-reporting-design.md))
 - `mockymock run --trace` — replay one test case's execution path and mock timeline ([design](docs/2026-07-21-debug-trace-design.md))
 - `mockymock run --record-expectations` — golden/characterization mode: run the suite and turn every `*> STUB EXPECT <name>` comment in the `.cut` file into a real `EXPECT` line, filled in with the value the program actually produced ([design](docs/2026-08-04-record-expectations-design.md))

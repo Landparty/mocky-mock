@@ -64,11 +64,13 @@ from mockymock.dsl.model import (
     TERMINAL_CATEGORIES,
     DataProvider,
     ExpectDirective,
+    FileCheck,
     HookStep,
     MockCategory,
     MockDirective,
     MockTestCase,
     MockTestSuite,
+    RealFile,
     VerifyDirective,
 )
 from mockymock.splicer.cics_resp import expand_dfhresp_text
@@ -124,6 +126,17 @@ _END_AFTER_RE = re.compile(r"^END-AFTER\.?$", re.IGNORECASE)
 _USE_REAL_RE = re.compile(
     r"""^USE\s+REAL\s+CALL\s+(?P<q1>["'])(?P<key>[^"']*)(?P=q1)"""
     r"""\s+FROM\s+(?P<q2>["'])(?P<path>[^"']*)(?P=q2)$""",
+    re.IGNORECASE,
+)
+# Level-2 integration tests (docs/2026-11-06-real-files-and-job-runs-design.md).
+_FILE_NAME = r"(?P<file>[A-Za-z0-9][A-Za-z0-9-]*)"
+_USE_REAL_FILE_RE = re.compile(
+    rf"""^USE\s+REAL\s+FILE\s+{_FILE_NAME}(?:\s+FROM\s+(?P<q>["'])(?P<path>[^"']*)(?P=q))?$""",
+    re.IGNORECASE,
+)
+_FILE_CHECK_RE = re.compile(
+    rf"""^(?P<verb>EXPECT|SAVE)\s+FILE\s+{_FILE_NAME}\s+(?P<how>MATCHES|TO)\s+"""
+    r"""(?P<q>["'])(?P<path>[^"']*)(?P=q)$""",
     re.IGNORECASE,
 )
 _MOCK_QUOTED_RE = re.compile(
@@ -1059,6 +1072,7 @@ def parse_cut(text: str) -> MockTestSuite:
     mock_target: list[MockDirective] | None = None
     before_all: list[MockDirective] = []
     before_each: list[MockDirective] = []
+    before_each_real: list[RealFile] = []
     hook_mocks = {"BEFORE-ALL": before_all, "BEFORE-EACH": before_each}
     hook_steps: dict[str, list[HookStep]] = {}
     # id(case) -> .cut line of its current (last) PERFORM
@@ -1589,6 +1603,64 @@ def parse_cut(text: str) -> MockTestSuite:
                 ),
                 line_no,
             )
+        elif (m := _USE_REAL_FILE_RE.match(line)) is not None:
+            if in_before is not None and in_before != "BEFORE-EACH":
+                raise CutParseError(
+                    f"line {line_no}: USE REAL FILE not allowed inside "
+                    f"{in_before} (real files are staged per case: use "
+                    f"BEFORE-EACH or the TESTCASE)"
+                )
+            if in_before is None and case is None:
+                raise CutParseError(
+                    f"line {line_no}: USE REAL FILE outside TESTCASE/BEFORE-EACH"
+                )
+            if in_before is None and case is not None and case.perform_target:
+                raise CutParseError(
+                    f"line {line_no}: USE REAL FILE after a PERFORM -- declare "
+                    f"it with the case's mocks, before the first PERFORM"
+                )
+            real = RealFile(
+                file=m.group("file").upper(),
+                source=(m.group("path") or "").strip() or None,
+                line=line_no,
+            )
+            if m.group("path") is not None and real.source is None:
+                raise CutParseError(
+                    f"line {line_no}: empty FROM path -- name the file whose "
+                    f"records {real.file} starts with, or drop FROM"
+                )
+            assert in_before is not None or case is not None
+            target = (
+                before_each_real
+                if in_before is not None or case is None
+                else case.real_files
+            )
+            if any(r.file == real.file for r in target):
+                raise CutParseError(
+                    f"line {line_no}: duplicate USE REAL FILE {real.file}"
+                )
+            target.append(real)
+        elif (m := _FILE_CHECK_RE.match(line)) is not None:
+            verb = m.group("verb").upper()
+            how = m.group("how").upper()
+            if (verb, how) not in (("EXPECT", "MATCHES"), ("SAVE", "TO")):
+                raise CutParseError(
+                    f"line {line_no}: write EXPECT FILE <file> MATCHES "
+                    f'"<path>" or SAVE FILE <file> TO "<path>": {line!r}'
+                )
+            if case is None:
+                raise CutParseError(f"line {line_no}: {verb} FILE outside TESTCASE")
+            if not m.group("path").strip():
+                raise CutParseError(f"line {line_no}: empty {verb} FILE path")
+            _reject_before_perform(case, f"{verb} FILE", line_no)
+            case.file_checks.append(
+                FileCheck(
+                    file=m.group("file").upper(),
+                    path=m.group("path").strip(),
+                    kind=verb,
+                    line=line_no,
+                )
+            )
         elif line.upper().startswith("USE REAL"):
             raise CutParseError(
                 f"line {line_no}: malformed USE REAL directive: {line!r} "
@@ -1798,6 +1870,9 @@ def parse_cut(text: str) -> MockTestSuite:
     _apply_before_blocks(suite, before_all, before_each)
     suite.before_all_mocks = list(before_all)
     suite.before_each_mocks = list(before_each)
+    for real_case in suite.test_cases:
+        own = {r.file for r in real_case.real_files}
+        real_case.real_files.extend(r for r in before_each_real if r.file not in own)
     suite.before_all_steps = hook_steps.get("BEFORE-ALL", [])
     suite.before_each_steps = hook_steps.get("BEFORE-EACH", [])
     suite.after_each_steps = hook_steps.get("AFTER-EACH", [])

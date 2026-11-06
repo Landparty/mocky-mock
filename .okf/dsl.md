@@ -1712,3 +1712,20 @@ placeholder's end-of-file body. Design:
 - `_mq_success_reply` leaves a CompCode / Reason the scenario pinned.
 - `mockymock/copybooks/system/` ships DFHAID and DFHBMSCA, searched after the
   user's own copybook paths (`discovery.with_system_copybooks`).
+
+## `USE REAL FILE <file> [FROM "<path>"]`, `EXPECT FILE`, `SAVE FILE` (2026-11-06)
+
+Integration tests level 2. `USE REAL FILE` goes in a TESTCASE before its
+PERFORM or in BEFORE-EACH (merged into every case, the case's own entry
+wins) and builds `RealFile(file, source, line)` on
+`MockTestCase.real_files`. `EXPECT FILE F MATCHES "p"` and
+`SAVE FILE F TO "p"` build `FileCheck(file, path, kind)` on
+`MockTestCase.file_checks`; an EXPECT FILE counts as an assertion. Paths are
+relative to the `.cut`. `cli/checks.expand_real_files` turns every
+OPEN/READ/WRITE/REWRITE/CLOSE site of a real file into a pass-through
+`MockDirective(real_file=F)` (`describe()`: `REAL FILE F (OPEN)`), refusing
+`REAL_FILE_UNKNOWN`, `REAL_FILE_ORGANIZATION` (only SEQUENTIAL and LINE
+SEQUENTIAL), `REAL_FILE_ALSO_MOCKED`, `REAL_FILE_MIXED_STATEMENT`,
+`FILE_CHECK_NOT_REAL`. `generate --real-files` (`dsl/real_file_suite.py`)
+rewrites a generated suite this way. Design:
+[docs/2026-11-06-real-files-and-job-runs-design.md](../docs/2026-11-06-real-files-and-job-runs-design.md).

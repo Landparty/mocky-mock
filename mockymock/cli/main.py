@@ -1399,6 +1399,33 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if linked is None:
             return 1
         cut_text = linked
+    if getattr(args, "real_files", False):
+        from mockymock.dsl.real_file_suite import make_real_file_suite, plan_real_files
+
+        if args.per_paragraph:
+            print(
+                "mockymock generate: --real-files needs scenario cases (each "
+                "runs the program from its entry, OPENs included); drop "
+                "--per-paragraph"
+            )
+            return 2
+        plans, file_notes = plan_real_files(result.ast, surface)
+        cut_text, data_files, more_notes = make_real_file_suite(
+            cut_text,
+            plans,
+            str(program_name or source_path.stem),
+            output_path,
+            seed=args.seed or 0,
+        )
+        for note in [*file_notes, *more_notes]:
+            print(f"mockymock generate: --real-files: {note}")
+        for data_path, content in data_files.items():
+            try:
+                data_path.parent.mkdir(parents=True, exist_ok=True)
+                data_path.write_bytes(content)
+            except OSError as exc:
+                print(f"mockymock generate: cannot write {data_path}: {exc}")
+                return 1
     # Unlike run's auxiliary report flags, this file IS the deliverable:
     # a failed write is a failed command (same convention as export).
     if not _write_report_file("generate", "-o/--output", str(output_path), cut_text):
@@ -1843,6 +1870,7 @@ _RUN_OUTPUT_PATH_FLAGS = (
     "coverage_json",
     "coverage_out",
     "trace_json",
+    "branch_coverage",
 )
 
 
@@ -2121,6 +2149,124 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _apply_file_checks(
+    suite,
+    suite_result,
+    snapshots: dict[str, bytes],
+    cut_path: Path,
+    layouts: dict,
+    record: bool,
+) -> None:
+    """EXPECT FILE / SAVE FILE (splicer.real_files.check_files): a differing
+    or missing file fails its case; a recorded golden file is announced."""
+    from mockymock.splicer.real_files import check_files
+
+    by_id = {result.case_id: result for result in suite_result.results}
+    ran = {
+        index
+        for index in range(1, len(suite.test_cases) + 1)
+        if (r := by_id.get(f"{index:03d}")) is not None and r.ended
+    }
+    for outcome in check_files(suite, snapshots, cut_path.parent, layouts, record, ran):
+        result = by_id.get(f"{outcome.case_index:03d}")
+        if outcome.recorded:
+            print(
+                f"mockymock run: --record-expectations: recorded golden file "
+                f"{outcome.check.path} for EXPECT FILE {outcome.check.file}"
+            )
+        if outcome.failure is None or result is None:
+            continue
+        if result.passed:
+            suite_result.failures += 1
+        result.failure_reasons.append(outcome.failure)
+
+
+def _write_branch_coverage(
+    args: argparse.Namespace,
+    trace_text: str,
+    suite_result,
+    cut_path: Path,
+    source_path: Path,
+    ast,
+    normalized_lines: list[str],
+    instrumented: list[str],
+    source_location_map: dict[int, tuple[str, int]] | None,
+    real_programs,
+    real_sources: list[tuple[str, list[str]]],
+) -> None:
+    """`run --branch-coverage FILE`: measure every program of the run from
+    the whole trace and write the JSON document (report.branch_coverage)."""
+    from mockymock.report.branch_coverage import (
+        format_branch_coverage_console,
+        format_branch_coverage_json,
+        measure,
+        origin_lookup,
+        program_points,
+        program_report,
+        split_by_program,
+    )
+    from mockymock.report.coverage import (
+        build_normalized_line_map,
+        build_normalized_to_original_map,
+    )
+    from mockymock.report.trace import parse_trace
+
+    if not trace_text:
+        print(
+            "mockymock run: branch coverage not written -- the binary wrote "
+            "no trace (it may have died before running a statement)"
+        )
+        return
+    entries = parse_trace(trace_text)
+    main_points = program_points(ast, normalized_lines)
+    units = [
+        (
+            main_points,
+            build_normalized_line_map(instrumented, normalized_lines),
+            str(source_path),
+            origin_lookup(
+                source_location_map or None,
+                build_normalized_to_original_map(
+                    normalized_lines,
+                    split_source_lines(read_utf8_source(source_path)),
+                ),
+            ),
+        )
+    ]
+    instrumented_real = dict(real_sources)
+    for prepared in real_programs or ():
+        real_lines = instrumented_real.get(f"real_{prepared.program_id.upper()}.cbl")
+        if real_lines is None:
+            continue
+        points = program_points(prepared.ast, list(prepared.lines))
+        points.program_id = prepared.program_id.upper()
+        try:
+            original = split_source_lines(read_utf8_source(prepared.spec.source))
+        except OSError:
+            original = []
+        units.append(
+            (
+                points,
+                build_normalized_line_map(real_lines, list(prepared.lines)),
+                str(prepared.spec.source),
+                origin_lookup(
+                    None,
+                    build_normalized_to_original_map(list(prepared.lines), original),
+                ),
+            )
+        )
+    per_program = split_by_program(entries, [unit[0].program_id for unit in units])
+    reports = []
+    for points, to_normalized, program_file, lookup in units:
+        measure(points, per_program.get(points.program_id, []), to_normalized)
+        reports.append(program_report(points, program_file, lookup))
+    text = format_branch_coverage_json(
+        reports, str(cut_path), cases_run=len(suite_result.results)
+    )
+    _write_report_file("run", "--branch-coverage", args.branch_coverage, text)
+    print(format_branch_coverage_console(reports))
+
+
 def _can_rerun_left_over_cases(args: argparse.Namespace) -> bool:
     """Whether `run`'s outputs survive running the left-over cases in a
     second binary: not under a case/tag selection (that run already chose
@@ -2136,6 +2282,7 @@ def _can_rerun_left_over_cases(args: argparse.Namespace) -> bool:
         "coverage_fail_under",
         "trace",
         "trace_json",
+        "branch_coverage",
         "record_baseline",
         "baseline",
     )
@@ -2376,6 +2523,34 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     # splice_program mutates nothing, but keep our own copy to be explicit.
     normalized_lines = list(lines)
 
+    # USE REAL FILE: each real file's ASSIGN names a file in the sandbox,
+    # and every FROM source must exist before anything compiles.
+    real_fixtures: dict[tuple[int, str], tuple[Path, str]] = {}
+    if checked.real_file_selects:
+        from mockymock.splicer.real_files import FIXTURES_DIR, rewrite_assigns
+
+        lines, assign_problems = rewrite_assigns(
+            lines, checked.real_file_selects, set(checked.real_file_selects)
+        )
+        for index, case in enumerate(suite.test_cases, start=1):
+            for real in case.real_files:
+                if real.source is None:
+                    continue
+                fixture = (cut_path.parent / real.source).resolve()
+                if not fixture.is_file():
+                    assign_problems.append(
+                        f"USE REAL FILE {real.file} FROM {real.source!r} "
+                        f"(.cut line {real.line}): no such file {fixture}"
+                    )
+                real_fixtures[(index, real.file)] = (
+                    fixture,
+                    f"{FIXTURES_DIR}/{index:03d}-{real.file}",
+                )
+        if assign_problems:
+            for problem in assign_problems:
+                print(f"mockymock run: {problem}")
+            return 1
+
     # --record-baseline / --baseline: every mocked boundary reports what it
     # was sent (splicer.behaviour, report.baseline). A baseline to compare
     # with is read before anything compiles, so a bad path fails fast.
@@ -2496,6 +2671,17 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         real_sources.append((f"{HEXDUMP_PROGRAM.lower()}.cbl", hexdump_program()))
 
     instrumented = _insert_driver(lines, artifact)
+    if checked.real_file_selects:
+        from mockymock.splicer.real_files import insert_case_staging
+
+        instrumented = insert_case_staging(
+            instrumented,
+            suite,
+            {key: sandbox for key, (_, sandbox) in real_fixtures.items()},
+        )
+    # --branch-coverage reads the statement trace of the whole run, so the
+    # binary is compiled with -ftraceall even without --trace.
+    trace_compile = bool(args.trace or getattr(args, "branch_coverage", None))
 
     # --verbose needs the sandbox retained too: the instrumented-source path
     # it prints on compile failure must still exist by the time the user
@@ -2512,6 +2698,13 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         instrumented_path.write_text(
             "\n".join(instrumented) + "\n", encoding="utf-8", newline="\n"
         )
+        if checked.real_file_selects:
+            from mockymock.splicer.real_files import FILES_DIR, FIXTURES_DIR, OUT_DIR
+
+            for folder in (FILES_DIR, FIXTURES_DIR, OUT_DIR):
+                (tmp / folder).mkdir(exist_ok=True)
+            for source, sandbox in real_fixtures.values():
+                shutil.copyfile(source, tmp / sandbox)
         extra_sources = []
         for name, real_lines in real_sources:
             real_path = tmp / name
@@ -2524,12 +2717,12 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             toolchain.compile_source(
                 instrumented_path,
                 coverage=args.coverage,
-                trace=args.trace,
+                trace=trace_compile,
                 extra_sources=extra_sources,
             )
             if extra_sources
             else toolchain.compile_source(
-                instrumented_path, coverage=args.coverage, trace=args.trace
+                instrumented_path, coverage=args.coverage, trace=trace_compile
             )
         )
         if not compiled.success:
@@ -2584,7 +2777,9 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         # was there (audit finding F10).
         try:
             assert compiled.binary_path is not None  # implied by compiled.success
-            trace_path = tmp / f"{instrumented_path.stem}.trace" if args.trace else None
+            trace_path = (
+                tmp / f"{instrumented_path.stem}.trace" if trace_compile else None
+            )
             executed = toolchain.run_binary(
                 compiled.binary_path,
                 timeout_seconds=args.timeout,
@@ -2596,6 +2791,12 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             trace_text = ""
             if trace_path is not None and trace_path.exists():
                 trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
+            file_snapshots: dict[str, bytes] = {}
+            if checked.real_file_selects:
+                from mockymock.splicer.real_files import OUT_DIR
+
+                for snapshot in sorted((tmp / OUT_DIR).glob("*")):
+                    file_snapshots[f"{OUT_DIR}/{snapshot.name}"] = snapshot.read_bytes()
 
             coverage_text = None
             coverage_report = None
@@ -2617,6 +2818,15 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
                 shutil.rmtree(tmp, ignore_errors=True)
 
     suite_result = parse_stdout(executed.stdout)
+    if checked.real_file_selects:
+        _apply_file_checks(
+            suite,
+            suite_result,
+            file_snapshots,
+            cut_path,
+            checked.real_file_layouts,
+            record=bool(args.record_expectations),
+        )
 
     # Real evidence about why the binary died beats the formatters'
     # default STOP-RUN hypothesis: a timeout (exit 124, with run_binary's
@@ -2830,6 +3040,21 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
                 f"is below --coverage-fail-under {args.coverage_fail_under}"
             )
             coverage_gate_failed = True
+
+    if getattr(args, "branch_coverage", None):
+        _write_branch_coverage(
+            args,
+            trace_text,
+            suite_result,
+            cut_path,
+            source_path,
+            result.ast,
+            normalized_lines,
+            instrumented,
+            checked.source_location_map,
+            real_programs,
+            real_sources,
+        )
 
     if args.trace:
         if not trace_text:
@@ -4895,6 +5120,7 @@ commands, grouped by how often you'll reach for them:
     skills     manage the packaged agent skills (Claude Code, GitHub Copilot)
     setup      build the GnuCOBOL image and start the toolchain container
     runner     run LegacyLens change-impact oracle jobs for the backend
+    job        run a whole JCL job end to end and compare its datasets
 
 Quick start:
   mockymock doctor                     is Docker / GnuCOBOL ready?
@@ -5302,6 +5528,19 @@ def build_parser() -> argparse.ArgumentParser:
             "subprogram gets a placeholder MOCK in BEFORE-EACH"
         ),
     )
+    generate_parser.add_argument(
+        "--real-files",
+        action="store_true",
+        help=(
+            "Integration tests level 2: make every sequential file real. "
+            "Each scenario's generated READ records are written to a data "
+            "file (encoded with the FD record layout) and staged with USE "
+            "REAL FILE ... FROM; each output file gets an EXPECT FILE "
+            "recorded by run --record-expectations. Indexed and relative "
+            "files stay mocked (see docs/2026-11-06-real-files-and-job-runs-"
+            "design.md)"
+        ),
+    )
     generate_parser.set_defaults(func=_cmd_generate)
 
     fixtures_parser = subparsers.add_parser(
@@ -5455,6 +5694,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Trace the executed path through the program for a single test "
             "case and print it after the run, together with the mocks that "
             "fired in order. Requires exactly one --case"
+        ),
+    )
+    run_parser.add_argument(
+        "--branch-coverage",
+        metavar="FILE",
+        help=(
+            "Write paragraph, branch (IF true/false, each EVALUATE WHEN) and "
+            "statement coverage of every case, for the program and every "
+            "USE REAL CALL program, to this JSON file, and print a summary. "
+            "Read from GnuCOBOL's statement trace, so it works on any "
+            "GnuCOBOL 3.x (see docs/2026-11-06-branch-coverage-design.md)"
         ),
     )
     run_parser.add_argument(
@@ -6038,6 +6288,76 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner_parser.set_defaults(func=_cmd_runner)
 
+    job_parser = subparsers.add_parser(
+        "job",
+        help=(
+            "Run a whole JCL job end to end: COBOL steps on real files, "
+            "IEFBR14/IEBGENER/SORT emulated, COND/IF on the real return codes, "
+            "and compare every dataset it wrote with --expected"
+        ),
+    )
+    job_parser.add_argument("jcl", help="The job's JCL member")
+    job_parser.add_argument(
+        "--src",
+        action="append",
+        default=[],
+        help="Folder (or file) holding the steps' COBOL sources (repeatable)",
+    )
+    job_parser.add_argument(
+        "--data",
+        required=True,
+        help="Folder of input datasets, one file per dataset name (PROD.CUST.MASTER)",
+    )
+    job_parser.add_argument(
+        "--expected",
+        help="Folder of expected datasets the job's outputs are compared with",
+    )
+    job_parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Write the job's outputs to --expected instead of comparing",
+    )
+    job_parser.add_argument(
+        "--generate-inputs",
+        action="store_true",
+        help="Generate a missing input dataset from the reading program's record layout (written to --data)",
+    )
+    job_parser.add_argument(
+        "--rows",
+        type=int,
+        default=10,
+        help="Records per generated input dataset (default: 10)",
+    )
+    job_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        default=[],
+        help="Copybook folder (repeatable)",
+    )
+    job_parser.add_argument(
+        "--proclib",
+        action="append",
+        default=[],
+        help="PROC library folder (repeatable)",
+    )
+    job_parser.add_argument(
+        "--seed", type=int, default=0, help="Seed for generated values"
+    )
+    job_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Seconds one step's program may run (default: 60)",
+    )
+    job_parser.add_argument("--json-report", help="Write the job report as JSON here")
+    job_parser.add_argument(
+        "--work-dir", help="Folder the run's datasets and step suites go in"
+    )
+    job_parser.add_argument(
+        "--keep", action="store_true", help="Keep the work folder (for debugging)"
+    )
+    job_parser.set_defaults(func=_cmd_job)
+
     analyze_parser = subparsers.add_parser(
         "analyze",
         help=(
@@ -6268,6 +6588,70 @@ def _parse_command_line(
                     action.choices[command].error(message)
         parser.error(message)
     return args
+
+
+def _cmd_job(args: argparse.Namespace) -> int:
+    """`mockymock job`: 0 passed / recorded, 1 failed, 3 incomplete (a gap)."""
+    import json
+
+    from mockymock.jobstream.runner import (
+        JobOptions,
+        format_job_console,
+        run_job_stream,
+    )
+
+    jcl = Path(args.jcl)
+    if not jcl.is_file():
+        print(f"mockymock job: no such JCL file {jcl}", file=sys.stderr)
+        return 2
+    if args.record and not args.expected:
+        print(
+            "mockymock job: --record needs --expected (where to write)", file=sys.stderr
+        )
+        return 2
+    try:
+        import cobolparser.jcl  # noqa: F401
+    except ImportError:
+        print(
+            "mockymock job: reading JCL needs jcl-parser "
+            "(pip install 'cobol-parser[jcl]')",
+            file=sys.stderr,
+        )
+        return 2
+    copybook_paths = list(args.copybook_path)
+    config = getattr(args, "_config", None)
+    if not copybook_paths and config is not None:
+        copybook_paths = list(getattr(config, "copybook_paths", []) or [])
+    options = JobOptions(
+        jcl=jcl,
+        sources=[Path(p) for p in (args.src or [str(jcl.parent)])],
+        data=Path(args.data),
+        expected=Path(args.expected) if args.expected else None,
+        copybook_paths=[str(p) for p in copybook_paths],
+        proc_paths=list(args.proclib),
+        record=args.record,
+        generate_inputs=args.generate_inputs,
+        input_rows=args.rows,
+        seed=args.seed,
+        work_dir=Path(args.work_dir) if args.work_dir else None,
+        keep=args.keep,
+        timeout=args.timeout,
+    )
+    report = run_job_stream(options)
+    print(format_job_console(report))
+    if args.json_report:
+        _write_report_file(
+            "job",
+            "--json-report",
+            args.json_report,
+            json.dumps(report, indent=2) + "\n",
+        )
+    verdict = report.get("verdict")
+    if verdict in ("passed", "recorded"):
+        return 0
+    if verdict == "failed":
+        return 1
+    return 3
 
 
 def main(argv: list[str] | None = None) -> int:

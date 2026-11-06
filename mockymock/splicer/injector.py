@@ -457,7 +457,7 @@ def build_site_dispatch(
                     f'                   DISPLAY "__MOCKYMOCK__ MOCK: '
                     f'{site.label} {fired.key}"'
                 )
-        if directive.is_real:
+        if directive.is_real or directive.real_file is not None:
             if real_statement is None:
                 raise ValueError(
                     f"USE REAL CALL {directive.key!r} matched the site at "

@@ -182,3 +182,18 @@ would turn a reporting inaccuracy into a wrong mutation verdict.
 - [report](report.md) — `report/coverage.py` follows the same Docker-free
   parsing/formatting split as `report/results.py`/`report/formatters.py`
 - [cli](cli.md) — `run`'s `--coverage`/`--coverage-out`/`--coverage-fail-under` flags
+
+# Branch coverage: `run --branch-coverage FILE` (2026-11-06)
+
+`report/branch_coverage.py`, independent of gcov: the suite is compiled
+with the trace (`-ftraceall`, as `--trace`) and the whole trace of every
+case is read. `program_points(ast, lines)` lists paragraphs, statement
+lines, IFs and EVALUATEs from the AST; `measure` walks the trace (split per
+program by `TraceEntry.program`) and credits an outcome when the next
+mapped statement is that branch's first statement (elimination for empty
+branches; shared-line cases are `notMeasurable`, never guessed). Lines are
+remapped with `build_normalized_line_map` + `build_normalized_to_original_map`
+(the old `build_original_line_map`, split in two). Real subprograms of a
+load-module suite are measured under their own program id. JSON version 1:
+`programs[]` with `paragraphs`, `branches`, `statements`. Design:
+[docs/2026-11-06-branch-coverage-design.md](../docs/2026-11-06-branch-coverage-design.md).

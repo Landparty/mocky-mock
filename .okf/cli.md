@@ -1889,3 +1889,21 @@ restores `choices=` also restores the import.
 * Container: `docker/runner/Dockerfile` (debian trixie GnuCOBOL 3.2, native
   toolchain through a linked tree at `/opt/gnucobol`, non-root user,
   entrypoint `mockymock runner`). Design: docs/2026-11-01-runner-design.md.
+
+## `mockymock job JCL --data DIR [--src DIR ...] [--expected DIR] [--record] [--generate-inputs] [--rows N] [--copybook-path DIR ...] [--proclib DIR ...] [--seed N] [--timeout S] [--json-report FILE] [--work-dir DIR] [--keep]` (2026-11-06)
+
+`_cmd_job` -> `jobstream.runner.run_job_stream`. Integration tests level 3:
+the job's steps run in order over one set of datasets. COBOL steps are
+generated, reduced to one case with every DD-bound sequential file real
+(`step_suite`), and run in process; IEFBR14 / IEBGENER / SORT are emulated
+(`jobstream/utilities.py`); `COND=` / `IF` are evaluated on the real return
+codes (`jobstream/conditions.py`). Exit 0 passed / recorded, 1 failed, 3
+incomplete (a gap). Needs `cobolparser.jcl` (the `jcl` extra), which the
+runner image installs.
+
+`generate --real-files` (level-2 suite, not with `--per-paragraph`) and
+`run --branch-coverage FILE` (coverage.md) landed the same day. The runner's
+tests jobs pass `--branch-coverage` (suite `coverage`), generate suites
+marked `"level": 2` with `--real-files` (suite `files`: the data and golden
+files the `.cut` names, base64) and run the manifest's `jobs` with
+`mockymock job --generate-inputs` (job `report` and `files`).

@@ -42,6 +42,8 @@ class TraceEntry:
     line: int
     statement: str | None
     paragraph: str | None
+    #: The PROGRAM-ID the entry ran in (`%P`), upper case; "" when unknown.
+    program: str = ""
 
 
 def parse_trace(trace_text: str) -> list[TraceEntry]:
@@ -51,7 +53,9 @@ def parse_trace(trace_text: str) -> list[TraceEntry]:
         parts = raw.split("|")
         if len(parts) != 3:
             continue  # preamble lines carry no delimiters
-        _program, what, line_text = (part.strip() for part in parts)
+        program_text, what, line_text = (part.strip() for part in parts)
+        # `%P` renders as "Program-Id:  NAME", padded.
+        program = program_text.split(":", 1)[-1].strip().upper()
         try:
             line = int(line_text)
         except ValueError:
@@ -62,12 +66,15 @@ def parse_trace(trace_text: str) -> list[TraceEntry]:
                     line=line,
                     statement=None,
                     paragraph=what[len(_PARAGRAPH_PREFIX) :].strip(),
+                    program=program,
                 )
             )
         elif what.startswith(_ENTRY_PREFIX):
             continue  # program entry, not one of the user's statements
         else:
-            entries.append(TraceEntry(line=line, statement=what, paragraph=None))
+            entries.append(
+                TraceEntry(line=line, statement=what, paragraph=None, program=program)
+            )
     return entries
 
 

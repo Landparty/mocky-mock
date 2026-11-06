@@ -24,6 +24,20 @@ command when the pack has none (a first baseline), then runs it:
   them from what the code does now; then ``mockymock run --json-report FILE``
   plays the suite and the runner reports the per-case report with the
   ``.cut`` text it ran, which the backend keeps as the module's tests.
+  The same run measures paragraph and branch coverage
+  (``--branch-coverage``), reported as the suite's ``coverage``.
+  A suite with ``"level": 2`` is scaffolded with ``generate --real-files``
+  (its sequential files real); the data and golden files its ``.cut``
+  names come back in ``files`` (base64), for the backend to keep.
+
+A tests job may also list ``jobs`` (integration tests level 3)::
+
+    "jobs": [{"name": "CUSTJOB", "jcl": "jcl/CUSTJOB.jcl",
+              "data": "jobs/CUSTJOB/data", "expected": "jobs/CUSTJOB/expected",
+              "record": true}]
+
+Each runs as ``mockymock job`` over the pack's ``src/``; the job report and
+the input and expected datasets come back in ``jobs``.
 
 Each mockymock command runs as a child process (``python -m mockymock``)
 with a timeout, so one suite that hangs or crashes does not take the
@@ -32,9 +46,11 @@ runner down. Every path the manifest names must stay inside the pack.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
+import re
 import shlex
 import shutil
 import socket
@@ -67,6 +83,9 @@ MAX_PACK_BYTES = 200 * 1024 * 1024
 
 #: Flags of the manifest's `generate` command the runner passes on.
 _GENERATE_PATH_FLAGS = {"--real"}
+_GENERATE_SWITCHES = {"--real-files"}
+#: Largest data or golden file a suite or job reports back.
+MAX_REPORTED_FILE_BYTES = 5 * 1024 * 1024
 _GENERATE_SCENARIOS = {"happy", "branches", "all"}
 
 #: How mockymock itself is started for a suite: this interpreter's module.
@@ -95,6 +114,10 @@ class SuiteOutcome:
     error: str | None = None
     #: Wall time of the suite's generate and run, in milliseconds.
     duration_ms: int | None = None
+    #: A tests job: the ``--branch-coverage`` document.
+    coverage: dict[str, Any] | None = None
+    #: A level-2 suite: data and golden files its .cut names (path -> base64).
+    files: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -113,6 +136,10 @@ class SuiteOutcome:
         if self.report is not None:
             out["report"] = self.report
             out["recorded"] = self.recorded
+        if self.coverage is not None:
+            out["coverage"] = self.coverage
+        if self.files is not None:
+            out["files"] = self.files
         if self.error:
             out["error"] = self.error
         return out
@@ -202,7 +229,16 @@ def load_manifest(pack: Path) -> dict[str, Any]:
     if manifest.get("kind") not in KINDS:
         raise JobPackError(f"{MANIFEST} kind {manifest.get('kind')!r} is unknown")
     suites = manifest.get("suites")
-    if not isinstance(suites, list) or not suites:
+    jobs = manifest.get("jobs")
+    if suites is None and jobs:
+        suites = manifest["suites"] = []
+    if jobs is not None and (
+        manifest.get("kind") != "tests"
+        or not isinstance(jobs, list)
+        or not all(isinstance(job, dict) for job in jobs)
+    ):
+        raise JobPackError(f"{MANIFEST} jobs must be a list of objects in a tests job")
+    if not isinstance(suites, list) or not (suites or jobs):
         raise JobPackError(f"{MANIFEST} lists no suites")
     if not all(isinstance(suite, dict) for suite in suites):
         raise JobPackError(f"{MANIFEST} suites must be objects")
@@ -231,6 +267,11 @@ def _generate_args(pack: Path, command: object) -> list[str]:
                 )
             args += [flag, rest[index + 1]]
             index += 2
+            continue
+        if flag in _GENERATE_SWITCHES:
+            if flag not in args:
+                args.append(flag)
+            index += 1
             continue
         if flag not in _GENERATE_PATH_FLAGS or index + 1 >= len(rest):
             raise JobPackError(f"generate argument not allowed: {flag}")
@@ -402,6 +443,9 @@ def _run_suite(
         generate = (
             None if cut.is_file() else _generate_args(pack, suite.get("generate"))
         )
+        if generate is not None and kind == "tests" and suite.get("level") == 2:
+            if "--real-files" not in generate:
+                generate.append("--real-files")
     except JobPackError as exc:
         outcome.error = str(exc)
         return outcome
@@ -548,7 +592,14 @@ def _run_tests_suite(
     results.mkdir(exist_ok=True)
     output = results / f"{entry or 'suite'}.report.json"
     output.unlink(missing_ok=True)
-    step = _run_step(command, [*base, "--json-report", str(output)], pack, timeout)
+    coverage = results / f"{entry or 'suite'}.coverage.json"
+    coverage.unlink(missing_ok=True)
+    step = _run_step(
+        command,
+        [*base, "--json-report", str(output), "--branch-coverage", str(coverage)],
+        pack,
+        timeout,
+    )
     log.append(f"$ mockymock run {shown}\n{step.log}")
     job_log.event(
         "run finished",
@@ -566,11 +617,137 @@ def _run_tests_suite(
     outcome.exit_code = step.exit_code
     outcome.log = "".join(log)
     outcome.report = _read_json(output)
+    outcome.coverage = _read_json(coverage)
+    named = suite_files(pack, cut, outcome.cut_text)
+    if named or suite.get("level") == 2:
+        outcome.files = named
     if outcome.report is None:
         outcome.error = (
             "mockymock run timed out"
             if step.timed_out
             else "mockymock run produced no report (the suite did not compile or run)"
+        )
+    return outcome
+
+
+_FILE_PATH_RE = re.compile(
+    r'^\s*(?:USE\s+REAL\s+FILE\s+\S+\s+FROM|EXPECT\s+FILE\s+\S+\s+MATCHES)\s+"([^"]+)"',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _encoded(path: Path) -> str | None:
+    if not path.is_file() or path.stat().st_size > MAX_REPORTED_FILE_BYTES:
+        return None
+    return base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def suite_files(pack: Path, cut: Path, cut_text: str) -> dict[str, str]:
+    """The data and golden files a level-2 ``.cut`` names (USE REAL FILE
+    ... FROM, EXPECT FILE ... MATCHES) that exist, as pack-relative path ->
+    base64. Paths that leave the pack are skipped."""
+    root = pack.resolve()
+    out: dict[str, str] = {}
+    for relative in _FILE_PATH_RE.findall(cut_text):
+        target = (cut.parent / relative).resolve()
+        if not target.is_relative_to(root):
+            continue
+        encoded = _encoded(target)
+        if encoded is not None:
+            out[target.relative_to(root).as_posix()] = encoded
+    return out
+
+
+def _folder_files(pack: Path, folder: Path) -> dict[str, str]:
+    root = pack.resolve()
+    out: dict[str, str] = {}
+    if folder.is_dir():
+        for path in sorted(folder.iterdir()):
+            encoded = _encoded(path)
+            if encoded is not None:
+                out[path.resolve().relative_to(root).as_posix()] = encoded
+    return out
+
+
+def run_job_unit(
+    pack: Path,
+    manifest: dict[str, Any],
+    unit: dict[str, Any],
+    command: Sequence[str] = DEFAULT_COMMAND,
+    timeout: float = DEFAULT_SUITE_TIMEOUT,
+    job_log: JobLog | None = None,
+) -> dict[str, Any]:
+    """Run one JCL job of a tests job (level 3) with ``mockymock job``;
+    its outcome: the job report, the input and expected datasets (base64)
+    and the log. Problems go in ``error``, never raised."""
+    job_log = job_log or JobLog()
+    name = str(unit.get("name") or "")
+    outcome: dict[str, Any] = {"name": name, "jcl": unit.get("jcl")}
+    try:
+        jcl = _inside(pack, unit.get("jcl"), "job jcl")
+        data = _inside(pack, unit.get("data") or f"jobs/{name}/data", "job data")
+        expected = _inside(
+            pack, unit.get("expected") or f"jobs/{name}/expected", "job expected"
+        )
+        sources = _inside(pack, manifest.get("source_path") or "src", "source_path")
+        copybooks = _inside(
+            pack, manifest.get("copybook_path") or "copybooks", "copybook_path"
+        )
+        proclib = (
+            _inside(pack, manifest.get("proclib_path"), "proclib_path")
+            if manifest.get("proclib_path")
+            else None
+        )
+    except JobPackError as exc:
+        outcome["error"] = str(exc)
+        return outcome
+    data.mkdir(parents=True, exist_ok=True)
+    results = pack / ".oracle-results"
+    results.mkdir(exist_ok=True)
+    report_path = results / f"job-{name or 'job'}.json"
+    report_path.unlink(missing_ok=True)
+    args = [
+        "job",
+        str(jcl),
+        "--src",
+        str(sources),
+        "--data",
+        str(data),
+        "--expected",
+        str(expected),
+        "--copybook-path",
+        str(copybooks),
+        "--json-report",
+        str(report_path),
+        "--generate-inputs",
+    ]
+    if proclib is not None:
+        args += ["--proclib", str(proclib)]
+    record = bool(unit.get("record")) or not expected.is_dir()
+    if record:
+        args.append("--record")
+    job_log.event("job run started", job=name, record=record or None)
+    step = _run_step(command, args, pack, timeout)
+    job_log.event(
+        "job run finished",
+        level=logging.WARNING if step.exit_code not in (0, 1) else logging.INFO,
+        job=name,
+        exit_code=step.exit_code,
+        timed_out=step.timed_out or None,
+        duration_ms=step.duration_ms,
+        command="mockymock job",
+    )
+    outcome["exit_code"] = step.exit_code
+    outcome["duration_ms"] = step.duration_ms
+    outcome["recorded"] = record
+    outcome["log"] = step.log[-MAX_LOG_CHARS:]
+    outcome["report"] = _read_json(report_path)
+    outcome["files"] = {**_folder_files(pack, data), **_folder_files(pack, expected)}
+    if outcome["report"] is None:
+        outcome["error"] = (
+            "mockymock job timed out"
+            if step.timed_out
+            else "mockymock job produced no report (see its log)"
         )
     return outcome
 
@@ -598,7 +775,13 @@ def run_pack(
         run_suite(pack, manifest, suite, command, timeout, job_log)
         for suite in manifest["suites"]
     ]
-    return {"suites": [outcome.to_dict() for outcome in outcomes]}
+    payload: dict[str, Any] = {"suites": [outcome.to_dict() for outcome in outcomes]}
+    if manifest.get("jobs"):
+        payload["jobs"] = [
+            run_job_unit(pack, manifest, unit, command, timeout, job_log)
+            for unit in manifest["jobs"]
+        ]
+    return payload
 
 
 def run_job(

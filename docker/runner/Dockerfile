@@ -34,7 +34,7 @@ RUN set -eu; \
 COPY pyproject.toml README.md LICENSE /build/mockymock/
 COPY mockymock /build/mockymock/mockymock
 RUN python3 -m venv /opt/mockymock \
-    && /opt/mockymock/bin/pip install --no-cache-dir /build/mockymock \
+    && /opt/mockymock/bin/pip install --no-cache-dir '/build/mockymock[jcl]' \
     && rm -rf /build
 
 RUN useradd --create-home --uid 10001 runner

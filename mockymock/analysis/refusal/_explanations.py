@@ -42,6 +42,34 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "COPY members could not be expanded. Check the file's encoding and "
         "the --copybook-path folders."
     ),
+    # --- USE REAL FILE / EXPECT FILE (integration tests level 2,
+    # docs/2026-11-06-real-files-and-job-runs-design.md).
+    "REAL_FILE_UNKNOWN": (
+        "A USE REAL FILE names a file the program has no SELECT for. Name "
+        "the file as the program's FD and SELECT do (the file, not its "
+        "record)."
+    ),
+    "REAL_FILE_ORGANIZATION": (
+        "USE REAL FILE works on SEQUENTIAL and LINE SEQUENTIAL files only. "
+        "Indexed (VSAM KSDS) and relative files stay mocked: GnuCOBOL's "
+        "indexed files are not VSAM images, so a real one would not behave "
+        "as the mainframe file does."
+    ),
+    "REAL_FILE_ALSO_MOCKED": (
+        "A file is both a USE REAL FILE and the key of a MOCK in the same "
+        "case. A real file's statements run as written, so drop the MOCK "
+        "(or the USE REAL FILE)."
+    ),
+    "REAL_FILE_MIXED_STATEMENT": (
+        "One OPEN or CLOSE names a real file and a mocked one. A statement "
+        "either runs or is mocked as a whole: make both files real, or "
+        "both mocked, or split the statement."
+    ),
+    "FILE_CHECK_NOT_REAL": (
+        "An EXPECT FILE or SAVE FILE names a file the case does not make "
+        "real. Add USE REAL FILE <file> before the case's PERFORM (or in "
+        "BEFORE-EACH)."
+    ),
     # --- UNMOCKED_*: a boundary is reachable but no MOCK directive matches
     # it. Every one of these has a mechanical fix -- see
     # RefusalReason.suggested_fix / `generate --fill`.

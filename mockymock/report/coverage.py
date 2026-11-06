@@ -195,24 +195,20 @@ def _extract_fixed_format(original_lines: list[str]) -> list[tuple[int, str]]:
     return extracted
 
 
-def build_original_line_map(
-    instrumented_lines: list[str],
-    normalized_lines: list[str],
-    original_lines: list[str],
+def build_normalized_line_map(
+    instrumented_lines: list[str], normalized_lines: list[str]
 ) -> dict[int, int]:
-    """1-based instrumented line -> 1-based ORIGINAL .cbl line.
+    """1-based instrumented line -> 1-based NORMALIZED line (the line the
+    cobolparser AST of the program numbers statements by).
 
-    Composes the same two alignments `map_coverage_to_original` uses:
-    instrumented -> normalized (the splicer inserts lines but keeps
-    untouched source verbatim and in order), then normalized -> original
-    (fixed-format extraction drops comments/sequence columns). Instrumented
-    lines with no original counterpart -- the splicer's own dispatch and
-    driver code -- are simply absent from the result.
-
-    Shared with the execution-trace report, whose trace-file line numbers
-    are instrumented lines needing exactly this remap; see
-    docs/2026-07-21-debug-trace-design.md.
-    """
+    The splicer inserts lines but keeps untouched source verbatim and in
+    order, so the two align on equal text. Instrumented lines with no
+    normalized counterpart -- the splicer's own dispatch and driver code --
+    are absent from the result, except the replacement block right after a
+    commented-out statement, which stands for that statement (see below).
+    `build_original_line_map` composes this with the fixed-format
+    extraction; `report.branch_coverage` uses it directly, since its
+    paragraphs and branches come from the AST."""
     normalized_stripped = [line.rstrip() for line in normalized_lines]
     instrumented_stripped = [line.rstrip() for line in instrumented_lines]
     inst_to_norm = _matching_index_map(normalized_stripped, instrumented_stripped)
@@ -245,16 +241,7 @@ def build_original_line_map(
                 inst_to_norm[index] = norm_index
                 commented.add(index)
 
-    extracted = _extract_fixed_format(original_lines)
-    norm_to_orig = _matching_index_map(
-        [content for _, content in extracted], normalized_stripped
-    )
-
-    mapping: dict[int, int] = {}
-    for inst_index, norm_index in inst_to_norm.items():
-        extracted_index = norm_to_orig.get(norm_index)
-        if extracted_index is not None:
-            mapping[inst_index + 1] = extracted[extracted_index][0]
+    mapping = {inst + 1: norm + 1 for inst, norm in inst_to_norm.items()}
 
     # The replacement block after a commented span stands for the span's
     # first line: the statement counts as executed exactly when its
@@ -262,7 +249,7 @@ def build_original_line_map(
     for index in sorted(commented):
         if index - 1 in commented_span or index + 1 not in mapping:
             continue  # not the first line of its span, or unmapped
-        original = mapping[index + 1]
+        normalized = mapping[index + 1]
         follower = index + 1
         while follower in commented_span:
             follower += 1
@@ -273,9 +260,52 @@ def build_original_line_map(
             # column 1 is a paragraph header the splicer added after it.
             and not instrumented_stripped[follower][:1].strip()
         ):
-            mapping[follower + 1] = original
+            mapping[follower + 1] = normalized
             follower += 1
     return mapping
+
+
+def build_normalized_to_original_map(
+    normalized_lines: list[str], original_lines: list[str]
+) -> dict[int, int]:
+    """1-based normalized line -> 1-based ORIGINAL .cbl line, through the
+    fixed-format extraction (comments and sequence columns dropped)."""
+    extracted = _extract_fixed_format(original_lines)
+    norm_to_orig = _matching_index_map(
+        [content for _, content in extracted],
+        [line.rstrip() for line in normalized_lines],
+    )
+    return {
+        norm + 1: extracted[extracted_index][0]
+        for norm, extracted_index in norm_to_orig.items()
+    }
+
+
+def build_original_line_map(
+    instrumented_lines: list[str],
+    normalized_lines: list[str],
+    original_lines: list[str],
+) -> dict[int, int]:
+    """1-based instrumented line -> 1-based ORIGINAL .cbl line.
+
+    Composes two alignments: instrumented -> normalized
+    (`build_normalized_line_map`: the splicer inserts lines but keeps
+    untouched source verbatim and in order), then normalized -> original
+    (fixed-format extraction drops comments/sequence columns). Instrumented
+    lines with no original counterpart -- the splicer's own dispatch and
+    driver code -- are simply absent from the result.
+
+    Shared with the execution-trace report, whose trace-file line numbers
+    are instrumented lines needing exactly this remap; see
+    docs/2026-07-21-debug-trace-design.md.
+    """
+    to_normalized = build_normalized_line_map(instrumented_lines, normalized_lines)
+    to_original = build_normalized_to_original_map(normalized_lines, original_lines)
+    return {
+        inst: to_original[norm]
+        for inst, norm in to_normalized.items()
+        if norm in to_original
+    }
 
 
 def build_copybook_line_map(
