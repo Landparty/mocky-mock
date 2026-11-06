@@ -4849,9 +4849,9 @@ def _is_failure_path_scenario(name: str) -> bool:
     """Whether a scenario injects a failing status, so that cobol-parser
     leaves the counts after it uncounted on purpose and no per-site count
     may be restored (`_with_site_call_counts`)."""
-    return name.lower().startswith(
-        _ERROR_STATUS_SCENARIO_PREFIX
-    ) or bool(_FILE_STATUS_SCENARIO.match(name))
+    return name.lower().startswith(_ERROR_STATUS_SCENARIO_PREFIX) or bool(
+        _FILE_STATUS_SCENARIO.match(name)
+    )
 
 
 #: The cobol-parser note on a keyed READ whose key it cannot know; a
