@@ -5,6 +5,14 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-06 -- hunt fixes #430, #434
+
+[dsl.md](dsl.md): a `file status NN:` scenario gets no per-site call
+counts back, like an `error status:` one (#430). `mutation/operators.py`
+finds the PROCEDURE DIVISION header and program boundaries only outside
+literals and inline `*>` comments, so a `'PROCEDURE DIVISION'` string in
+WORKING-STORAGE no longer starts mutating data lines (#434).
+
 ## 2026-11-06 -- branch coverage, real files (level 2), whole-job runs (level 3)
 
 `run --branch-coverage FILE` (paragraph, IF / EVALUATE outcome and

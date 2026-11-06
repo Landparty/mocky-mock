@@ -94,6 +94,27 @@ def test_an_error_status_scenario_is_left_uncounted() -> None:
     assert _counts(out) == {}
 
 
+def test_a_file_status_scenario_is_left_uncounted() -> None:
+    """Issue #430: the flow after an injected file status is the failure
+    path; a happy-path per-site count there is a VERIFY the case fails."""
+    scenario = Scenario(
+        name="file status 23: START CUST",
+        fixtures=[_fixture("CALL", "SUB", 15, 1), _fixture("READ", "IN-FILE", 16, 3)],
+        expectations=[Expectation(kind="call_count", ref="START:CUST", value=1)],
+    )
+    (out,) = _with_site_call_counts(_bundle(scenario), _surface()).scenarios
+    assert _counts(out) == {"START:CUST": 1}
+
+
+def test_a_scenario_merely_mentioning_file_status_is_still_counted() -> None:
+    scenario = Scenario(
+        name="boundary: WS-FILE STATUS above",
+        fixtures=[_fixture("CALL", "SUB", 15, 1)],
+    )
+    (out,) = _with_site_call_counts(_bundle(scenario), _surface()).scenarios
+    assert _counts(out) == {"CALL:SUB": 1}
+
+
 def test_a_quoted_name_is_a_reported_literal() -> None:
     assert reported_literal('"D\'E"') == '"D\'E"'
     assert reported_literal('X"C1"') == 'X"C1"'

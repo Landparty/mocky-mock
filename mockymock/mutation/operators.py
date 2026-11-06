@@ -212,6 +212,15 @@ def _literal_mask(line: str) -> list[bool]:
     return mask
 
 
+def _matches_outside_literals(
+    pattern: re.Pattern[str], code: str, mask: list[bool]
+) -> bool:
+    """Whether *pattern* matches *code* somewhere outside quoted literals."""
+    return any(
+        _outside_literals(mask, m.start(), m.end()) for m in pattern.finditer(code)
+    )
+
+
 def _outside_literals(mask: list[bool], start: int, end: int) -> bool:
     return not any(mask[start:end])
 
@@ -344,14 +353,6 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
             continue
         if _is_compiler_directive(line):
             continue
-        if not in_procedure:
-            if _PROCEDURE_DIVISION.search(line):
-                in_procedure = True
-            continue
-        if _PROGRAM_BOUNDARY.search(line):
-            in_procedure = False
-            continue
-
         mask = _literal_mask(line)
         code_end = _sequence_area_end(line)
         code = line[:code_end]
@@ -364,6 +365,17 @@ def generate_mutants(lines: list[str]) -> list[Mutant]:
             comment_at = code.find("*>", comment_at + 1)
         if comment_at != -1:
             code = code[:comment_at]
+
+        # Division and program headers count only as code: a literal or an
+        # inline comment that mentions them (DISPLAY 'END PROGRAM REACHED')
+        # must not switch discovery on or off (#434).
+        if not in_procedure:
+            if _matches_outside_literals(_PROCEDURE_DIVISION, code, mask):
+                in_procedure = True
+            continue
+        if _matches_outside_literals(_PROGRAM_BOUNDARY, code, mask):
+            in_procedure = False
+            continue
 
         if in_exec:
             in_exec = _exec_block_open_after(code, mask, 0)
