@@ -1990,7 +1990,7 @@ def check_test_case(
     if direct_matched_out is not None:
         direct_matched_out.update(direct_matched)
     for directive in case.mocks:
-        if id(directive) in matched_directives:
+        if id(directive) in matched_directives or directive.real_file is not None:
             continue
         if (
             id(directive) in shared

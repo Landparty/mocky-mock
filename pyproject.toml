@@ -68,6 +68,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `mockymock job` (integration tests level 3) reads JCL through
+# cobol-parser's `cobolparser.jcl`, which needs jcl-parser.
+jcl = ["cobol-parser[jcl]"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

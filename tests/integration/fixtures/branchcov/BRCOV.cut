@@ -1,0 +1,12 @@
+TESTSUITE "BRCOV branch coverage"
+
+TESTCASE "code one"
+    MOVE 1 TO WS-CODE
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE "E1"
+
+TESTCASE "code three with flag"
+    MOVE 3 TO WS-CODE
+    MOVE "Y" TO WS-FLAG
+    PERFORM MAIN-PARA
+    EXPECT WS-OUT TO BE "F"

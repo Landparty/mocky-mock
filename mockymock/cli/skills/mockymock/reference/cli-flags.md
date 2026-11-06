@@ -113,6 +113,7 @@ that. Never touches Docker.
 | `--rows N` | generator default | Rows to generate per data table (`--rows 0` is honored, e.g. to force an immediate-EOF scenario). Mutually exclusive with `--fixtures`. |
 | `--placeholder CATEGORY:KEY` (repeatable) | none | Downgrade one boundary's generated mock body back to a plain placeholder, e.g. `--placeholder READ:INV-FILE`. |
 | `--real SUBPROGRAM.cbl` (repeatable) | none | Load-module suite: the subprogram runs for real (`USE REAL CALL ... FROM`), its own boundaries get placeholder MOCKs in BEFORE-EACH. |
+| `--real-files` | off | Level-2 suite: every sequential file is real. Each case's READ data is written to `data/<PROG>/<n>-<FILE>.dat` (`USE REAL FILE ... FROM`), each output file gets `EXPECT FILE ... MATCHES "expected/..."`, recorded by the first `run --record-expectations`. Indexed and relative files stay mocked. Not with `--per-paragraph`. |
 
 Examples:
 
@@ -184,6 +185,7 @@ Docker, execute, and report pass/fail.
 | `--trace` | off | Replay one test case's execution path plus the mock timeline, in order. **Requires exactly one `--case` and no `--tag`.** |
 | `--trace-json PATH` | none | Write a machine-readable execution trace. Implies `--trace`. |
 | `--record-expectations` | off | For every `*> STUB EXPECT <name>` comment, capture the value the program actually produced and rewrite it into a real `EXPECT`, in place. Never overwrites a hand-written `EXPECT`. Never changes the run's exit code. |
+| `--branch-coverage FILE` | none | Paragraph, IF / EVALUATE outcome and statement coverage of every case, read from the GnuCOBOL trace, as JSON (real subprograms of a load-module suite measured too). Prints a one-line summary per program. |
 | `--record-baseline FILE` | none | Record what every case sends out of the program (each mocked boundary in order, the bytes of each value passed to it, the program's DISPLAY output, RETURN-CODE) as a JSON baseline. |
 | `--baseline FILE` | none | Compare the run's behaviour with a recorded baseline, case by case. Exits 1 when any case differs, even if every `EXPECT` passed. |
 | `--baseline-json FILE` | none | Write the `--baseline` comparison as JSON. |
@@ -622,15 +624,44 @@ mode plus every mode's contract.
 
 `reference/modes.md` is what the modes actually mean.
 
+## `mockymock job`
+
+```bash
+mockymock job jcl/CUSTJOB.jcl --src src --data data --expected expected [--record]
+```
+
+Integration tests level 3: runs a whole JCL job end to end. COBOL steps run
+on real files bound through their DDs (DB2, CICS, MQ and calls without
+source stay mocked); IEFBR14, IEBGENER / ICEGENER and simple SORTs are
+emulated; `COND=` and `IF` use the real return codes. Every dataset the job
+wrote is compared with the file of the same name in `--expected`. A step it
+cannot run exactly stops the job as a gap. Exit 0 passed / recorded, 1
+failed, 3 incomplete. Needs `pip install 'mockymock[jcl]'`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--src DIR` (repeatable) | the JCL's folder | Where the steps' COBOL sources are. |
+| `--data DIR` | required | Input datasets, one file per dataset name. |
+| `--expected DIR` | none | Expected datasets. |
+| `--record` | off | Write the outputs to `--expected` instead of comparing. |
+| `--generate-inputs` | off | Generate a missing input dataset from the reading program's FD layout (written to `--data`). |
+| `--rows N` | 10 | Records per generated input. |
+| `--copybook-path DIR` (repeatable) | config | Copybook folders. |
+| `--proclib DIR` (repeatable) | none | PROC libraries. |
+| `--seed N` | 0 | Seed for generated values. |
+| `--timeout S` | 60 | Seconds one step may run. |
+| `--json-report FILE` | none | The job report: steps (status, RC), datasets (same / differs / missing / recorded), gaps. |
+| `--work-dir DIR` / `--keep` | temp / off | Where the run's datasets and step suites go; keep them. |
+
 ## Options quick-reference table
 
 | Subcommand | Needs Docker? | Key options |
 |---|---|---|
 | `setup` | yes | `--rebuild` |
 | `init` | yes (degrades) | `-o`, `--seed`, `--scenarios`, `--copybook-path`, `--force` |
-| `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder`, `--real` |
+| `generate` | no | `-o`, `--fill`, `--copybook-path`, `--with-data`, `--fixtures`, `--seed`, `--scenarios`, `--rows`, `--placeholder`, `--real`, `--real-files` |
 | `fixtures` | no | `--scenarios`, `--seed`, `--rows`, `--copybook-path` |
-| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations`, `--record-baseline`, `--baseline[-json]` |
+| `run` | yes | `--cut`, `--junit-xml`, `--json-report`, `--case`, `--tag`, `--copybook-path`, `--keep-sandbox`, `--verbose`, `--coverage[-out\|-json\|-fail-under]`, `--trace[-json]`, `--timeout`, `--record-expectations`, `--record-baseline`, `--baseline[-json]`, `--branch-coverage` |
 | `debug` | yes | `--cut`, `--case`, `--copybook-path`, `--dap-stdio` |
 | `lint` | no | `--cut`, `--copybook-path` |
 | `mutate` | yes (unless `--list`) | `--cut`, `--copybook-path`, `--list`, `--timeout`, `--json-report`, `--fail-under` |
@@ -643,6 +674,7 @@ mode plus every mode's contract.
 | `report` | only with `--execute`/`--mutate` | `--cut`, `-o`, `--json`, `--execute`, `--mutate`, `--run-json`, `--coverage-json`, `--mutation-json`, `--journal`, `--scenarios`, `--seed`, `--timeout`, `--mutation-threshold`, `--copybook-path` |
 | `journal` | no | `--cut`, `--file`, `--step`, `--summary`, `--status`, `--command`, `--decision` |
 | `runner` | yes (native GnuCOBOL) | `--url`, `--token-env`, `--name`, `--once`, `--poll-interval`, `--suite-timeout`, `--work-dir`, `--keep`, `--log-file`, `--log-format`, `--log-level` |
+| `job` | yes | `--src`, `--data`, `--expected`, `--record`, `--generate-inputs`, `--rows`, `--copybook-path`, `--proclib`, `--seed`, `--timeout`, `--json-report`, `--work-dir`, `--keep` |
 | `skills install` | no | `--project`, `--force`, `--skill` |
 | `skills plugin` | no | `--force` |
 | `skills mode` | no | `--set`, `--json` |

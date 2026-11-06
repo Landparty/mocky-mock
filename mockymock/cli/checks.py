@@ -13,7 +13,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mockymock._lines import (
     SourceEncodingError,
@@ -73,6 +73,10 @@ class StaticCheckResult:
     # (export: IBM COBOL has no BASED clause, issue #321).
     unmodelled_rebinds: list[str] = field(default_factory=list)
     cics_eib: CicsEibPlan | None = None
+    # USE REAL FILE (expand_real_files): each real file's SELECT line in
+    # `lines` and what comparing it needs.
+    real_file_selects: dict[str, int] = field(default_factory=dict)
+    real_file_layouts: dict[str, Any] = field(default_factory=dict)
     file_status_fields: dict[str, str] | None = None
     # Synthesized `CAPTURE ARG ... INTO UT-CAP-...` targets: the driver must
     # declare each one and reset it between cases (see splicer.captures).
@@ -638,6 +642,10 @@ def _run_static_checks(
     )
     out.surface = surface
     out.file_status_fields = analyze_file_status_fields(parse_result.ast)
+    real_file_problems = expand_real_files(suite, surface, parse_result.ast, out)
+    if real_file_problems:
+        out.problems.extend(real_file_problems)
+        return out
     # Items the between-case reset cannot put back carry one case's value
     # into the next (issue #333): say so rather than skip them silently.
     from mockymock.splicer.reset import unreset_items
@@ -981,6 +989,8 @@ def _run_static_checks(
             )
     for case in suite.test_cases:
         for directive in case.mocks:
+            if directive.real_file is not None:
+                continue
             if id(directive) in stepped_ids and id(directive) not in matched_ids:
                 out.problems.append(
                     f"refused (UNMATCHED_MOCK): TESTCASE {case.name!r}: MOCK "
@@ -1104,3 +1114,129 @@ def _check_real_programs(
         refuse(check_clause_bodies(prepared.surface, view, prepared.lines))
     here = matched_directive_ids(surface, suite)
     return entry_program_view(suite, elsewhere - here)
+
+
+def expand_real_files(
+    suite: MockTestSuite, surface: MockSurface, ast: Any, out: StaticCheckResult
+) -> list[str]:
+    """Answer every file-op site of each case's `USE REAL FILE` files with
+    a pass-through directive (`MockDirective.real_file`): the statement runs
+    as written. Refuses a file the program does not declare, an indexed or
+    relative file, a site a MOCK also answers, and a multi-file OPEN/CLOSE
+    mixing a real file with a mocked one (the statement runs once, so it
+    cannot be half real)."""
+    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+
+    from mockymock.analysis.refusal._gates import matching_directives
+    from mockymock.dsl.model import FILE_OP_CATEGORIES, MockDirective
+    from mockymock.splicer.real_files import REAL_ORGANIZATIONS, FileLayout
+
+    wanted = {real.file for case in suite.test_cases for real in case.real_files}
+    checked = {check.file for case in suite.test_cases for check in case.file_checks}
+    problems: list[str] = []
+    for case in suite.test_cases:
+        real_names = {real.file for real in case.real_files}
+        for check in case.file_checks:
+            if check.file not in real_names:
+                problems.append(
+                    f"refused (FILE_CHECK_NOT_REAL): TESTCASE {case.name!r}: "
+                    f"{check.kind} FILE {check.file} (.cut line {check.line}) "
+                    f"needs USE REAL FILE {check.file} in the case or BEFORE-EACH"
+                )
+    if not wanted:
+        return problems
+    index = ProgramLayoutIndex.build(ast)
+    selects: dict[str, int] = {}
+    environment = getattr(ast, "environment_division", None)
+    if environment is not None:
+        for select in environment.find_all_by_type("SelectStatement"):
+            name = str(getattr(select, "file_name", "") or "").upper()
+            location = getattr(select, "location", None)
+            if name and location is not None:
+                selects.setdefault(name, location.line)
+    record_names: dict[str, set[str]] = {}
+    for file in sorted(wanted | checked):
+        facts = index.file_facts(file)
+        if facts is None or file not in selects:
+            problems.append(
+                f"refused (REAL_FILE_UNKNOWN): USE REAL FILE {file}: the "
+                f"program has no SELECT/FD {file}"
+            )
+            continue
+        organization = (facts.organization or "SEQUENTIAL").upper()
+        if facts.record_type == "SD" or organization not in REAL_ORGANIZATIONS:
+            problems.append(
+                f"refused (REAL_FILE_ORGANIZATION): USE REAL FILE {file}: "
+                f"{organization if facts.record_type != 'SD' else 'a SORT work file'}"
+                " cannot be real (GnuCOBOL's indexed and relative files are not "
+                "VSAM images); mock it instead"
+            )
+            continue
+        record_names[file] = {name.upper() for name in facts.record_names}
+        out.real_file_layouts[file] = FileLayout(
+            organization, file_record_length(index, file, facts.record_contains)
+        )
+    if problems:
+        return problems
+    out.real_file_selects = {file: selects[file] for file in wanted}
+    sites = [s for s in surface.boundary_sites if s.category in FILE_OP_CATEGORIES]
+    for case in suite.test_cases:
+        if not case.real_files:
+            continue
+        own: list[MockDirective] = []
+        for site in sites:
+            keys = {key.upper() for key in site.keys}
+            for real in case.real_files:
+                names = {real.file} | record_names.get(real.file, set())
+                hit = sorted(keys & names)
+                if not hit:
+                    continue
+                key = real.file if real.file in keys else hit[0]
+                mocked = [
+                    d
+                    for d in matching_directives(case.mocks, site)
+                    if d.file_key.upper() in names
+                ]
+                if mocked:
+                    problems.append(
+                        f"refused (REAL_FILE_ALSO_MOCKED): TESTCASE {case.name!r}: "
+                        f"{site.label} at line {site.line} is answered by both "
+                        f"USE REAL FILE {real.file} and MOCK {mocked[0].describe()}"
+                    )
+                    continue
+                if site.category is None:
+                    continue
+                if any(d.category is site.category and d.key == key for d in own):
+                    continue
+                own.append(
+                    MockDirective(category=site.category, key=key, real_file=real.file)
+                )
+        case.mocks = [*case.mocks, *own]
+        for site in sites:
+            matches = matching_directives(case.mocks, site)
+            if matches and len({d.real_file is None for d in matches}) > 1:
+                problems.append(
+                    f"refused (REAL_FILE_MIXED_STATEMENT): TESTCASE {case.name!r}: "
+                    f"{site.label} at line {site.line} names a real file and a "
+                    "mocked one; a statement runs once, so make every file it "
+                    "names real, or none"
+                )
+    return problems
+
+
+def file_record_length(index: Any, file: str, declared: int | None) -> int | None:
+    """A fixed-length file's record length: its largest 01 (byte-complete,
+    FILLER in), or its RECORD CONTAINS when larger. None when unknown."""
+    from cobolparser.generators.data.encoding import record_length
+    from cobolparser.generators.data.layout import flatten_record
+    from cobolparser.generators.data.options import DataGeneratorOptions
+
+    options = DataGeneratorOptions().for_record_image()
+    lengths = [declared or 0]
+    for record in index.records_for_file(file):
+        try:
+            lengths.append(record_length(flatten_record(record, options)))
+        except Exception:  # noqa: BLE001 - only used to split records
+            continue
+    best = max(lengths)
+    return best or None

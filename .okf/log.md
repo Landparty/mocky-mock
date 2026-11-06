@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-06 -- branch coverage, real files (level 2), whole-job runs (level 3)
+
+`run --branch-coverage FILE` (paragraph, IF / EVALUATE outcome and
+statement coverage from the GnuCOBOL trace; `report/branch_coverage.py`).
+`USE REAL FILE` / `EXPECT FILE` / `SAVE FILE` and `generate --real-files`
+(`splicer/real_files.py`, `dsl/real_file_suite.py`). `mockymock job`
+(`jobstream/`: conditions, utilities, runner; `jcl` extra). The runner adds
+`--branch-coverage` to tests jobs, generates level-2 suites, runs `jobs`.
+Designs: docs/2026-11-06-branch-coverage-design.md,
+docs/2026-11-06-real-files-and-job-runs-design.md.
+
 ## 2026-11-06 -- gaps from the cobol-test run on PAYMAIN + PAYCALC
 
 [report](report.md): `run --trace` shows a spliced statement as one

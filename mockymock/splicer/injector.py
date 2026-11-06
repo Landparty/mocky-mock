@@ -467,7 +467,7 @@ def build_site_dispatch(
                     f"{site.label} {fired.key}"
                     f'{REAL_SUFFIX if fired.is_real else ""}"'
                 )
-        if directive.is_real:
+        if directive.is_real or directive.real_file is not None:
             if real_statement is None:
                 raise ValueError(
                     f"USE REAL CALL {directive.key!r} matched the site at "

@@ -269,6 +269,10 @@ class MockDirective:
     captures; the tally still counts each call, so VERIFY works."""
     real_line: int = 0
     """1-based .cut line of the `USE REAL CALL` statement (0 otherwise)."""
+    real_file: str | None = None
+    """Set on the directives `cli.checks.expand_real_files` builds for a
+    `USE REAL FILE <file>`: one per file-op site of that file, answering it
+    by running the statement as written."""
 
     @property
     def is_real(self) -> bool:
@@ -293,6 +297,8 @@ class MockDirective:
         `READ INFILE`, `SQL "SELECT"`."""
         if self.real_source is not None:
             return f'REAL CALL "{self.key}"'
+        if self.real_file is not None:
+            return f"REAL FILE {self.real_file} ({self.category.keyword})"
         if (
             self.category in FILE_OP_CATEGORIES
             or self.category in FLOW_CATEGORIES
@@ -368,9 +374,37 @@ class DataProvider:
 
 
 @dataclass
+class RealFile:
+    """`USE REAL FILE <file> [FROM "<path>"]` (integration tests level 2,
+    docs/2026-11-06-real-files-and-job-runs-design.md): every OPEN, READ,
+    WRITE, REWRITE and CLOSE of the file runs as written, against a file in
+    the run's sandbox. `source`, relative to the `.cut` file, is copied in
+    before each case; without it the file starts absent."""
+
+    file: str
+    source: str | None = None
+    line: int = 0
+
+
+@dataclass
+class FileCheck:
+    """`EXPECT FILE <file> MATCHES "<path>"` (`kind` "EXPECT": the file as
+    the case left it must equal the golden file) or `SAVE FILE <file> TO
+    "<path>"` (`kind` "SAVE": copy it out, used by `mockymock job`). Paths
+    are relative to the `.cut` file; both are checked after the run."""
+
+    file: str
+    path: str
+    kind: str
+    line: int = 0
+
+
+@dataclass
 class MockTestCase:
     name: str
     mocks: list[MockDirective] = field(default_factory=list)
+    real_files: list[RealFile] = field(default_factory=list)
+    file_checks: list[FileCheck] = field(default_factory=list)
     setup_moves: list[tuple[str, str]] = field(default_factory=list)  # (value, target)
     setup_move_lines: list[int] = field(default_factory=list)
     """1-based .cut line of each `setup_moves` entry, same index alignment
@@ -402,7 +436,11 @@ class MockTestCase:
         """EXPECT + VERIFY directives. Zero means the case passes whenever
         its PERFORM runs without crashing -- lint warns (NO_ASSERTION) and
         the run reports flag it as risky."""
-        return len(self.expectations) + len(self.verifications)
+        return (
+            len(self.expectations)
+            + len(self.verifications)
+            + sum(1 for check in self.file_checks if check.kind == "EXPECT")
+        )
 
 
 @dataclass
