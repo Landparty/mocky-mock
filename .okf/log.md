@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-06 -- `cobol-test` takes real subprograms after the program
+
+`/cobol-test PROGRAM.cbl SUB.cbl ...`: every program after the first runs
+for real. The skill adds a load-module suite (`generate --name module
+--real SUB.cbl`, mocks filled before any run, `run --json-report` +
+`report --run-json` since `mutate` refuses `USE REAL CALL`), a second plan
+list for the subprograms' rules (cited `SUB:BR-001`), one journal per
+suite, `mockymock suites` for the suite path, the native toolchain as a
+way to run, and the GnuCOBOL 3.1 behaviour of `report --execute`. Tested
+on `examples/paymod` (unit 7/7, module 6/6).
+
 ## 2026-11-05 -- `mockymock` and `cobol-test` skills tuned from an eval run
 
 An eval run (four tasks, with and without the skill, scripted graders) found
