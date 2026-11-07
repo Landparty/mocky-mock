@@ -66,6 +66,9 @@ class RealFilePlan:
     #: INPUT/I-O of the file (None: none), for `round_trip_case`.
     first_create: int | None = None
     first_open_read: int | None = None
+    #: Other files a statement naming this one names too (OPEN A B): a
+    #: statement runs once, so they are real together or not at all.
+    partners: set[str] = field(default_factory=set)
 
     @property
     def round_trip(self) -> bool:
@@ -93,9 +96,13 @@ def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[st
     options = DataGeneratorOptions().for_record_image()
     plans: dict[str, RealFilePlan] = {}
     notes: list[str] = []
+    together: dict[str, set[str]] = {}
     for site in surface.boundary_sites:
         if site.category not in FILE_OP_CATEGORIES:
             continue
+        named = {f for f in (_file_of(index, k.upper()) for k in site.keys) if f}
+        for one in named:
+            together.setdefault(one, set()).update(named - {one})
         for key in site.keys:
             file = _file_of(index, key.upper())
             if file is None:
@@ -145,6 +152,8 @@ def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[st
                         plan.first_open_read = min(plan.first_open_read or line, line)
                 if mode in ("INPUT", "I-O", "EXTEND"):
                     plan.reads = plan.reads or mode == "INPUT"
+    for file, plan in plans.items():
+        plan.partners = together.get(file, set())
     return sorted(plans.values(), key=lambda p: p.file), notes
 
 
@@ -343,6 +352,30 @@ def make_real_file_suite(
     return text, files, notes
 
 
+def _round_trip_files(plans: list[RealFilePlan]) -> list[RealFilePlan]:
+    """The files the round-trip case makes real: the round-trip ones, plus
+    any output-only file a statement names with one (it needs no data);
+    a round-trip file sharing a statement with a file that cannot be real
+    without data (an indexed file, an input) stays mocked."""
+    by_file = {plan.file: plan for plan in plans}
+    real = {plan.file for plan in plans if plan.round_trip}
+    changed = True
+    while changed:
+        changed = False
+        for file in sorted(real):
+            for partner in by_file[file].partners:
+                if partner in real:
+                    continue
+                other = by_file.get(partner)
+                if other is not None and other.writes and not other.reads:
+                    real.add(partner)
+                else:
+                    real.discard(file)
+                changed = True
+                break
+    return [by_file[file] for file in sorted(real)]
+
+
 _EXPECT_RE = re.compile(r"^EXPECT\b", re.IGNORECASE)
 _CHARACTERIZATION_RE = re.compile(r"^\*>\s*CHARACTERIZATION\b", re.IGNORECASE)
 
@@ -356,7 +389,7 @@ def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
     their passing side here. The copy's EXPECT lines go: they describe the
     mocked records, and `run --record-expectations` records the copy's own.
     `cut_text` comes back unchanged when no file qualifies."""
-    files = [plan for plan in plans if plan.round_trip]
+    files = _round_trip_files(plans)
     if not files:
         return cut_text
     names = {name for plan in files for name in plan.names}

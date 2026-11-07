@@ -289,6 +289,20 @@ def test_round_trip_case_needs_a_file_written_before_it_is_read(plan):
     assert round_trip_case(ROUND_TRIP, [plan]) == ROUND_TRIP
 
 
+def test_round_trip_case_keeps_statement_partners_together():
+    out_only = RealFilePlan("PRT", {"PRT", "PRT-REC"}, reads=False, writes=True)
+    shared = _plan(10, 20)
+    shared.partners = {"PRT"}
+    out_only.partners = {"SQ-FS1"}
+    text = round_trip_case(ROUND_TRIP, [shared, out_only])
+    assert 'TESTCASE "round trip: PRT, SQ-FS1 real"' in text
+    assert "    USE REAL FILE PRT\n" in text
+    # OPEN OUTPUT IX-FS1 SQ-FS1: an indexed file cannot be real.
+    with_indexed = _plan(10, 20)
+    with_indexed.partners = {"IX-FS1"}
+    assert round_trip_case(ROUND_TRIP, [with_indexed]) == ROUND_TRIP
+
+
 def test_round_trip_case_without_a_case():
     assert round_trip_case('TESTSUITE "X"\n', [_plan(1, 2)]) == 'TESTSUITE "X"\n'
 
