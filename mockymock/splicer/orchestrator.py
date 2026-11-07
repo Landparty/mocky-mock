@@ -265,8 +265,11 @@ def splice_program(
     for site in surface.boundary_sites:
         if site.category is None or id(site.statement) in kinds:
             continue
+        # A site only USE REAL FILE pass-throughs match runs as written in
+        # every case: nothing to splice (so a nested one needs no span).
         mocked = any(
             directive_matches_site(directive, site)
+            and getattr(directive, "real_file", None) is None
             for case in suite.test_cases
             for directive in case.mocks
         )

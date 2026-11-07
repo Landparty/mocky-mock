@@ -1129,7 +1129,11 @@ def expand_real_files(
 
     from mockymock.analysis.refusal._gates import matching_directives
     from mockymock.dsl.model import FILE_OP_CATEGORIES, MockDirective
-    from mockymock.splicer.real_files import REAL_ORGANIZATIONS, FileLayout
+    from mockymock.splicer.real_files import (
+        REAL_ORGANIZATIONS,
+        SELF_BUILT_ORGANIZATIONS,
+        FileLayout,
+    )
 
     wanted = {real.file for case in suite.test_cases for real in case.real_files}
     checked = {check.file for case in suite.test_cases for check in case.file_checks}
@@ -1164,7 +1168,29 @@ def expand_real_files(
             )
             continue
         organization = (facts.organization or "SEQUENTIAL").upper()
-        if facts.record_type == "SD" or organization not in REAL_ORGANIZATIONS:
+        if facts.record_type != "SD" and organization in SELF_BUILT_ORGANIZATIONS:
+            staged = sorted(
+                {
+                    case.name
+                    for case in suite.test_cases
+                    for real in case.real_files
+                    if real.file == file and real.source is not None
+                }
+            )
+            if staged or file in checked:
+                what = (
+                    f"FROM data (TESTCASE {staged[0]!r})"
+                    if staged
+                    else "an EXPECT / SAVE FILE"
+                )
+                problems.append(
+                    f"refused (REAL_FILE_ORGANIZATION): USE REAL FILE {file}: "
+                    f"an {organization} file can be real only when the program "
+                    f"builds it (GnuCOBOL's {organization.lower()} files are "
+                    f"not VSAM images), so it takes no {what}; mock it instead"
+                )
+                continue
+        elif facts.record_type == "SD" or organization not in REAL_ORGANIZATIONS:
             problems.append(
                 f"refused (REAL_FILE_ORGANIZATION): USE REAL FILE {file}: "
                 f"{organization if facts.record_type != 'SD' else 'a SORT work file'}"

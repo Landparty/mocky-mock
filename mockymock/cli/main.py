@@ -1411,10 +1411,19 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         from mockymock.dsl.real_file_suite import plan_real_files, round_trip_case
 
         try:
-            plans, _notes = plan_real_files(result.ast, surface)
+            plans, _notes = plan_real_files(result.ast, surface, self_built=True)
         except Exception:  # noqa: BLE001 - an extra case, never a failed generate
             plans = []
         cut_text = round_trip_case(cut_text, plans)
+        if not args.real:
+            from mockymock.dsl.real_file_suite import real_calls_case
+
+            cut_text = real_calls_case(
+                cut_text,
+                _sibling_subprograms(
+                    source_path, surface, program_name, args, output_path
+                ),
+            )
         case_count = cut_text.count("TESTCASE ")
     if getattr(args, "real_files", False):
         from mockymock.dsl.real_file_suite import make_real_file_suite, plan_real_files
@@ -1499,6 +1508,52 @@ def _hint_pending_stubs(cut_text: str, suite, suite_result, risky: list[str]) ->
             "to turn them into EXPECTs, then check the values recorded: "
             + ", ".join(repr(name) for name in pending)
         )
+
+
+_SOURCE_SUFFIXES = (".cbl", ".CBL", ".cob", ".COB", ".cobol")
+
+
+def _sibling_subprograms(
+    source_path: Path,
+    surface: object,
+    program_name: str | None,
+    args: argparse.Namespace,
+    output_path: Path,
+) -> dict[str, str]:
+    """The programs `source_path` CALLs statically whose source sits next to
+    it (`<NAME>.cbl`, `.cob`, ... in its folder) and that can be linked for
+    real: name -> path relative to the `.cut`, for `real_calls_case`."""
+    from mockymock.analysis.real_programs import RealSpec, prepare_real_program
+    from mockymock.dsl.model import MockCategory
+
+    found: dict[str, str] = {}
+    own = (program_name or source_path.stem).upper()
+    for site in getattr(surface, "boundary_sites", []):
+        if site.category is not MockCategory.CALL or getattr(site, "is_mq", False):
+            continue
+        name = str(site.keys[0] if site.keys else "").strip().upper()
+        if not name or name == own or name in found:
+            continue
+        candidates = [
+            source_path.parent / f"{stem}{suffix}"
+            for stem in dict.fromkeys((name, name.lower()))
+            for suffix in _SOURCE_SUFFIXES
+        ]
+        path = next((c for c in candidates if c.is_file()), None)
+        if path is None:
+            continue
+        try:
+            prepared, _reasons = prepare_real_program(
+                RealSpec(name, path.resolve(), 0), args.copybook_path
+            )
+        except Exception:  # noqa: BLE001 - an extra case, never a failed generate
+            prepared = None
+        if prepared is None:
+            continue
+        found[name] = Path(
+            os.path.relpath(path.resolve(), output_path.resolve().parent)
+        ).as_posix()
+    return found
 
 
 def _link_real_programs(
