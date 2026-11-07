@@ -296,14 +296,14 @@ def test_run_program_with_several_suites_gives_each_its_own_report_file(
     # A sibling src/pay/PAY.cut and a mirrored tests/pay/PAY.cut are both
     # suites of PAY; named by file name alone, both reports were written to
     # report-PAY.json and the second replaced the first.
-    import mockymock.cli.main as cli_main
+    import mockymock.cli.commands.run as run_mod
 
     _write(tmp_path / "src" / "pay" / "PAY.cbl")
     _write(tmp_path / "src" / "pay" / "PAY.cut", 'TESTSUITE "a"\n')
     _write(tmp_path / "tests" / "pay" / "PAY.cut", 'TESTSUITE "b"\n')
     _write(tmp_path / "tests" / "pay" / "PAY.errors.cut", 'TESTSUITE "c"\n')
     monkeypatch.chdir(tmp_path)
-    real_cmd_run = cli_main._cmd_run
+    real_cmd_run = run_mod._cmd_run
     reports: dict[str, tuple[str, str]] = {}
 
     def fake_cmd_run(args):
@@ -312,7 +312,7 @@ def test_run_program_with_several_suites_gives_each_its_own_report_file(
         reports[args.cut] = (args.json_report, args.junit_xml)
         return 0
 
-    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    monkeypatch.setattr(run_mod, "_cmd_run", fake_cmd_run)
     assert (
         main(
             [
@@ -339,13 +339,13 @@ def test_run_program_with_several_suites_gives_each_its_own_report_file(
 def test_several_suites_in_one_folder_keep_their_short_report_names(
     tmp_path, monkeypatch
 ):
-    import mockymock.cli.main as cli_main
+    import mockymock.cli.commands.run as run_mod
 
     _write(tmp_path / "src" / "pay" / "PAY.cbl")
     _write(tmp_path / "tests" / "pay" / "PAY.cut", 'TESTSUITE "b"\n')
     _write(tmp_path / "tests" / "pay" / "PAY.errors.cut", 'TESTSUITE "c"\n')
     monkeypatch.chdir(tmp_path)
-    real_cmd_run = cli_main._cmd_run
+    real_cmd_run = run_mod._cmd_run
     reports: list[str] = []
 
     def fake_cmd_run(args):
@@ -354,13 +354,13 @@ def test_several_suites_in_one_folder_keep_their_short_report_names(
         reports.append(args.json_report)
         return 0
 
-    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    monkeypatch.setattr(run_mod, "_cmd_run", fake_cmd_run)
     assert main(["run", "src/pay/PAY.cbl", "--json-report", "r.json"]) == 0
     assert sorted(reports) == ["r-PAY.errors.json", "r-PAY.json"]
 
 
 def _selection_project(tmp_path, monkeypatch):
-    import mockymock.cli.main as cli_main
+    import mockymock.cli.commands.run as run_mod
 
     _write(tmp_path / "src" / "pay" / "PAY.cbl")
     _write(
@@ -373,7 +373,7 @@ def _selection_project(tmp_path, monkeypatch):
         'TESTSUITE "c"\nTESTCASE "errs"\n    PERFORM P\n',
     )
     monkeypatch.chdir(tmp_path)
-    real_cmd_run = cli_main._cmd_run
+    real_cmd_run = run_mod._cmd_run
     runs: dict[str, tuple[list[str] | None, list[str] | None]] = {}
 
     def fake_cmd_run(args):
@@ -382,7 +382,7 @@ def _selection_project(tmp_path, monkeypatch):
         runs[Path(args.cut).name] = (args.case, args.tag)
         return 0
 
-    monkeypatch.setattr(cli_main, "_cmd_run", fake_cmd_run)
+    monkeypatch.setattr(run_mod, "_cmd_run", fake_cmd_run)
     return runs
 
 

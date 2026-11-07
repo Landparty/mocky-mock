@@ -231,7 +231,13 @@ def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
         )
 
     root = Path(__file__).resolve().parents[2] / "mockymock"
-    for path in (root / "cli" / "main.py", root / "mutation" / "runner.py"):
+    commands = root / "cli" / "commands"
+    for path in (
+        commands / "run.py",
+        commands / "debug.py",
+        commands / "export.py",
+        root / "mutation" / "runner.py",
+    ):
         tree = _ast.parse(path.read_text(encoding="utf-8"))
         builds = _calls(tree, "reset_move_lines")
         resets = _calls(tree, "extra_reset_lines_for")

@@ -37,7 +37,7 @@ report/coverage.py
   format_coverage_console(report, name, original=, program_name=)
                                             -- ORIGINAL number leads; instrumented labelled below
 
-cli/main.py: _cmd_run
+cli/commands/run.py: _cmd_run
   --coverage / --coverage-out / --coverage-fail-under wiring. Only parse_gcov runs
   inside the sandbox (the .gcda/.gcov files die with it); the remap and the console
   formatting happen after it, since the headline number comes from the remap.

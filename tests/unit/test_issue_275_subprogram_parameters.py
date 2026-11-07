@@ -4,8 +4,8 @@ back, and a suite that asserts nothing is no longer reported as done."""
 
 import pytest
 
+import mockymock.cli.commands.init as init_mod
 import mockymock.cli.doctor as doctor_mod
-import mockymock.cli.main as main_mod
 from mockymock.cli.checks import cases_asserting_nothing
 from mockymock.cli.main import main
 from mockymock.dsl.entry_parameters import add_entry_parameters
@@ -113,7 +113,7 @@ def test_init_fails_when_recording_left_nothing_asserted(calcsub, capsys, monkey
     # A recording run that filled no STUB EXPECT (simulated: _cmd_run does
     # nothing) leaves a suite that passes whatever the program does.
     monkeypatch.setattr(doctor_mod, "gather_full_status", _docker_up)
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: 0)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: 0)
     assert main(["init", "CALCSUB.cbl", "-o", "CALCSUB.cut"]) == 1
     out = capsys.readouterr().out
     assert "none of its test cases asserts anything" in out
@@ -131,7 +131,7 @@ def test_init_succeeds_once_recording_filled_the_stubs(calcsub, capsys, monkeypa
         return 0
 
     monkeypatch.setattr(doctor_mod, "gather_full_status", _docker_up)
-    monkeypatch.setattr(main_mod, "_cmd_run", fake_record)
+    monkeypatch.setattr(init_mod, "_cmd_run", fake_record)
     assert main(["init", "CALCSUB.cbl", "-o", "CALCSUB.cut"]) == 0
     assert "next, run" in capsys.readouterr().out
 

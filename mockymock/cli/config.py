@@ -67,7 +67,7 @@ _MEMBER_NAME = re.compile(r"[A-Za-z0-9@#$][A-Za-z0-9@#$_-]*")
 # Every key a config file may carry. Anything else is rejected rather
 # than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
 # (deliberately not config-overridable -- see `_apply_config_to_args` in
-# cli/main.py) that quietly did nothing would be a config the user
+# cli/_common.py) that quietly did nothing would be a config the user
 # believes is in effect and isn't.
 _KNOWN_KEYS = frozenset(
     {_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS, _ALIASES_KEY, _EXTENSIONS_KEY}

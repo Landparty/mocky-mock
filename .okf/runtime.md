@@ -326,7 +326,7 @@ implementations that used to live there were deleted wholesale, not adapted:
 | `runtime/executor.py` | `ExecutionResult` dataclass, `TIMEOUT_EXIT_CODE = 124`, `NOT_FOUND_EXIT_CODE = 127`, `_coerce_output()` |
 | `runtime/status.py` | The read-only counterpart: `probe() -> ToolchainStatus` (four `Check` records — `daemon`, `image`, `container`, `cobc`) mirroring the lifecycle table above using pure reads only. Documented in [dashboard](dashboard.md), not here, because both its consumers (`dashboard`, `doctor`) live there. |
 
-These shapes are a stable contract consumed by `cli/main.py` and
+These shapes are a stable contract consumed by `cli/commands/` (run, debug, mutate) and
 `report/results.py` — the Docker rewrite deliberately left them unchanged so
 nothing downstream of compile/run needed to change.
 

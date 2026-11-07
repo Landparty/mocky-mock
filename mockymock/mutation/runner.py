@@ -129,13 +129,13 @@ def _run_suite_once(
         needs_call_frame,
         program_end_thru,
     )
+    from mockymock.cli._common import _insert_driver
     from mockymock.cli.checks import (
         REAL_CALL_UNSUPPORTED,
         extra_reset_lines_for,
         extra_working_storage,
         run_static_checks,
     )
-    from mockymock.cli.main import _insert_driver
     from mockymock.report.coverage import map_coverage_to_original, parse_gcov
     from mockymock.report.results import parse_stdout
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
