@@ -21,7 +21,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     a `launch_session` closure to a `DapAdapter` and blocks driving the DAP
     protocol on stdio until the client disconnects. See
     docs/2026-07-22-dap-debugger-design.md and
-    docs/superpowers/plans/2026-07-22-dap-debugger-cli.md."""
+    docs/archive/plans/2026-07-22-dap-debugger-cli.md."""
 
     import sys
 

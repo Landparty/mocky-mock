@@ -1,6 +1,6 @@
 """CLI behavior tests for `mockymock generate --with-data`'s `--rows` and
 `--placeholder` flags (Task 4 of the unify-with-data reconciliation plan,
-docs/2026-08-04-unify-with-data-plan.md). Companion to
+docs/archive/plans/2026-08-04-unify-with-data-plan.md). Companion to
 tests/unit/test_dsl_generator_bundle.py (which drives `scaffold_cut`
 directly) and tests/integration/test_fixturedemo_golden.py (which pins the
 no-new-flags `--fixtures` output byte-for-byte).

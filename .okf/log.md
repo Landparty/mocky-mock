@@ -3035,7 +3035,7 @@ capture/spies on mocked CALLs" gap named in the 2026-07-06 readiness
 audit's Finding 6. Proven end-to-end via `examples/ordrproc/`'s existing
 Docker-gated integration test. See
 docs/2026-08-11-argument-capture-design.md and
-docs/superpowers/plans/2026-08-11-argument-capture.md.
+docs/archive/plans/2026-08-11-argument-capture.md.
 
 ## 2026-08-11 — Add `mockymock skills install` and two Claude Code skills
 
@@ -3446,7 +3446,7 @@ bundle-driven `generate --with-data`/`--fixtures` engine (see the entry
 above), rather than the other way around — main's `dsl/fixture_bundle.py`
 + `dsl/generator.py` + AT-END replication (`3ad3378`) stayed the emission
 engine throughout; nothing here changes their behavior. Plan:
-`docs/2026-08-04-unify-with-data-plan.md`.
+`docs/archive/plans/2026-08-04-unify-with-data-plan.md`.
 
 * **cobolparser pin bumped** to `ff64b25` (origin/main at reconciliation
   time — PR #110's gen-fixtures fixes, PR #112's EJECT support), superseding
@@ -4061,7 +4061,7 @@ the return site plus continue; bigger change, not attempted in this fix.
 ## 2026-07-22 — Interactive DAP debugger implemented (`mockymock debug`)
 
 Implemented the design in `docs/2026-07-22-dap-debugger-design.md` per
-`docs/superpowers/plans/2026-07-22-dap-debugger-cli.md`. The design doc's
+`docs/archive/plans/2026-07-22-dap-debugger-cli.md`. The design doc's
 own empirical questions (originally unverified — the Docker daemon was
 unreachable when it was drafted) were all answered against a real
 hardened container before any implementation code was written, and the
@@ -4360,7 +4360,7 @@ Adds `mockymock run --trace` / `--trace-json PATH`, backing a "Debug Test"
 action in the VS Code extension (extension side not yet built; this is the
 CLI half, and the JSON contract is the seam between them). Design:
 `docs/2026-07-21-debug-trace-design.md`; plan:
-`docs/superpowers/plans/2026-07-21-debug-trace-cli.md`.
+`docs/archive/plans/2026-07-21-debug-trace-cli.md`.
 
 Verified in-container before designing, not assumed: `cobc -ftraceall`
 alone emits **nothing** — GnuCOBOL 3.x gates tracing at run time on

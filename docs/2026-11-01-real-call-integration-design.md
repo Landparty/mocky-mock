@@ -2,7 +2,7 @@
 
 Date: 2026-11-01
 Status: implemented. This is phase 1 of
-[2026-07-29-integration-testing-direction-design.md](2026-07-29-integration-testing-direction-design.md),
+[2026-07-29-integration-testing-direction-design.md](archive/2026-07-29-integration-testing-direction-design.md),
 with one change to that plan: the real program's own boundaries are mocked
 by the suite instead of being refused.
 

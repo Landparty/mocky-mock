@@ -12,7 +12,7 @@ the concrete evidence. This document now describes Approach B (propagate an
 early-exit flag via `EXIT PARAGRAPH`/`EXIT SECTION`), validated by six
 separate compile-and-run spikes against the real GnuCOBOL 3.2 toolchain
 before being written up here. No implementation code exists yet for either
-approach — a plan (`docs/superpowers/plans/2026-07-08-goback-stop-run-support.md`)
+approach — a plan (`docs/archive/plans/2026-07-08-goback-stop-run-support.md`)
 was written for Approach A and must be discarded/rewritten for Approach B.
 
 ## Problem

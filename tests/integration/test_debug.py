@@ -11,7 +11,7 @@ real line map, not an identity stand-in), stopping there, reading back
 COBOL-named variables with correctly decoded values, and stepping.
 
 See docs/2026-07-22-dap-debugger-design.md and
-docs/superpowers/plans/2026-07-22-dap-debugger-cli.md (Task 9).
+docs/archive/plans/2026-07-22-dap-debugger-cli.md (Task 9).
 """
 
 from __future__ import annotations

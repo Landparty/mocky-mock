@@ -936,7 +936,7 @@ Starts an interactive Debug Adapter Protocol (DAP) session for a single
 test case — breakpoints, stepping, a synthesized COBOL call stack, and
 read-only variable inspection. See
 docs/2026-07-22-dap-debugger-design.md and
-docs/superpowers/plans/2026-07-22-dap-debugger-cli.md for the full design
+docs/archive/plans/2026-07-22-dap-debugger-cli.md for the full design
 and empirical basis (both were verified against a real container, not
 just planned).
 

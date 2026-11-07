@@ -1,7 +1,7 @@
 # mockymock — Coverage Reporting Design
 
 Date: 2026-07-17
-Status: implemented (docs/superpowers/plans/2026-07-17-coverage-reporting.md).
+Status: implemented (docs/archive/plans/2026-07-17-coverage-reporting.md).
 Superseded in two small, deliberate ways by that plan and the shipped
 code — both authoritative over this doc: `format_coverage_console` takes
 a `source_name` parameter (not sketched here) and returns its uncovered

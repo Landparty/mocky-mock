@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python >=3.11, `cobolparser` (editable sibling dependency), GnuCOBOL (`cobc`, external system dependency bootstrapped by the CLI), pytest.
 
-**Source spec:** [`docs/2026-06-30-mockymock-mvp-design.md`](2026-06-30-mockymock-mvp-design.md) — read it first; this plan implements it and resolves two implementation-level questions the spec deliberately left open (statement-span detection, exact stdout wire format) since those required reading `cobolparser` source to answer correctly.
+**Source spec:** [`docs/2026-06-30-mockymock-mvp-design.md`](../../2026-06-30-mockymock-mvp-design.md) — read it first; this plan implements it and resolves two implementation-level questions the spec deliberately left open (statement-span detection, exact stdout wire format) since those required reading `cobolparser` source to answer correctly.
 
 ## Global Constraints
 
