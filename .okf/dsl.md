@@ -1759,5 +1759,14 @@ OPEN/READ/WRITE/REWRITE/CLOSE site of a real file into a pass-through
 `REAL_FILE_UNKNOWN`, `REAL_FILE_ORGANIZATION` (only SEQUENTIAL and LINE
 SEQUENTIAL), `REAL_FILE_ALSO_MOCKED`, `REAL_FILE_MIXED_STATEMENT`,
 `FILE_CHECK_NOT_REAL`. `generate --real-files` (`dsl/real_file_suite.py`)
-rewrites a generated suite this way. Design:
+rewrites a generated suite this way. `generate --scenarios all` (without
+`--real-files`) also appends a **round-trip case** (`round_trip_case`,
+2026-11-07): a copy of the first case where every sequential file the
+program OPENs OUTPUT / EXTEND before it first OPENs it INPUT / I-O
+(`RealFilePlan.round_trip`) is `USE REAL FILE` with no data, its mocks,
+VERIFYs and STUB EXPECTs dropped, and the copy's EXPECTs left for
+`run --record-expectations`: the program reads back what it wrote, so its
+checks on its own records run (NIST SQ programs). `rewrite_assigns` reads
+only columns 8-72 and takes an `ASSIGN TO` name from the next line.
+Design:
 [docs/2026-11-06-real-files-and-job-runs-design.md](../docs/2026-11-06-real-files-and-job-runs-design.md).

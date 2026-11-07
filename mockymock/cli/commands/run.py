@@ -464,9 +464,12 @@ def _write_branch_coverage(
     source_location_map: dict[int, tuple[str, int]] | None,
     real_programs,
     real_sources: list[tuple[str, list[str]]],
+    suite=None,
 ) -> None:
     """`run --branch-coverage FILE`: measure every program of the run from
-    the whole trace and write the JSON document (report.branch_coverage)."""
+    the whole trace and write the JSON document (report.branch_coverage).
+    The program under test's points no test can reach are marked
+    (report.unreachable)."""
     from mockymock.report.branch_coverage import (
         format_branch_coverage_console,
         format_branch_coverage_json,
@@ -528,9 +531,14 @@ def _write_branch_coverage(
         )
     per_program = split_by_program(entries, [unit[0].program_id for unit in units])
     reports = []
-    for points, to_normalized, program_file, lookup in units:
+    for index, (points, to_normalized, program_file, lookup) in enumerate(units):
         measure(points, per_program.get(points.program_id, []), to_normalized)
-        reports.append(program_report(points, program_file, lookup))
+        unreachable = None
+        if index == 0 and suite is not None:
+            from mockymock.report.unreachable import classify
+
+            unreachable = classify(ast, points, suite)
+        reports.append(program_report(points, program_file, lookup, unreachable))
     text = format_branch_coverage_json(
         reports, str(cut_path), cases_run=len(suite_result.results)
     )
@@ -1325,6 +1333,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             checked.source_location_map,
             real_programs,
             real_sources,
+            suite,
         )
 
     if args.trace:

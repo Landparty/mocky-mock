@@ -31,6 +31,15 @@ The JSON (`version: 1`) lists each program's totals and every paragraph and bran
 * The document (`version: 1`): `cutFile`, `casesRun`, `programs[]` with `programId`, `programFile`, `paragraphs`, `branches`, `statements`, each `{total, covered, items[]}`; branch items carry `line`, `kind` (IF / EVALUATE), `outcomes[{label, hits, line}]` and `notMeasurable`.
 * The LegacyLens runner passes `--branch-coverage` on every tests-job run and reports the document as the suite's `coverage`.
 
+## Unreachable points (2026-11-07)
+
+A gap means either "no test reached it yet" or "nothing ever will". `report/unreachable.py` tells them apart with cobol-parser's `InputDependenceAnalyzer` (cobol-parser 3.7+; with an older one every point stays a plain gap):
+
+* An IF / EVALUATE whose operands, and the decisions it runs under, no input reaches (nothing a mock returns, no FILE STATUS, ACCEPT, LINKAGE item or setup `MOVE`) goes the same way on every run from the program's entry point. An outcome the measured run never took is unreachable, and so is the code reachable only through it: the self-checking FAIL branch of a NIST CCVS85 program. Reason: "decided by the program's own data: no input can change it".
+* Code no PERFORM, GO TO or fall-through reaches at all is unreachable whatever the cases do. Reason: "no PERFORM, GO TO or fall-through reaches it".
+* The first claim needs every case (and every BEFORE / AFTER hook) to PERFORM the entry paragraph and no case to mock a paragraph or section. Otherwise only the second is made, and the program says why: `unreachableScope: "static"` with `unreachableNote`.
+* In the document, an unreachable paragraph, outcome or uncovered statement carries `unreachable: <reason>`, and each section an `unreachable` count: `covered` of `total - unreachable` is the coverage of what tests can reach. The console prints both ratios and lists only real gaps.
+
 ## Limits
 
 Coverage is of what the suite ran. A branch can be reached and still be wrong; mutation testing (`mockymock mutate`) is the check for that.

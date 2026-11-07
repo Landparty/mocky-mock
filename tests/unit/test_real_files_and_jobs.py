@@ -17,6 +17,7 @@ from mockymock.dsl.real_file_suite import (
     RealFilePlan,
     make_real_file_suite,
     read_rows,
+    round_trip_case,
 )
 from mockymock.jobstream.conditions import ConditionError, step_runs
 from mockymock.jobstream.runner import (
@@ -97,6 +98,27 @@ def test_rewrite_assigns_points_into_the_sandbox():
     assert out[1] == '               ASSIGN TO "ut-files/IN-FILE"'
     assert out[3] == lines[3]
     assert problems == ["USE REAL FILE MISSING: the program has no SELECT MISSING"]
+
+
+def test_rewrite_assigns_skips_the_identification_area_and_a_split_name():
+    # NIST style: ASSIGN TO ends the line, the name is on the next one, and
+    # columns 73-80 hold a sequence tag the compiler ignores.
+    tag = "SQ1024.2"
+    lines = [
+        "       SELECT SQ-FS1".ljust(72) + tag,
+        "              ACCESS MODE IS SEQUENTIAL".ljust(72) + tag,
+        "              ASSIGN TO".ljust(72) + tag,
+        '       "XXXXX001"'.ljust(72) + tag,
+        "              .".ljust(72) + tag,
+    ]
+    out, problems = rewrite_assigns(lines, {"SQ-FS1": 1}, {"SQ-FS1"})
+    assert problems == []
+    assert out[2] == lines[2]
+    assert out[3].startswith('       "ut-files/SQ-FS1"')
+    # Normalized text (no columns) works the same way.
+    flat = ["SELECT SQ-FS1", "ASSIGN TO", '"XXXXX001"', "."]
+    out, _ = rewrite_assigns(flat, {"SQ-FS1": 1}, {"SQ-FS1"})
+    assert out[1:3] == ["ASSIGN TO", '"ut-files/SQ-FS1"']
 
 
 def test_case_staging_goes_after_the_case_marker():
@@ -207,6 +229,82 @@ def test_make_real_file_suite_rewrites_the_file_mocks(tmp_path: Path):
     assert list(files) == [tmp_path / "data/CUSTEXT/1-CUST-IN.dat"]
     parse_cut(text)  # still a valid suite
     assert notes[-1].startswith("real files: CUST-IN, CUST-OUT")
+
+
+ROUND_TRIP = """\
+TESTSUITE "SQ1"
+
+TESTCASE "happy path"
+    MOCK OPEN PRINT-FILE
+    END-MOCK
+    MOCK OPEN SQ-FS1 OUTPUT
+    END-MOCK
+    MOCK READ SQ-FS1
+        MOVE "A" TO SQ-REC
+    END-MOCK
+    PERFORM OPEN-FILES THRU CCVS-999999
+    *> CHARACTERIZATION: recorded by mockymock run --record-expectations
+    EXPECT SQ-REC TO BE "A"
+    VERIFY OPEN PRINT-FILE WAS CALLED 1 TIMES
+    VERIFY OPEN SQ-FS1 OUTPUT WAS CALLED 1 TIMES
+    *> VERIFY READ SQ-FS1 WAS CALLED <count not exact by construction>
+
+TESTCASE "empty input"
+    PERFORM OPEN-FILES THRU CCVS-999999
+"""
+
+
+def _plan(first_create, first_open_read, reads=True, writes=True):
+    return RealFilePlan(
+        "SQ-FS1",
+        {"SQ-FS1", "SQ-REC"},
+        reads=reads,
+        writes=writes,
+        first_create=first_create,
+        first_open_read=first_open_read,
+    )
+
+
+def test_round_trip_case_copies_the_first_case_with_the_file_real():
+    text = round_trip_case(ROUND_TRIP, [_plan(10, 20)])
+    case = text.split('TESTCASE "round trip: SQ-FS1 real"\n')[1]
+    assert case.startswith("    USE REAL FILE SQ-FS1\n    MOCK OPEN PRINT-FILE")
+    assert "SQ-FS1" not in case.replace("USE REAL FILE SQ-FS1", "")
+    assert "EXPECT" not in case and "CHARACTERIZATION" not in case
+    assert "VERIFY OPEN PRINT-FILE WAS CALLED 1 TIMES" in case
+    assert text.startswith(ROUND_TRIP.rstrip("\n"))
+    assert len(parse_cut(text).test_cases) == 3
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        _plan(20, 10),  # read before the program creates the file
+        _plan(None, 10),
+        _plan(10, 20, writes=False),
+        _plan(10, 20, reads=False),
+    ],
+)
+def test_round_trip_case_needs_a_file_written_before_it_is_read(plan):
+    assert round_trip_case(ROUND_TRIP, [plan]) == ROUND_TRIP
+
+
+def test_round_trip_case_keeps_statement_partners_together():
+    out_only = RealFilePlan("PRT", {"PRT", "PRT-REC"}, reads=False, writes=True)
+    shared = _plan(10, 20)
+    shared.partners = {"PRT"}
+    out_only.partners = {"SQ-FS1"}
+    text = round_trip_case(ROUND_TRIP, [shared, out_only])
+    assert 'TESTCASE "round trip: PRT, SQ-FS1 real"' in text
+    assert "    USE REAL FILE PRT\n" in text
+    # OPEN OUTPUT IX-FS1 SQ-FS1: an indexed file cannot be real.
+    with_indexed = _plan(10, 20)
+    with_indexed.partners = {"IX-FS1"}
+    assert round_trip_case(ROUND_TRIP, [with_indexed]) == ROUND_TRIP
+
+
+def test_round_trip_case_without_a_case():
+    assert round_trip_case('TESTSUITE "X"\n', [_plan(1, 2)]) == 'TESTSUITE "X"\n'
 
 
 # -- conditions ------------------------------------------------------------------

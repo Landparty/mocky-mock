@@ -629,6 +629,23 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if linked is None:
             return 1
         cut_text = linked
+    if (
+        bundle is not None
+        and getattr(args, "scenarios", None) == "all"
+        and not getattr(args, "real_files", False)
+        and not args.per_paragraph
+    ):
+        # A program that writes a file and reads it back (NIST's SQ / ST
+        # programs) checks its own records: one case with the file real
+        # runs those checks against what it wrote.
+        from mockymock.dsl.real_file_suite import plan_real_files, round_trip_case
+
+        try:
+            plans, _notes = plan_real_files(result.ast, surface)
+        except Exception:  # noqa: BLE001 - an extra case, never a failed generate
+            plans = []
+        cut_text = round_trip_case(cut_text, plans)
+        case_count = cut_text.count("TESTCASE ")
     if getattr(args, "real_files", False):
         from mockymock.dsl.real_file_suite import make_real_file_suite, plan_real_files
 
