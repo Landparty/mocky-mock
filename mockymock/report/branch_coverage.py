@@ -35,8 +35,12 @@ import json
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from mockymock.report.trace import TraceEntry
+
+if TYPE_CHECKING:
+    from mockymock.report.unreachable import Unreachable
 
 BRANCH_COVERAGE_JSON_VERSION = 1
 
@@ -282,23 +286,49 @@ def program_report(
     points: ProgramPoints,
     program_file: str,
     lines_to_origin: Callable[[int], Origin],
+    unreachable: Unreachable | None = None,
 ) -> dict[str, object]:
-    """One program's entry of the JSON document."""
-    paragraphs = [
-        {"name": p.name, **_where(lines_to_origin(p.line)), "hits": p.hits}
-        for p in points.paragraphs
-    ]
+    """One program's entry of the JSON document. With `unreachable`
+    (report.unreachable), every never-run point no test can reach carries
+    an `unreachable` reason and each section counts them: `covered` of
+    `total - unreachable` is the coverage of what tests can reach."""
+    paragraphs: list[dict[str, object]] = []
+    for p in points.paragraphs:
+        entry: dict[str, object] = {
+            "name": p.name,
+            **_where(lines_to_origin(p.line)),
+            "hits": p.hits,
+        }
+        reason = unreachable.paragraphs.get(p.name) if unreachable else None
+        if reason and not p.hits:
+            entry["unreachable"] = reason
+        paragraphs.append(entry)
     branches: list[dict[str, object]] = []
     measured_total = measured_covered = 0
     not_measurable = 0
+    unreachable_outcomes = 0
     for branch in points.branches:
+        never = (
+            unreachable.outcomes.get((branch.kind, branch.line), {})
+            if unreachable
+            else {}
+        )
+        outcomes: list[dict[str, object]] = []
+        for index, o in enumerate(branch.outcomes):
+            outcome: dict[str, object] = {
+                "label": o.label,
+                "hits": o.hits,
+                "covered": o.hits > 0,
+            }
+            if not o.hits and index in never:
+                outcome["unreachable"] = never[index]
+                if not branch.not_measurable:
+                    unreachable_outcomes += 1
+            outcomes.append(outcome)
         item: dict[str, object] = {
             "kind": branch.kind,
             **_where(lines_to_origin(branch.line)),
-            "outcomes": [
-                {"label": o.label, "hits": o.hits, "covered": o.hits > 0}
-                for o in branch.outcomes
-            ],
+            "outcomes": outcomes,
         }
         if branch.unattributed:
             item["unattributed"] = branch.unattributed
@@ -311,7 +341,14 @@ def program_report(
         branches.append(item)
     statements = sorted(points.statement_lines)
     uncovered = [line for line in statements if line not in points.executed_lines]
-    return {
+    uncovered_items: list[dict[str, object]] = []
+    for line in uncovered:
+        where = _where(lines_to_origin(line))
+        reason = unreachable.statements.get(line) if unreachable else None
+        if reason:
+            where["unreachable"] = reason
+        uncovered_items.append(where)
+    report: dict[str, object] = {
         "programId": points.program_id,
         "programFile": program_file,
         "paragraphs": {
@@ -328,9 +365,21 @@ def program_report(
         "statements": {
             "total": len(statements),
             "covered": len(statements) - len(uncovered),
-            "uncovered": [_where(lines_to_origin(line)) for line in uncovered],
+            "uncovered": uncovered_items,
         },
     }
+    if unreachable is not None:
+        report["paragraphs"]["unreachable"] = sum(  # type: ignore[index]
+            1 for p in paragraphs if "unreachable" in p
+        )
+        report["branches"]["unreachable"] = unreachable_outcomes  # type: ignore[index]
+        report["statements"]["unreachable"] = sum(  # type: ignore[index]
+            1 for s in uncovered_items if "unreachable" in s
+        )
+        report["unreachableScope"] = unreachable.scope
+        if unreachable.note:
+            report["unreachableNote"] = unreachable.note
+    return report
 
 
 def format_branch_coverage_json(
@@ -349,7 +398,13 @@ def _ratio(section: dict[str, object]) -> str:
     total = int(section["total"])  # type: ignore[call-overload]
     covered = int(section["covered"])  # type: ignore[call-overload]
     percent = 100.0 * covered / total if total else 100.0
-    return f"{covered}/{total} ({percent:.0f}%)"
+    text = f"{covered}/{total} ({percent:.0f}%)"
+    unreachable = int(section.get("unreachable") or 0)  # type: ignore[call-overload]
+    if unreachable:
+        reachable = total - unreachable
+        share = 100.0 * covered / reachable if reachable else 100.0
+        text += f" [{covered}/{reachable} reachable ({share:.0f}%)]"
+    return text
 
 
 def format_branch_coverage_console(programs: list[dict[str, object]]) -> str:
@@ -364,14 +419,18 @@ def format_branch_coverage_console(programs: list[dict[str, object]]) -> str:
         missed = [
             str(p["name"])
             for p in program["paragraphs"]["items"]  # type: ignore[index]
-            if not p["hits"]
+            if not p["hits"] and not p.get("unreachable")
         ]
         if missed:
             lines.append(f"  paragraphs never entered: {', '.join(missed)}")
         for branch in program["branches"]["items"]:  # type: ignore[index]
             if branch.get("notMeasurable"):
                 continue
-            gaps = [o["label"] for o in branch["outcomes"] if not o["covered"]]
+            gaps = [
+                o["label"]
+                for o in branch["outcomes"]
+                if not o["covered"] and not o.get("unreachable")
+            ]
             if gaps:
                 where = branch.get("line")
                 lines.append(

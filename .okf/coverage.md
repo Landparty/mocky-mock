@@ -197,3 +197,16 @@ remapped with `build_normalized_line_map` + `build_normalized_to_original_map`
 load-module suite are measured under their own program id. JSON version 1:
 `programs[]` with `paragraphs`, `branches`, `statements`. Design:
 [docs/2026-11-06-branch-coverage-design.md](../docs/2026-11-06-branch-coverage-design.md).
+
+**Unreachable points (2026-11-07).** `report/unreachable.classify(ast,
+points, suite)` (called by `_write_branch_coverage` for the program under
+test) asks cobol-parser's `InputDependenceAnalyzer` (guarded import: 3.7+)
+which decisions no input can change, then `report.unreachable(taken,
+executed_lines)` for the outcomes the run never took and everything behind
+them. `program_report(..., unreachable=)` adds `unreachable` reasons and
+counts and `unreachableScope` (`full`, or `static` with `unreachableNote`
+when a case starts elsewhere than the entry paragraph or mocks a
+paragraph / section: then only code nothing reaches is claimed). Setup
+`MOVE` targets are passed as `extra_inputs`. Tests:
+`tests/unit/test_unreachable.py`.
+

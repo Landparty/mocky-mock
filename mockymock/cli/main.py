@@ -1399,6 +1399,23 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if linked is None:
             return 1
         cut_text = linked
+    if (
+        bundle is not None
+        and getattr(args, "scenarios", None) == "all"
+        and not getattr(args, "real_files", False)
+        and not args.per_paragraph
+    ):
+        # A program that writes a file and reads it back (NIST's SQ / ST
+        # programs) checks its own records: one case with the file real
+        # runs those checks against what it wrote.
+        from mockymock.dsl.real_file_suite import plan_real_files, round_trip_case
+
+        try:
+            plans, _notes = plan_real_files(result.ast, surface)
+        except Exception:  # noqa: BLE001 - an extra case, never a failed generate
+            plans = []
+        cut_text = round_trip_case(cut_text, plans)
+        case_count = cut_text.count("TESTCASE ")
     if getattr(args, "real_files", False):
         from mockymock.dsl.real_file_suite import make_real_file_suite, plan_real_files
 
@@ -2227,9 +2244,12 @@ def _write_branch_coverage(
     source_location_map: dict[int, tuple[str, int]] | None,
     real_programs,
     real_sources: list[tuple[str, list[str]]],
+    suite=None,
 ) -> None:
     """`run --branch-coverage FILE`: measure every program of the run from
-    the whole trace and write the JSON document (report.branch_coverage)."""
+    the whole trace and write the JSON document (report.branch_coverage).
+    The program under test's points no test can reach are marked
+    (report.unreachable)."""
     from mockymock.report.branch_coverage import (
         format_branch_coverage_console,
         format_branch_coverage_json,
@@ -2291,9 +2311,14 @@ def _write_branch_coverage(
         )
     per_program = split_by_program(entries, [unit[0].program_id for unit in units])
     reports = []
-    for points, to_normalized, program_file, lookup in units:
+    for index, (points, to_normalized, program_file, lookup) in enumerate(units):
         measure(points, per_program.get(points.program_id, []), to_normalized)
-        reports.append(program_report(points, program_file, lookup))
+        unreachable = None
+        if index == 0 and suite is not None:
+            from mockymock.report.unreachable import classify
+
+            unreachable = classify(ast, points, suite)
+        reports.append(program_report(points, program_file, lookup, unreachable))
     text = format_branch_coverage_json(
         reports, str(cut_path), cases_run=len(suite_result.results)
     )
@@ -3088,6 +3113,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             checked.source_location_map,
             real_programs,
             real_sources,
+            suite,
         )
 
     if args.trace:

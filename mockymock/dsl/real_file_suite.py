@@ -37,7 +37,7 @@ _MOCK_RE = re.compile(
 _END_MOCK_RE = re.compile(r"^END-MOCK\.?$", re.IGNORECASE)
 _VERIFY_RE = re.compile(
     r"^(?:\*>\s*)?VERIFY\s+(?:OPEN|CLOSE|READ|WRITE|REWRITE|DELETE|START|UNLOCK)\s+"
-    r"(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)\s+WAS\b",
+    r"(?P<key>[A-Za-z0-9][A-Za-z0-9-]*)(?:\s+(?:INPUT|OUTPUT|I-O|EXTEND))?\s+WAS\b",
     re.IGNORECASE,
 )
 _STUB_RE = re.compile(r"^\*>\s*STUB EXPECT\s+(?P<name>[A-Za-z0-9][A-Za-z0-9-]*)\b")
@@ -62,6 +62,24 @@ class RealFilePlan:
     writes: bool
     specs: list[Any] = field(default_factory=list)  # byte-complete layout
     line_sequential: bool = False
+    #: Source lines of the first OPEN OUTPUT/EXTEND and the first OPEN
+    #: INPUT/I-O of the file (None: none), for `round_trip_case`.
+    first_create: int | None = None
+    first_open_read: int | None = None
+
+    @property
+    def round_trip(self) -> bool:
+        """The program creates the file before it first opens it to read,
+        so a real file with no data of its own gives the reads back what
+        the program wrote."""
+        return (
+            self.reads
+            and self.writes
+            and self.first_create is not None
+            and (
+                self.first_open_read is None or self.first_create < self.first_open_read
+            )
+        )
 
 
 def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[str]]:
@@ -119,6 +137,12 @@ def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[st
                 mode = (getattr(site, "open_modes", {}) or {}).get(file, "")
                 if mode in ("OUTPUT", "EXTEND", "I-O"):
                     plan.writes = True
+                line = getattr(site, "line", None)
+                if isinstance(line, int):
+                    if mode in ("OUTPUT", "EXTEND"):
+                        plan.first_create = min(plan.first_create or line, line)
+                    elif mode in ("INPUT", "I-O"):
+                        plan.first_open_read = min(plan.first_open_read or line, line)
                 if mode in ("INPUT", "I-O", "EXTEND"):
                     plan.reads = plan.reads or mode == "INPUT"
     return sorted(plans.values(), key=lambda p: p.file), notes
@@ -317,3 +341,68 @@ def make_real_file_suite(
     notes.append(f"real files: {real} ({len(files)} data file(s) written)")
     text = "\n".join(out).rstrip("\n") + "\n"
     return text, files, notes
+
+
+_EXPECT_RE = re.compile(r"^EXPECT\b", re.IGNORECASE)
+_CHARACTERIZATION_RE = re.compile(r"^\*>\s*CHARACTERIZATION\b", re.IGNORECASE)
+
+
+def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
+    """`cut_text` with one more TESTCASE: a copy of its first case where
+    every sequential file the program writes and then reads back is real
+    with no data of its own, so the program reads what it wrote instead of
+    what a mock returns. The scenario cases mock each READ, so the checks a
+    program makes on its own records (NIST's SQ / ST programs) only run
+    their passing side here. The copy's EXPECT lines go: they describe the
+    mocked records, and `run --record-expectations` records the copy's own.
+    `cut_text` comes back unchanged when no file qualifies."""
+    files = [plan for plan in plans if plan.round_trip]
+    if not files:
+        return cut_text
+    names = {name for plan in files for name in plan.names}
+    lines = cut_text.split("\n")
+    start = next(
+        (i for i, line in enumerate(lines) if _TESTCASE_RE.match(line.strip())),
+        None,
+    )
+    if start is None:
+        return cut_text
+    end = next(
+        (
+            i
+            for i in range(start + 1, len(lines))
+            if _TESTCASE_RE.match(lines[i].strip())
+        ),
+        len(lines),
+    )
+    body: list[str] = []
+    skipping = False
+    for line in lines[start + 1 : end]:
+        stripped = line.strip()
+        if skipping:
+            skipping = not _END_MOCK_RE.match(stripped)
+            continue
+        if (m := _MOCK_RE.match(stripped)) is not None and m.group(
+            "key"
+        ).upper() in names:
+            skipping = True
+            continue
+        if (m := _VERIFY_RE.match(stripped)) is not None and m.group(
+            "key"
+        ).upper() in names:
+            continue
+        if (m := _STUB_RE.match(stripped)) is not None and m.group(
+            "name"
+        ).upper() in names:
+            continue
+        if _EXPECT_RE.match(stripped) or _CHARACTERIZATION_RE.match(stripped):
+            continue
+        body.append(line)
+    while body and not body[-1].strip():
+        body.pop()
+    label = ", ".join(plan.file for plan in files)
+    case = [f'TESTCASE "round trip: {label} real"']
+    case += [f"    USE REAL FILE {plan.file}" for plan in files]
+    case += body
+    text = cut_text.rstrip("\n")
+    return text + "\n\n" + "\n".join(case) + "\n"
