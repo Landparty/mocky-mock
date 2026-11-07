@@ -766,7 +766,7 @@ Rules:
   GO TOs on to the tests, so its cases used to test that paragraph alone.
   A program that also PERFORMs its terminator's paragraph keeps the bare
   PERFORM. So does a suite `lint` refuses more cases of than of the same
-  scenarios with a bare PERFORM (`cli.main._main_line_or_bare`, a note on
+  scenarios with a bare PERFORM (`cli.commands.generate._main_line_or_bare`, a note on
   stderr): the longer range can reach statements no MOCK replaces (NIST
   IX217A's WRITE ... INVALID KEY with no END-WRITE). Identical check lines
   in a case are written once.
@@ -823,7 +823,7 @@ Rules:
   `_scaffold_placeholder` itself emits). `None` whenever `_directive_for`
   is. This is the one place `RefusalReason.suggested_fix`
   (`analysis/refusal/_gates.py`) and `generate --fill`
-  (`cli/main.py`'s `_fill_cut_file`) both get their fix text from, so a
+  (`cli/commands/generate.py`'s `_fill_cut_file`) both get their fix text from, so a
   refusal's suggestion and a fresh scaffold can never disagree about what
   a site's directive looks like. See
   docs/2026-09-15-actionable-refusals-and-fill-design.md.
@@ -1561,11 +1561,11 @@ uppercases `--placeholder CATEGORY:KEY`'s category but leaves the key
 case-sensitive), only has an effect with a bundle; without one every site
 already gets a placeholder body. `--rows N` doesn't touch `generator/`
 at all — it maps to `DataGeneratorOptions(rows=N)` on the
-`ProgramFixtureGenerator` construction in `cli/main.py` (`_cmd_generate`'s
+`ProgramFixtureGenerator` construction in `cli/commands/generate.py` (`_cmd_generate`'s
 `--with-data` branch, mirroring `_cmd_fixtures`), so by the time a bundle
 reaches `scaffold_cut` its row counts are already baked in exactly like
 `--fixtures FILE`'s are — hence `--rows` combined with `--fixtures` is a
-clean CLI-level rejection (source of truth: `mockymock/cli/main.py`, not
+clean CLI-level rejection (source of truth: `mockymock/cli/commands/generate.py`, not
 this module).
 
 **The downgrade** (`_bundle_directive_for`/`_bundle_directive_for_group`):

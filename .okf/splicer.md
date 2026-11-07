@@ -52,7 +52,7 @@ sqlca.transform_data_division_exec ──▶ runs on DATA DIVISION AFTER
 ```
 
 **Ordering correction (fixes audit finding 7.1 — this file previously said
-SQLCA ran "before any of the above"):** `mockymock/cli/main.py`'s `_cmd_run`
+SQLCA ran "before any of the above"):** `mockymock/cli/commands/run.py`'s `_cmd_run`
 calls `transform_data_division_exec` **after** `splice_program`, not before.
 The reason is line-number safety, not codegen convenience: every
 PROCEDURE DIVISION splice span in `splice_program` is computed from
@@ -1246,7 +1246,7 @@ full PICTURE clauses). Every `SourceLocation`-driven step downstream of
 `normalize_fixed_format` would misalign if this ran early like `linkage.py`
 does, so it never edits `lines` directly. Instead its output is merged into
 `driver.DriverArtifact.working_storage_lines` via `build_driver`'s new
-`extra_working_storage_lines` parameter, reaching `cli.main._insert_driver`
+`extra_working_storage_lines` parameter, reaching `cli._common._insert_driver`
 the same way the driver's own bookkeeping fields (`UT-CURRENT-CASE` etc.)
 already do -- the one insertion point already proven safe, no second splice
 mechanism needed. `splicer.cics_eib.reset_lines(plan)` is a single
@@ -1346,7 +1346,7 @@ statement) or a range or target it cannot place, it uses
 one active when it runs, and the GO TO stays inside that PERFORM's range:
 the driver PERFORMs `THRU UT-PROGRAM-END` wherever a case names the last
 paragraph (`build_driver(program_end=refusal.program_end_thru(...))`), and
-`cli.main._insert_end_of_program_trap` puts `UT-PROGRAM-END. EXIT.` right
+`cli._common._insert_end_of_program_trap` puts `UT-PROGRAM-END. EXIT.` right
 after the program's last paragraph, ahead of the `UT-END-OF-PROGRAM` trap.
 This is not Approach A: that jumped out of the program's own pending
 PERFORM; here none is pending. A statement one case needs as EXIT
@@ -1375,7 +1375,7 @@ driver then runs every case's PERFORM inside `CALL "MOCKYMOCK-RUN-CASE"`
 paragraph holding `ENTRY "MOCKYMOCK-RUN-CASE"`, an `EVALUATE UT-CURRENT-CASE`
 of the cases' PERFORMs and `GOBACK`; each `UT-TESTCASE-NNN` CALLs it in
 place of its PERFORM (`build_driver(call_frame=refusal.needs_call_frame(...))`),
-and `cli.main.mark_recursive` adds `IS RECURSIVE` to the PROGRAM-ID (a
+and `cli._common.mark_recursive` adds `IS RECURSIVE` to the PROGRAM-ID (a
 program may not CALL itself while it runs otherwise; an INITIAL or
 RECURSIVE one is left alone). The terminator becomes `MOVE "Y" TO
 UT-EARLY-EXIT` + `GOBACK` (`build_terminator_neutralization("RETURN")`),

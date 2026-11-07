@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 
-from mockymock.cli import main as cli
+from mockymock.cli.commands import run as cli
 
 
 def _report(cases: list[dict]) -> dict:

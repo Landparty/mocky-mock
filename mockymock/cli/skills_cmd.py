@@ -13,7 +13,7 @@ directory has no __init__.py of its own, so it rides along with
 mockymock.cli the same way mockymock/runtime/docker/ and
 mockymock/web/static/ ride along with their own parent packages. This
 module is the implementation behind `mockymock skills install`; kept
-separate from cli/main.py so that module's _cmd_skills_install can
+separate from cli/commands/skills.py so that module's _cmd_skills_install can
 defer-import it like every other subcommand's dependencies.
 """
 

@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
+import mockymock.cli.commands.init as init_mod
 import mockymock.cli.doctor as doctor_mod
-import mockymock.cli.main as main_mod
 from mockymock.cli.main import main
 from mockymock.runtime import status
 
@@ -35,7 +35,7 @@ def test_init_without_docker_scaffolds_but_does_not_attempt_run(
     out_cut = tmp_path / "o.cut"
 
     run_calls = []
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
 
     exit_code = main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)])
     out = capsys.readouterr().out
@@ -60,7 +60,7 @@ def test_init_with_docker_ready_scaffolds_and_records(tmp_path, capsys, monkeypa
         run_calls.append(args)
         return 0
 
-    monkeypatch.setattr(main_mod, "_cmd_run", fake_run)
+    monkeypatch.setattr(init_mod, "_cmd_run", fake_run)
 
     exit_code = main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)])
     out = capsys.readouterr().out
@@ -79,7 +79,7 @@ def test_init_propagates_run_failure_exit_code(tmp_path, monkeypatch, capsys):
         doctor_mod, "gather_full_status", lambda: _fake_ready_report(True)
     )
     out_cut = tmp_path / "o.cut"
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: 1)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: 1)
 
     exit_code = main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)])
     assert exit_code == 1
@@ -123,7 +123,7 @@ def test_init_prints_branch_verification_caveat_for_non_happy_scenarios(
     monkeypatch.setattr(
         doctor_mod, "gather_full_status", lambda: _fake_ready_report(False)
     )
-    monkeypatch.setattr(main_mod, "_cmd_generate", lambda args: 0)
+    monkeypatch.setattr(init_mod, "_cmd_generate", lambda args: 0)
     out_cut = tmp_path / "o.cut"
     out_cut.parent.mkdir(parents=True, exist_ok=True)
 
@@ -147,9 +147,9 @@ def test_init_does_not_print_caveat_for_happy_path(tmp_path, monkeypatch, capsys
 
 
 def test_init_stops_before_run_when_generate_fails(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(main_mod, "_cmd_generate", lambda args: 1)
+    monkeypatch.setattr(init_mod, "_cmd_generate", lambda args: 1)
     run_calls = []
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
     monkeypatch.setattr(
         doctor_mod, "gather_full_status", lambda: _fake_ready_report(True)
     )
@@ -196,7 +196,7 @@ def test_init_records_when_only_the_toolchain_image_is_missing(
     )
     monkeypatch.setattr(doctor_mod, "gather_full_status", lambda: report)
     run_calls = []
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
     out_cut = tmp_path / "o.cut"
 
     assert main(["init", str(_ORDRPROC_CBL), "-o", str(out_cut)]) == 0
@@ -223,7 +223,7 @@ def test_init_without_the_docker_daemon_still_skips_recording(
     )
     monkeypatch.setattr(doctor_mod, "gather_full_status", lambda: report)
     run_calls = []
-    monkeypatch.setattr(main_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
+    monkeypatch.setattr(init_mod, "_cmd_run", lambda args: run_calls.append(args) or 0)
 
     assert main(["init", str(_ORDRPROC_CBL), "-o", str(tmp_path / "o.cut")]) == 0
     assert run_calls == []

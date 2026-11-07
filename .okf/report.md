@@ -156,7 +156,7 @@ reached `STOP RUN` does) do they fall back to the
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
 discarded (audit 2026-07-07, findings 4.2/5.1). A nonzero exit says nothing about *why* the case was cut short, so the
-driver also catches the commonest cause itself: `cli.main._insert_driver`
+driver also catches the commonest cause itself: `cli._common._insert_driver`
 appends `driver.END_OF_PROGRAM_TRAP` (`UT-END-OF-PROGRAM SECTION`) after
 the program's last paragraph (before its `END PROGRAM`, closing an
 unterminated last sentence with a lone period), which nothing PERFORMs and
