@@ -1761,12 +1761,24 @@ SEQUENTIAL), `REAL_FILE_ALSO_MOCKED`, `REAL_FILE_MIXED_STATEMENT`,
 `FILE_CHECK_NOT_REAL`. `generate --real-files` (`dsl/real_file_suite.py`)
 rewrites a generated suite this way. `generate --scenarios all` (without
 `--real-files`) also appends a **round-trip case** (`round_trip_case`,
-2026-11-07): a copy of the first case where every sequential file the
-program OPENs OUTPUT / EXTEND before it first OPENs it INPUT / I-O
+2026-11-07): a copy of the first case where every file the program OPENs
+OUTPUT / EXTEND before it first OPENs it INPUT / I-O
 (`RealFilePlan.round_trip`) is `USE REAL FILE` with no data, its mocks,
 VERIFYs and STUB EXPECTs dropped, and the copy's EXPECTs left for
 `run --record-expectations`: the program reads back what it wrote, so its
-checks on its own records run (NIST SQ programs). `rewrite_assigns` reads
-only columns 8-72 and takes an `ASSIGN TO` name from the next line.
+checks on its own records run (NIST SQ / IX / RL programs). Indexed and
+relative files qualify here (`plan_real_files(self_built=True)`,
+`SELF_BUILT_ORGANIZATIONS`): `expand_real_files` lets them be real only
+with no FROM and no EXPECT / SAVE FILE. Files one statement names
+(`OPEN OUTPUT A B`, `RealFilePlan.partners`) are real together or not at
+all. A site only pass-through directives match is not spliced (the
+splicer's pass 1 and the nesting gate skip it), so a real file's WRITE
+nested in an IF without END-WRITE runs as written. It also appends a
+**real-calls case** (`real_calls_case`): when a statically CALLed program's
+source sits next to the program (`<NAME>.cbl` / `.cob` ...,
+`_sibling_subprograms`, linkable by `prepare_real_program`), a copy of the
+first case with `USE REAL CALL "<NAME>" FROM "<path>"` in place of its
+mocks (skipped under `--real`). `rewrite_assigns` reads only columns 8-72
+and takes an `ASSIGN TO` name from the next line.
 Design:
 [docs/2026-11-06-real-files-and-job-runs-design.md](../docs/2026-11-06-real-files-and-job-runs-design.md).

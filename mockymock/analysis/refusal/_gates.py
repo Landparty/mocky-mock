@@ -264,6 +264,12 @@ _MULTI_FILE_CATEGORIES = frozenset(
 )
 
 
+def _all_pass_through(matches: list[MockDirective]) -> bool:
+    """Every directive is a USE REAL FILE pass-through: the statement runs
+    as written, nothing is spliced, so its nesting does not matter."""
+    return bool(matches) and all(d.real_file is not None for d in matches)
+
+
 def per_file_matches(directives: list[MockDirective], site: BoundarySite) -> bool:
     """Whether several directives matching one site each answer a
     different file of a multi-file OPEN/CLOSE (issue #348), or a different
@@ -1874,7 +1880,7 @@ def check_test_case(
                     ),
                 )
             )
-        elif site.nested and site.span is None:
+        elif site.nested and site.span is None and not _all_pass_through(matches):
             reasons.append(
                 RefusalReason(
                     code="UNSUPPORTED_NESTED_MOCK_TARGET",
@@ -1955,7 +1961,7 @@ def check_test_case(
                     ),
                 )
             )
-        elif site.nested and site.span is None:
+        elif site.nested and site.span is None and not _all_pass_through(matches):
             reasons.append(
                 RefusalReason(
                     code="UNSUPPORTED_NESTED_MOCK_TARGET",

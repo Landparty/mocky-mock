@@ -25,12 +25,12 @@
     "verdict": "green"
   },
   "IX106A": {
-    "cases": 48,
+    "cases": 49,
     "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "IX301M": {
-    "cases": 2,
+    "cases": 3,
     "perform": "PERFORM IX301M-CONTROL",
     "verdict": "green"
   },
@@ -55,12 +55,12 @@
     "verdict": "green"
   },
   "OBSQ1A": {
-    "cases": 1,
+    "cases": 2,
     "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
   "RL101A": {
-    "cases": 3,
+    "cases": 4,
     "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },
@@ -80,7 +80,7 @@
     "verdict": "green"
   },
   "SQ107A": {
-    "cases": 8,
+    "cases": 9,
     "perform": "PERFORM OPEN-FILES THRU CCVS-999999",
     "verdict": "green"
   },

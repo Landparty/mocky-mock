@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from collections import Counter
@@ -173,6 +174,30 @@ def expand(source: Path, target: Path) -> int:
     return count
 
 
+_CALL_RE = re.compile(r"""\bCALL\s+["']([A-Z0-9-]+)["']""", re.IGNORECASE)
+
+
+def called_programs(nist: Path, name: str) -> list[str]:
+    """The NIST programs `name` CALLs by literal, transitively."""
+    seen: list[str] = []
+    todo = [name]
+    while todo:
+        text = (nist / f"{todo.pop()}.CBL").read_text(errors="replace")
+        code = "\n".join(
+            line[6:72] for line in text.split("\n") if line[6:7] not in ("*", "/")
+        )
+        for callee in _CALL_RE.findall(code):
+            callee = callee.upper()
+            if (
+                callee != name
+                and callee not in seen
+                and (nist / f"{callee}.CBL").is_file()
+            ):
+                seen.append(callee)
+                todo.append(callee)
+    return seen
+
+
 def write_pack(
     folder: Path, nist: Path, name: str, record: bool, cut_text: str | None
 ) -> Path:
@@ -184,6 +209,10 @@ def write_pack(
     for copybook in nist.glob("*.CPY"):
         shutil.copy(copybook, folder / "copybooks")
     shutil.copy(nist / f"{name}.CBL", folder / "src")
+    # The NIST subprograms it CALLs, as a load module's pack carries them:
+    # generate then adds a case running them for real.
+    for callee in called_programs(nist, name):
+        shutil.copy(nist / f"{callee}.CBL", folder / "src")
     (folder / "mockymock.toml").write_text(TOML)
     if cut_text is not None:
         (folder / "tests" / f"{name}.cut").write_text(cut_text)

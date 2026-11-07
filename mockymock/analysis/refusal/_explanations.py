@@ -50,10 +50,11 @@ REFUSAL_EXPLANATIONS: dict[str, str] = {
         "record)."
     ),
     "REAL_FILE_ORGANIZATION": (
-        "USE REAL FILE works on SEQUENTIAL and LINE SEQUENTIAL files only. "
-        "Indexed (VSAM KSDS) and relative files stay mocked: GnuCOBOL's "
-        "indexed files are not VSAM images, so a real one would not behave "
-        "as the mainframe file does."
+        "USE REAL FILE stages data into and compares SEQUENTIAL and LINE "
+        "SEQUENTIAL files only. An indexed (VSAM KSDS) or relative file can "
+        "be real only when the program builds it itself: no FROM data and "
+        "no EXPECT / SAVE FILE, since GnuCOBOL's indexed and relative files "
+        "are not VSAM images. A SORT work file cannot be real."
     ),
     "REAL_FILE_ALSO_MOCKED": (
         "A file is both a USE REAL FILE and the key of a MOCK in the same "
