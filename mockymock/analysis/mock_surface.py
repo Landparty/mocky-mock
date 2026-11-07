@@ -113,12 +113,7 @@ from mockymock.analysis.sql_whenever import (
 from mockymock.dsl.model import MockCategory
 from mockymock.splicer.io_copy import DataLayout, data_layout
 
-# Verb-coverage node classes (cobol-parser's 2026-09-02 statement work),
-# as isinstance-ready tuples so the classifier below can match them.
-_INVOKE_TYPES: tuple[type, ...] = (InvokeStatement,)
-_GENERATE_TYPES: tuple[type, ...] = (GenerateStatement,)
-_XML_JSON_TYPES: tuple[type, ...] = (XmlJsonStatement,)
-_CHAIN_TYPES: tuple[type, ...] = (ChainStatement,)
+# The Communication Module verbs, matched as one family by the classifier.
 _COMMUNICATION_TYPES: tuple[type, ...] = (
     SendStatement,
     ReceiveStatement,
@@ -126,8 +121,6 @@ _COMMUNICATION_TYPES: tuple[type, ...] = (
     DisableStatement,
     PurgeStatement,
 )
-_INITIATE_TYPES: tuple[type, ...] = (InitiateStatement,)
-_TERMINATE_TYPES: tuple[type, ...] = (TerminateStatement,)
 
 # Statement classes verified to touch nothing outside the program (data
 # movement, arithmetic, control flow, console DISPLAY, compiler-directing
@@ -607,10 +600,10 @@ _BOUNDARY_STATEMENT_TYPES = (
     # are refused outright, but the sticky flag still describes them
     # correctly: nothing inside could ever be spliced independently.
     *_COMMUNICATION_TYPES,
-    *_INVOKE_TYPES,
-    *_INITIATE_TYPES,
-    *_GENERATE_TYPES,
-    *_TERMINATE_TYPES,
+    InvokeStatement,
+    InitiateStatement,
+    GenerateStatement,
+    TerminateStatement,
 )
 
 # ACCEPT sources that never read the console: system registers and runtime
@@ -888,7 +881,7 @@ def _classify_statement(
             add_site(None, "STOP literal", keys=(operand,) if operand else ())
         return
 
-    if isinstance(statement, _INVOKE_TYPES):
+    if isinstance(statement, InvokeStatement):
         # INVOKE object-ref "method": an external (object-oriented) call
         # mockymock has no mock category for. Detected, never spliced.
         keys = tuple(
@@ -902,7 +895,7 @@ def _classify_statement(
         add_site(None, "INVOKE", keys=keys)
         return
 
-    if isinstance(statement, _CHAIN_TYPES):
+    if isinstance(statement, ChainStatement):
         # CHAIN "PROG" USING ...: a CALL that never returns (Micro Focus).
         name = getattr(statement, "program", None) or ""
         add_site(None, "CHAIN", keys=(name,) if name else ())
@@ -915,12 +908,12 @@ def _classify_statement(
         add_site(None, "communication", keys=(cd_name,) if cd_name else ())
         return
 
-    if isinstance(statement, (*_INITIATE_TYPES, *_TERMINATE_TYPES)):
+    if isinstance(statement, (InitiateStatement, TerminateStatement)):
         # INITIATE/TERMINATE report-name ...: one site, one key per report
         # (like a multi-file OPEN/CLOSE).
         category = (
             MockCategory.INITIATE
-            if isinstance(statement, _INITIATE_TYPES)
+            if isinstance(statement, InitiateStatement)
             else MockCategory.TERMINATE
         )
         surface.file_io_paragraphs.add(paragraph_name)
@@ -929,7 +922,7 @@ def _classify_statement(
         add_site(category, category.value, keys=keys)
         return
 
-    if isinstance(statement, _GENERATE_TYPES):
+    if isinstance(statement, GenerateStatement):
         # GENERATE report-or-group-name: writes the detail group (or the
         # whole report's summary) through the report file.
         surface.file_io_paragraphs.add(paragraph_name)
@@ -937,7 +930,7 @@ def _classify_statement(
         add_site(MockCategory.GENERATE, "GENERATE", keys=(name,) if name else ())
         return
 
-    if isinstance(statement, _XML_JSON_TYPES):
+    if isinstance(statement, XmlJsonStatement):
         # XML/JSON GENERATE/PARSE act on WORKING-STORAGE only -- not a
         # boundary. Two fail-closed guards for older cobol-parser releases
         # that kept the whole clause region as text: an exception-handler

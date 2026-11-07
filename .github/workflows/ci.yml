@@ -21,10 +21,6 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 
-env:
-  # Keep in sync with the floor in pyproject.toml [project.dependencies].
-  COBOL_PARSER_FLOOR: "3.1.1"
-
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -81,13 +77,19 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
-      - name: Install (unlocked, newest cobol-parser in range)
+      # One resolve per leg, so everything else is resolved against the
+      # cobol-parser under test. The floor is read from pyproject.toml, the
+      # single place it is declared.
+      - name: Install (unlocked)
         run: |
           uv venv
-          uv pip install -e ".[dev]" --upgrade
-      - name: Pin the floor
-        if: matrix.end == 'floor'
-        run: uv pip install "cobol-parser==${COBOL_PARSER_FLOOR}"
+          if [ "${{ matrix.end }}" = floor ]; then
+            floor=$(uv run --no-project python -c 'import re, tomllib; deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]; print(next(re.search(r">=\s*([\w.]+)", d).group(1) for d in deps if d.startswith("cobol-parser")))')
+            echo "cobol-parser floor: $floor"
+            uv pip install -e ".[dev]" "cobol-parser==$floor"
+          else
+            uv pip install -e ".[dev]" --upgrade
+          fi
       - name: Unit tests
         run: uv run --no-sync pytest tests/unit
 

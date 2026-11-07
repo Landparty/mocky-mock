@@ -58,6 +58,7 @@ from cobolparser.models.statements.misc import (
     GobackStatement,
     MergeStatement,
     SortStatement,
+    XmlJsonStatement,
 )
 from cobolparser.parsers.statements.ibm_exec_statements import ExecCicsStatement
 
@@ -66,7 +67,6 @@ from mockymock.analysis.declaratives import use_procedures
 from mockymock.analysis.mock_surface import (
     _BOUNDARY_STATEMENT_TYPES,
     _FILE_OP_SPECS,
-    _XML_JSON_TYPES,
     XML_PROCESSING_PROCEDURE_RE,
     _all_paragraphs,
     _nested_statement_lists,
@@ -181,11 +181,9 @@ def _find_xml_parse_statements(statements: list) -> list:
     range) once per XML event -- an implicit PERFORM edge with no
     PerformStatement behind it, exactly like a SORT/MERGE's INPUT/OUTPUT
     PROCEDURE, and modeled the same way in `_reachable_paragraphs`."""
-    if not _XML_JSON_TYPES:
-        return []
     return [
         statement
-        for statement in _find_statements_of_type(statements, _XML_JSON_TYPES)
+        for statement in _find_statements_of_type(statements, XmlJsonStatement)
         if getattr(statement, "action", None) == "PARSE"
     ]
 

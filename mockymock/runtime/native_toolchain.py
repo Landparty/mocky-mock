@@ -74,8 +74,9 @@ HOME_ENV = "MOCKYMOCK_GNUCOBOL_HOME"
 CONTAINER = "native"
 WORK_ROOT = Path.home() / ".mockymock" / "work"
 
-_WINDOWS = sys.platform == "win32"
-_EXE = ".exe" if _WINDOWS else ""
+_EXE = ".exe" if sys.platform == "win32" else ""
+#: Seconds `kill_tree` gives `taskkill /T` before killing the process alone.
+_TASKKILL_TIMEOUT = 10
 
 # Same flags as the container compile; see docker_toolchain.compile_source.
 _COBC_DIALECT_FLAGS: tuple[str, ...] = ("-free", "-std=mvs")
@@ -137,12 +138,12 @@ def _env(home: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["PATH"] = (
         _path_prepend("PATH", bin_dir, lib_dir)
-        if _WINDOWS
+        if sys.platform == "win32"
         else (_path_prepend("PATH", bin_dir))
     )
     if sys.platform == "darwin":
         env["DYLD_LIBRARY_PATH"] = _path_prepend("DYLD_LIBRARY_PATH", lib_dir)
-    elif not _WINDOWS:
+    elif sys.platform != "win32":
         env["LD_LIBRARY_PATH"] = _path_prepend("LD_LIBRARY_PATH", lib_dir)
     defaults = {
         "COB_CONFIG_DIR": str(_tree_dir(home, "config")),
@@ -242,7 +243,7 @@ def _run_capped(
     its output read through `_CappedStdout`. Returns (exit code, stdout,
     stderr, stdout bytes not kept)."""
     kwargs: dict = {}
-    if _WINDOWS:
+    if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
@@ -314,7 +315,7 @@ def _run(
     timeout, so a test binary that forked (`CALL "SYSTEM"`) leaves no
     orphan behind -- the job `timeout -k` does inside the container."""
     kwargs: dict = {}
-    if _WINDOWS:
+    if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
@@ -381,11 +382,21 @@ def kill_tree(proc: subprocess.Popen) -> None:
     (where a plain kill leaves grandchildren running), its process group
     elsewhere (the caller started it with `start_new_session`)."""
     if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+                timeout=_TASKKILL_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        # Whatever taskkill managed (missing, denied, stuck), the process
+        # itself must die: callers wait on it without a timeout.
+        try:
+            proc.kill()
+        except OSError:
+            pass
         return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -419,7 +430,7 @@ def _cobc_info(home: Path) -> dict[str, str]:
 def _c_compiler_hint() -> str:
     if sys.platform == "darwin":
         return "run `xcode-select --install` for Apple's command line tools"
-    if _WINDOWS:
+    if sys.platform == "win32":
         return "the GnuCOBOL tree should carry MinGW's gcc in its bin directory"
     return (
         "install gcc (`sudo apt install gcc` / `sudo dnf install gcc` / "
@@ -535,7 +546,7 @@ def compile_source(
     # cobc's intermediate C goes to TMPDIR; keep it in the sandbox so
     # nothing a run writes outlives the sandbox's cleanup.
     env = _env(home, {"TMPDIR": str(source_path.parent)})
-    if _WINDOWS:
+    if sys.platform == "win32":
         env["TEMP"] = env["TMP"] = str(source_path.parent)
     try:
         result = _run(cmd, cwd=source_path.parent, env=env, timeout=600, text=True)

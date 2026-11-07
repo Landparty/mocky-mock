@@ -425,7 +425,7 @@ code change. Triggers: push/PR to `main`, nightly `schedule` (`17 6 * * *`),
 |---|---|---|
 | `lint` | push/PR | `ruff check .`, `ruff format --check .` (ruff replaced black), `mypy mockymock/` |
 | `unit` | push/PR | `pytest tests/unit` on ubuntu x Python 3.11-3.14, plus windows-latest and macos-latest on 3.13 |
-| `cobol-parser-range` | nightly / dispatch | `pytest tests/unit` unlocked, against the newest published cobol-parser in range and against `COBOL_PARSER_FLOOR` |
+| `cobol-parser-range` | nightly / dispatch | `pytest tests/unit` unlocked, against the newest published cobol-parser in range and against the floor read from `pyproject.toml` |
 | `integration` | nightly / dispatch | `pytest tests/integration --no-cov`, the Docker/GnuCOBOL tier on ubuntu-latest |
 
 ## `lint`
@@ -448,9 +448,11 @@ error surfacing in place of an HTTP status, a path separator in a generated
 
 `pyproject.toml` declares `cobol-parser>=X,<4`; the lockfile pins one
 version, but `pip install mockymock` resolves anything in range. This job
-installs unlocked (`uv pip install -e ".[dev]" --upgrade`) and runs the unit
-tier at the newest release, then again with `cobol-parser==$COBOL_PARSER_FLOOR`.
-Keep `COBOL_PARSER_FLOOR` equal to the floor in `pyproject.toml`. Red at
+installs unlocked and runs the unit tier twice: once with the newest
+release (`uv pip install -e ".[dev]" --upgrade`), once with the floor, which
+it reads from `pyproject.toml` and installs in the same resolve as
+everything else (`uv pip install -e ".[dev]" "cobol-parser==<floor>"`), so
+no copy of the floor can drift. Red at
 `newest` means a new release broke us (fix, or cap); red at `floor` means
 code now needs a newer release (raise the floor, never add a shim).
 

@@ -382,12 +382,12 @@ def cobol_literal(value_clause: str) -> str:
     from the real cause.
 
     Fixed upstream (cobol-parser, `_literals.quote_literal`); normalizing
-    here is kept as defence in depth, and is idempotent against the fixed parser: a run of quotes is only ever grown
-    to the next even length, so an already-doubled pair is left alone. The
-    one shape this cannot recover is a literal whose real content is two
-    adjacent quotes coming from an unfixed parser -- indistinguishable from
-    one correctly-escaped quote, and resolved in favour of the well-formed
-    reading.
+    here is kept as defence in depth, and is idempotent against the fixed
+    parser: a run of quotes is only ever grown to the next even length, so
+    an already-doubled pair is left alone. The one shape this cannot
+    recover is a literal whose real content is two adjacent quotes coming
+    from an unfixed parser -- indistinguishable from one correctly-escaped
+    quote, and resolved in favour of the well-formed reading.
 
     Non-literal clauses (numerics, figurative constants, identifiers) carry
     no delimiters and are returned untouched.
