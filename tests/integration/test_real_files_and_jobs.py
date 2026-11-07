@@ -117,3 +117,92 @@ def test_job_bypasses_steps_on_the_real_return_code(tmp_path: Path):
     assert statuses["EXTRACT"] == ("ran", 4)
     assert statuses["SORTHI"][0] == statuses["REPORT"][0] == "bypassed"
     assert document["datasets"][0]["status"] == "missing"
+
+
+IXPROG = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IXPROG.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IX-FILE ASSIGN TO IXDD
+               ORGANIZATION IS INDEXED
+               ACCESS MODE IS SEQUENTIAL
+               RECORD KEY IS IX-KEY.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IX-FILE.
+       01  IX-REC.
+           05  IX-KEY  PIC 9(4).
+           05  IX-DATA PIC X(10).
+       WORKING-STORAGE SECTION.
+       01  WS-RESULT PIC X(4) VALUE SPACES.
+       01  WS-SUM PIC 9(4) VALUE ZERO.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN OUTPUT IX-FILE
+           MOVE 1 TO IX-KEY
+           MOVE "ONE" TO IX-DATA
+           WRITE IX-REC
+           MOVE 2 TO IX-KEY
+           MOVE "TWO" TO IX-DATA
+           WRITE IX-REC
+           CLOSE IX-FILE
+           OPEN INPUT IX-FILE
+           READ IX-FILE
+           ADD IX-KEY TO WS-SUM
+           READ IX-FILE
+           ADD IX-KEY TO WS-SUM
+           CLOSE IX-FILE
+           IF WS-SUM = 3
+               MOVE "PASS" TO WS-RESULT
+           ELSE
+               MOVE "FAIL" TO WS-RESULT
+           END-IF
+           CALL "IXSUB" USING WS-RESULT
+           STOP RUN.
+"""
+
+IXSUB = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IXSUB.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01  LK-RESULT PIC X(4).
+       PROCEDURE DIVISION USING LK-RESULT.
+       MAIN-PARA.
+           IF LK-RESULT = "PASS"
+               MOVE "DONE" TO LK-RESULT
+           END-IF
+           GOBACK.
+"""
+
+
+@requires_docker
+def test_round_trip_indexed_file_and_real_calls_run(tmp_path: Path):
+    program = tmp_path / "IXPROG.cbl"
+    program.write_text(IXPROG)
+    (tmp_path / "IXSUB.cbl").write_text(IXSUB)
+    cut = tmp_path / "IXPROG.cut"
+    assert main(["generate", str(program), "-o", str(cut), "--scenarios", "all"]) == 0
+    text = cut.read_text()
+    assert 'TESTCASE "round trip: IX-FILE real"' in text
+    assert "    USE REAL FILE IX-FILE\n" in text
+    assert 'TESTCASE "real calls: IXSUB"' in text
+    assert 'USE REAL CALL "IXSUB" FROM "IXSUB.cbl"' in text
+    assert main(["run", str(program), "--cut", str(cut), "--record-expectations"]) == 0
+    coverage = tmp_path / "coverage.json"
+    assert (
+        main(
+            ["run", str(program), "--cut", str(cut), "--branch-coverage", str(coverage)]
+        )
+        == 0
+    )
+    (report,) = [
+        p
+        for p in json.loads(coverage.read_text())["programs"]
+        if p["programId"] == "IXPROG"
+    ]
+    # The round trip reads back what the program wrote: WS-SUM = 3 is taken.
+    (branch,) = report["branches"]["items"]
+    assert branch["outcomes"][0]["covered"]

@@ -38,6 +38,12 @@ REAL_ORGANIZATIONS = frozenset(
     {"SEQUENTIAL", "LINE SEQUENTIAL", "LINE-SEQUENTIAL", "RECORD SEQUENTIAL"}
 )
 
+#: Organizations a real file may have only when the program builds it
+#: itself: no `FROM` data and no EXPECT / SAVE FILE (GnuCOBOL's indexed and
+#: relative files are its own format, not VSAM images, so there is nothing
+#: portable to stage or compare), as in `generate`'s round-trip case.
+SELF_BUILT_ORGANIZATIONS = frozenset({"INDEXED", "RELATIVE"})
+
 _ASSIGN_RE = re.compile(
     r"""\bASSIGN(\s+TO)?\s+("[^"]*"|'[^']*'|[A-Za-z0-9][A-Za-z0-9-]*)""",
     re.IGNORECASE,

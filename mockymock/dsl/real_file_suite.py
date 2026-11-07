@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from mockymock.dsl.model import FILE_OP_CATEGORIES, MockCategory
-from mockymock.splicer.real_files import REAL_ORGANIZATIONS
+from mockymock.splicer.real_files import REAL_ORGANIZATIONS, SELF_BUILT_ORGANIZATIONS
 
 _TESTCASE_RE = re.compile(r'^TESTCASE\s+"(?P<name>[^"]*)"')
 _MOCK_RE = re.compile(
@@ -85,9 +85,13 @@ class RealFilePlan:
         )
 
 
-def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[str]]:
+def plan_real_files(
+    ast: Any, surface: Any, self_built: bool = False
+) -> tuple[list[RealFilePlan], list[str]]:
     """(the program's files that can be real, notes on the ones that stay
-    mocked)."""
+    mocked). With `self_built`, indexed and relative files count too: they
+    can be real only with no data staged or compared (the round-trip
+    case)."""
     from cobolparser.generators.data.layout import flatten_record
     from cobolparser.generators.data.options import DataGeneratorOptions
     from cobolparser.generators.data.program_layout import ProgramLayoutIndex
@@ -113,7 +117,9 @@ def plan_real_files(ast: Any, surface: Any) -> tuple[list[RealFilePlan], list[st
             ).upper()
             if facts is None or facts.record_type == "SD":
                 continue
-            if organization not in REAL_ORGANIZATIONS:
+            if organization not in REAL_ORGANIZATIONS and not (
+                self_built and organization in SELF_BUILT_ORGANIZATIONS
+            ):
                 note = f"{file} stays mocked: {organization} files cannot be real"
                 if note not in notes:
                     notes.append(note)
@@ -380,19 +386,18 @@ _EXPECT_RE = re.compile(r"^EXPECT\b", re.IGNORECASE)
 _CHARACTERIZATION_RE = re.compile(r"^\*>\s*CHARACTERIZATION\b", re.IGNORECASE)
 
 
-def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
-    """`cut_text` with one more TESTCASE: a copy of its first case where
-    every sequential file the program writes and then reads back is real
-    with no data of its own, so the program reads what it wrote instead of
-    what a mock returns. The scenario cases mock each READ, so the checks a
-    program makes on its own records (NIST's SQ / ST programs) only run
-    their passing side here. The copy's EXPECT lines go: they describe the
-    mocked records, and `run --record-expectations` records the copy's own.
-    `cut_text` comes back unchanged when no file qualifies."""
-    files = _round_trip_files(plans)
-    if not files:
-        return cut_text
-    names = {name for plan in files for name in plan.names}
+def _copy_first_case(
+    cut_text: str,
+    title: str,
+    uses: list[str],
+    drop: Any,
+    extra_mocks: list[str] | None = None,
+) -> str:
+    """`cut_text` with a copy of its first TESTCASE appended under `title`,
+    `uses` lines first. `drop(category, key)` names the MOCK blocks, VERIFY
+    and STUB EXPECT lines to leave out (STUB EXPECT has category None); the
+    copy's EXPECT lines go too, for `run --record-expectations` to record
+    the copy's own."""
     lines = cut_text.split("\n")
     start = next(
         (i for i, line in enumerate(lines) if _TESTCASE_RE.match(line.strip())),
@@ -415,27 +420,110 @@ def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
         if skipping:
             skipping = not _END_MOCK_RE.match(stripped)
             continue
-        if (m := _MOCK_RE.match(stripped)) is not None and m.group(
-            "key"
-        ).upper() in names:
+        if (m := _ANY_MOCK_RE.match(stripped)) is not None and drop(
+            m.group("cat").upper(), _unquote(m.group("key")).upper()
+        ):
             skipping = True
             continue
-        if (m := _VERIFY_RE.match(stripped)) is not None and m.group(
-            "key"
-        ).upper() in names:
+        if (m := _ANY_VERIFY_RE.match(stripped)) is not None and drop(
+            m.group("cat").upper(), _unquote(m.group("key")).upper()
+        ):
             continue
-        if (m := _STUB_RE.match(stripped)) is not None and m.group(
-            "name"
-        ).upper() in names:
+        if (m := _STUB_RE.match(stripped)) is not None and drop(
+            None, m.group("name").upper()
+        ):
             continue
         if _EXPECT_RE.match(stripped) or _CHARACTERIZATION_RE.match(stripped):
             continue
         body.append(line)
     while body and not body[-1].strip():
         body.pop()
+    headers = {
+        line.strip().upper() for line in body if _ANY_MOCK_RE.match(line.strip())
+    }
+    extra: list[str] = []
+    for block in extra_mocks or []:
+        block_lines = block.strip("\n").split("\n")
+        header = block_lines[0].strip().upper()
+        if header in headers:
+            continue  # the copied case already answers that key
+        headers.add(header)
+        extra += block_lines
+    case = [f'TESTCASE "{title}"', *uses, *extra, *body]
+    return cut_text.rstrip("\n") + "\n\n" + "\n".join(case) + "\n"
+
+
+_ANY_MOCK_RE = re.compile(
+    r"""^MOCK\s+(?P<cat>[A-Z-]+)\s+(?P<key>"[^"]*"|'[^']*'|[A-Za-z0-9][A-Za-z0-9-]*)""",
+    re.IGNORECASE,
+)
+_ANY_VERIFY_RE = re.compile(
+    r"""^(?:\*>\s*)?VERIFY\s+(?P<cat>[A-Z-]+)\s+"""
+    r"""(?P<key>"[^"]*"|'[^']*'|[A-Za-z0-9][A-Za-z0-9-]*)""",
+    re.IGNORECASE,
+)
+
+
+def _unquote(key: str) -> str:
+    return key[1:-1] if len(key) >= 2 and key[0] in "\"'" else key
+
+
+_FILE_CATEGORIES = {
+    "OPEN",
+    "CLOSE",
+    "READ",
+    "WRITE",
+    "REWRITE",
+    "DELETE",
+    "START",
+    "UNLOCK",
+}
+
+
+def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
+    """`cut_text` with one more TESTCASE: a copy of its first case where
+    every file the program writes and then reads back (sequential, or
+    indexed / relative since the program builds them) is real with no data
+    of its own, so the program reads what it wrote instead of what a mock
+    returns. The scenario cases mock each READ, so the checks a program
+    makes on its own records (NIST's SQ / IX / RL programs) only run their
+    passing side here. `cut_text` comes back unchanged when no file
+    qualifies."""
+    files = _round_trip_files(plans)
+    if not files:
+        return cut_text
+    names = {name for plan in files for name in plan.names}
     label = ", ".join(plan.file for plan in files)
-    case = [f'TESTCASE "round trip: {label} real"']
-    case += [f"    USE REAL FILE {plan.file}" for plan in files]
-    case += body
-    text = cut_text.rstrip("\n")
-    return text + "\n\n" + "\n".join(case) + "\n"
+    return _copy_first_case(
+        cut_text,
+        f"round trip: {label} real",
+        [f"    USE REAL FILE {plan.file}" for plan in files],
+        lambda cat, key: (cat is None or cat in _FILE_CATEGORIES) and key in names,
+    )
+
+
+def real_calls_case(
+    cut_text: str, calls: dict[str, str], callee_mocks: list[str] | None = None
+) -> str:
+    """`cut_text` with one more TESTCASE: a copy of its first case where
+    each statically CALLed program in `calls` (name -> source path relative
+    to the `.cut`) runs for real (`USE REAL CALL`) instead of its mock, so
+    the checks a program makes on what its subprograms return (NIST's IC
+    programs) run their passing side. `callee_mocks` are placeholder MOCK
+    blocks for the real programs' own boundaries (a key the copied case
+    already mocks keeps its mock). `cut_text` comes back unchanged when
+    `calls` is empty."""
+    if not calls:
+        return cut_text
+    keys = {key.upper() for key in calls}
+    return _copy_first_case(
+        cut_text,
+        f"real calls: {', '.join(sorted(calls))}",
+        [
+            f'    USE REAL CALL "{key}" FROM "{path}"'
+            for key, path in sorted(calls.items())
+        ],
+        lambda cat, key: (cat == "CALL" and key in keys)
+        or (cat is None and any(key.startswith(f"UT-CAP-{k}-") for k in keys)),
+        callee_mocks,
+    )

@@ -17,6 +17,7 @@ from mockymock.dsl.real_file_suite import (
     RealFilePlan,
     make_real_file_suite,
     read_rows,
+    real_calls_case,
     round_trip_case,
 )
 from mockymock.jobstream.conditions import ConditionError, step_runs
@@ -40,6 +41,7 @@ from mockymock.runner.jobs import (
     suite_files,
 )
 from mockymock.splicer.real_files import (
+    REAL_ORGANIZATIONS,
     FileLayout,
     check_files,
     compare_file,
@@ -485,3 +487,97 @@ def test_suite_files_reports_the_named_files(tmp_path: Path):
     assert suite_files(tmp_path, cut, text) == {
         "tests/data/in.dat": base64.b64encode(b"ROW").decode()
     }
+
+
+def test_real_calls_case_runs_the_subprograms_for_real():
+    suite = """\
+TESTSUITE "MAIN"
+
+TESTCASE "happy path"
+    MOCK CALL "SUB1"
+        CAPTURE ARG 1 INTO UT-CAP-SUB1-1
+        MOVE 0 TO DN1
+    END-MOCK
+    MOCK CALL "OTHER"
+    END-MOCK
+    PERFORM MAIN-PARA
+    EXPECT UT-CAP-SUB1-1 TO BE 0
+    *> VERIFY CALL "SUB1" WAS CALLED <count not exact by construction>
+    VERIFY CALL "OTHER" WAS CALLED 1 TIMES
+    *> STUB EXPECT UT-CAP-SUB1-1 -- the value the program actually passed
+"""
+    text = real_calls_case(
+        suite,
+        {"SUB1": "../src/SUB1.cbl"},
+        ["    MOCK OPEN SUB-FILE\n    END-MOCK", '    MOCK CALL "OTHER"\n    END-MOCK'],
+    )
+    case = text.split('TESTCASE "real calls: SUB1"\n')[1]
+    assert case.startswith('    USE REAL CALL "SUB1" FROM "../src/SUB1.cbl"\n')
+    assert "SUB1" not in case.split("\n", 1)[1]
+    assert case.count('MOCK CALL "OTHER"') == 1 and 'VERIFY CALL "OTHER"' in case
+    assert "    MOCK OPEN SUB-FILE\n    END-MOCK\n" in case
+    assert "EXPECT" not in case
+    assert len(parse_cut(text).test_cases) == 2
+    assert real_calls_case(suite, {}) == suite
+
+
+def test_self_built_organizations_cover_indexed_and_relative():
+    from mockymock.splicer.real_files import SELF_BUILT_ORGANIZATIONS
+
+    assert {"INDEXED", "RELATIVE"} <= SELF_BUILT_ORGANIZATIONS
+    assert not SELF_BUILT_ORGANIZATIONS & REAL_ORGANIZATIONS
+
+
+INDEXED_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. IXPROG.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IX-FILE ASSIGN TO IXDD
+               ORGANIZATION IS INDEXED
+               ACCESS MODE IS SEQUENTIAL
+               RECORD KEY IS IX-KEY.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IX-FILE.
+       01  IX-REC.
+           05  IX-KEY  PIC 9(4).
+       WORKING-STORAGE SECTION.
+       01  WS-SUM PIC 9(4) VALUE ZERO.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN OUTPUT IX-FILE
+           MOVE 1 TO IX-KEY
+           WRITE IX-REC
+           CLOSE IX-FILE
+           OPEN INPUT IX-FILE
+           READ IX-FILE
+           ADD IX-KEY TO WS-SUM
+           CLOSE IX-FILE
+           STOP RUN.
+"""
+
+
+@pytest.mark.parametrize(
+    ("use", "refused"),
+    [
+        ("    USE REAL FILE IX-FILE", False),
+        ('    USE REAL FILE IX-FILE FROM "d.dat"', True),
+    ],
+)
+def test_indexed_real_file_only_when_the_program_builds_it(
+    tmp_path: Path, capsys, use, refused
+):
+    from mockymock.cli.main import main
+
+    program = tmp_path / "IXPROG.cbl"
+    program.write_text(INDEXED_PROGRAM)
+    cut = tmp_path / "IXPROG.cut"
+    cut.write_text(
+        f'TESTSUITE "X"\n\nTESTCASE "a"\n{use}\n    PERFORM MAIN-PARA\n'
+        "    EXPECT WS-SUM TO BE 1\n"
+    )
+    main(["lint", str(program), "--cut", str(cut)])
+    out = capsys.readouterr().out
+    assert ("REAL_FILE_ORGANIZATION" in out) is refused, out
