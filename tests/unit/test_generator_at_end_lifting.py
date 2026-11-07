@@ -75,7 +75,7 @@ IDENTIFIER_AT_END_SOURCE = """\
 
 @pytest.fixture
 def splice_cannot_lift(monkeypatch):
-    import mockymock.dsl.generator as generator
+    import mockymock.dsl.generator.files as generator
 
     monkeypatch.setattr(generator, "lift_clause_bodies", lambda *_: None)
 

@@ -28,7 +28,7 @@ the default setup.
 this file's table below covers the low-level AST surface `mock_surface.py`
 / `refusal.py` / `reset.py` / the splicer walk directly (statement classes,
 `ParseResult`, division/paragraph structure). `generate --with-data`
-(`dsl/generator.py`'s bundle-driven scaffold, `dsl/fixture_bundle.py`'s
+(`dsl/generator/`'s bundle-driven scaffold, `dsl/fixture_bundle.py`'s
 loader) depends on a *different*, higher-level surface instead: cobol-parser's
 `ProgramFixtureGenerator.generate_with_scenarios_from_file(...)` (called
 directly, no subprocess) and the JSON shape of the `FixtureBundle` it

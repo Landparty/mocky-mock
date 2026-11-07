@@ -750,7 +750,7 @@ def test_150_generate_fails_when_no_scenario_becomes_a_case(
     tmp_path, monkeypatch
 ) -> None:
     from mockymock.cli.main import main
-    from mockymock.dsl import generator
+    from mockymock.dsl.generator import scaffold as generator
 
     monkeypatch.setattr(generator, "_first_paragraph", lambda program: None)
     source = tmp_path / "DLIENT.cbl"
