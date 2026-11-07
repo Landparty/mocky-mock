@@ -259,6 +259,38 @@ the cost over the work that already touches those files.
 
 **Phase 4: when convenient.** Items 8 and 11.
 
+## Remediation (2026-11-07)
+
+All four phases are done on branch `claude/tech-debt-repo-4cc261`. Final
+state of that branch: ruff check and ruff format are clean, mypy is clean
+on 153 files against the real cobol-parser, and `tests/unit` is **3430
+passed, 21 skipped, 0 failed**, with 87.43% coverage. The integration tier
+collects all 275 tests, but it was not run, because there is no Docker
+daemon on the audit machine; it now runs nightly in CI.
+
+| # | Item | Outcome |
+|---|------|---------|
+| 1 | Unit tier collection error | Fixed. The `StatementSite` probe is guarded, and the one assertion that needs unreleased parser behaviour skips. |
+| 2 | Untested floor, version shims | Floor raised to `>=3.1.1,<4`. The shims are deleted from `mock_surface`, `config`, `_lines` and `test_report`, along with the always-true test probes. Probes stay only for behaviour newer than any published release. The nightly `cobol-parser-range` job runs both ends of the range. |
+| 3 | No CI home for integration and cross-platform | `unit` runs on every push/PR (ubuntu 3.11-3.14, windows, macos), and `integration` runs nightly. All four Windows failures are fixed. One was a **real bug**: on Windows, a timed-out runner job killed only the direct child, so the compiler kept running. It now uses `taskkill /T`, and the test's liveness check no longer kills the process it probes. |
+| 4 | CI mypy blind to cobol-parser | The lint job installs from the lockfile. The 26 errors are fixed with no new `type: ignore`. Three of them were real `None`-AST crash paths, in `generate`, `checks` and `job` steps. |
+| 5 | Unpinned lint tools, two formatters | CI installs with `uv sync --locked`. black is replaced by `ruff format` (45 files reformatted). |
+| 6 | `cli/main.py` god module | Down from 6,779 to 1,698 lines. Commands now live in `cli/commands/` (18 modules) and shared helpers in `cli/_common.py`. An AST comparison confirmed no definition changed (one deliberate exception: `_cmd_init` imports `build_parser` lazily). `--help` output for all 25 parsers is byte-identical. `build_parser` itself stayed whole. |
+| 7 | `dsl/generator.py` | Now the `dsl/generator/` package: 14 modules, the largest 854 lines, no import cycles. All 177 definitions are AST-identical. Existing import paths still work through re-exports. |
+| 8 | Docs sprawl | `docs/index.md` gives every design's real status (checked against the code) and names the two gaps still open. 24 shipped plans and one superseded design moved to `docs/archive/`, with links updated. README and `.okf/index.md` link the index. |
+| 9 | Python 3.14 | Added to the classifiers and the CI matrix. |
+| 10 | Date-named tests | All 18 files are redistributed into feature files, with provenance comments. The collected count is unchanged (3451). The convention is written into `.okf/testing.md`. The `test_issue_<n>` files are kept, since each traces to one issue. |
+| 11 | `runner/` in the testing CLI | It was already isolated at the import level. That boundary is now pinned by `tests/unit/test_runner_boundary.py`. **Not done:** splitting it into its own distribution, which needs a decision on packaging and release ownership. |
+| 12 | Tracked LSP cache | Untracked, and `_superbol/` is in `.gitignore`. |
+
+**Still open:**
+
+- The integration tier has not run against these changes. The first
+  nightly run, or a `workflow_dispatch`, is its first real check.
+- The CI workflow itself has not run yet, since nothing is pushed.
+- `build_parser`, at 1,263 lines, could become a per-command
+  `add_parser()` later, keeping the byte-identical-help check as the guard.
+
 ## What's healthy
 
 - Unit-tier line+branch coverage is **87.23%** (floor 83%). With

@@ -5,6 +5,20 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-07 -- tech-debt remediation (all four phases)
+
+Acting on docs/2026-11-06-tech-debt-audit.md (its "Remediation" section has
+the item-by-item record). [testing](testing.md): CI re-tiered on `uv.lock`
+(lint with mypy against the real cobol-parser; unit on every push/PR incl.
+Windows/macOS and 3.11-3.14; nightly cobol-parser range and Docker
+integration); ruff format replaces black; date-named regression test files
+regrouped by feature. [integration](integration.md): cobol-parser floor
+3.1.1, version shims deleted. [cli](cli.md): `cli/main.py` split into
+`cli/_common.py` + `cli/commands/`. [dsl](dsl.md): `dsl/generator.py` is now
+the `dsl/generator/` package. Fixed on Windows: a timed-out runner job left
+its compiler running (process tree now killed). `docs/index.md` gives
+every design's real status; shipped plans moved to `docs/archive/`.
+
 ## 2026-11-06 -- hunt fixes #430, #434
 
 [dsl.md](dsl.md): a `file status NN:` scenario gets no per-site call
