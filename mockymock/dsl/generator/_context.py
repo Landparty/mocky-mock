@@ -211,7 +211,7 @@ class ProgramContext:
     #: for the names under a CALL argument (a PCB's status field, an 88).
     data_items: list[dict] = field(default_factory=list)
     surface: MockSurface | None = None
-    #: False: never `main_line_thru` (cli.main._main_line_or_bare).
+    #: False: never `main_line_thru` (cli.commands.generate._main_line_or_bare).
     main_line: bool = True
     #: `main_line_thru`'s answer per entry (uppercased).
     _main_line: dict[str, str | None] = field(
