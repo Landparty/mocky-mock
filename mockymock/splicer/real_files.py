@@ -43,6 +43,21 @@ _ASSIGN_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_END_RE = re.compile(r"\.\s*$")
+#: `ASSIGN` / `ASSIGN TO` ending a line: the name is on a following one.
+_ASSIGN_ALONE_RE = re.compile(r"\bASSIGN(\s+TO)?\s*$", re.IGNORECASE)
+#: The first token of a code line: the ASSIGN name continued from above.
+_ASSIGN_NAME_RE = re.compile(
+    r"""\s*("[^"]*"|'[^']*'|[A-Za-z0-9][A-Za-z0-9-]*)""", re.IGNORECASE
+)
+
+
+def _code_area(text: str) -> str:
+    """`text` without a fixed-format line's identification area (columns
+    73-80, which the compiler ignores: NIST programs carry `SQ1024.2`
+    there). A comment line or a blank one reads as empty."""
+    if len(text) > 6 and text[6:7] in ("*", "/"):
+        return ""
+    return text[:72] if len(text) > 72 else text
 
 
 @dataclass(frozen=True)
@@ -77,18 +92,34 @@ def rewrite_assigns(
             continue
         index = start - 1
         done = False
+        pending = False  # ASSIGN [TO] seen, its name is on a later line
         while index < len(out):
             text = out[index]
-            match = _ASSIGN_RE.search(text)
-            if match is not None:
-                out[index] = (
-                    text[: match.start()]
-                    + f'ASSIGN TO "{sandbox_name(file)}"'
-                    + text[match.end() :]
-                )
-                done = True
-                break
-            if _SENTENCE_END_RE.search(text.split("*>", 1)[0]):
+            code = _code_area(text)
+            if pending:
+                name = _ASSIGN_NAME_RE.match(code)
+                if name is not None:
+                    out[index] = (
+                        text[: name.start(1)]
+                        + f'"{sandbox_name(file)}"'
+                        + text[name.end(1) :]
+                    )
+                    done = True
+                    break
+            elif _ASSIGN_ALONE_RE.search(code) is not None:
+                # `ASSIGN TO` ending the line: `TO` is no file name.
+                pending = True
+            else:
+                match = _ASSIGN_RE.search(code)
+                if match is not None:
+                    out[index] = (
+                        text[: match.start()]
+                        + f'ASSIGN TO "{sandbox_name(file)}"'
+                        + text[match.end() :]
+                    )
+                    done = True
+                    break
+            if _SENTENCE_END_RE.search(code.split("*>", 1)[0]):
                 break
             index += 1
         if not done:
