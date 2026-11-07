@@ -617,3 +617,38 @@ def test_real_end_program_still_stops_discovery():
         "       01 WS-A PIC 9(4) VALUE 3.",
     )
     assert generate_mutants(lines) == []
+
+
+# Regression: bug hunt round 11.
+
+
+# --- mutation: boundary-literal inside a hyphenated data name -------------
+
+_MUTATION_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. T.
+       PROCEDURE DIVISION.
+           IF X = 100-LIMIT
+              DISPLAY 1
+           END-IF
+       >>IF DEBUG > 1
+           DISPLAY 2
+       >>END-IF
+           IF Y = 100
+              DISPLAY 3
+           END-IF
+""".splitlines()
+
+
+def test_boundary_literal_never_mutates_the_digits_of_a_data_name():
+    mutated = [m.mutated for m in generate_mutants(_MUTATION_SOURCE) if m.line == 4]
+    assert not any("101-LIMIT" in text for text in mutated)
+    # A real integer literal is still a boundary-literal site.
+    assert any(
+        m.line == 10 and m.operator == "boundary-literal"
+        for m in generate_mutants(_MUTATION_SOURCE)
+    )
+
+
+def test_compiler_directive_lines_are_never_mutated():
+    assert [m for m in generate_mutants(_MUTATION_SOURCE) if m.line in (7, 9)] == []

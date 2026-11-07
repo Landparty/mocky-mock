@@ -12,7 +12,7 @@ from mockymock._decimal import decimal_point_is_comma
 from mockymock.dsl.parser import _split_top_level
 from mockymock.report.record_rewrite import render_expect_value
 from mockymock.splicer.reset import reset_move_lines
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 COMMA_CBL = """\
        IDENTIFICATION DIVISION.

@@ -259,3 +259,50 @@ TESTCASE "setup only"
     assert result.stubs == []
     assert len(result.skipped) == 1
     assert "above the PERFORM" in result.skipped[0].reason
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def test_144_dotted_stub_is_not_recorded() -> None:
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+    from mockymock.dsl.parser import parse_cut
+
+    text = (
+        'TESTSUITE "Q"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+        "*> STUB EXPECT A-REC.QTY -- x\n"
+    )
+    result = scan_stub_expectations(text, parse_cut(text))
+    assert not result.stubs
+    assert result.skipped[0].data_name == "A-REC.QTY"
+
+
+# Regression: bug hunt round 10 (DSL / report / analysis).
+
+
+# --- stub scanner classifies TESTCASE headers by the parser's grammar -----
+
+
+def test_stub_in_case_named_using_provider_is_recorded():
+    text = (
+        'TESTSUITE "s"\n'
+        'TESTCASE "reads USING PROVIDER data"\n'
+        "PERFORM P\n"
+        "*> STUB EXPECT WS-X\n"
+    )
+    scan = scan_stub_expectations(text, parse_cut(text))
+    assert [(s.data_name, s.case_index) for s in scan.stubs] == [("WS-X", 1)]
+    assert scan.skipped == []
+
+
+def test_stub_in_provider_case_with_extra_spaces_is_skipped_as_provider():
+    text = (
+        'TESTSUITE "s"\nPROVIDER P1\nHEADER A\nROW 1\n'
+        'TESTCASE "c"  USING  PROVIDER P1\n'
+        "PERFORM P\n"
+        "*> STUB EXPECT WS-X\n"
+    )
+    scan = scan_stub_expectations(text, parse_cut(text))
+    assert scan.stubs == []
+    assert "PROVIDER-templated" in scan.skipped[0].reason

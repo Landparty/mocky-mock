@@ -7,7 +7,8 @@ inside it.
 """
 
 from mockymock.splicer.injector import _case_selectors, merge_identical_branches
-from tests.unit.test_stress_2026_11_02 import BODY, OTHER, _dispatch
+from tests.unit.test_injector import BODY, OTHER
+from tests.unit.test_injector import _stress_dispatch as _dispatch
 
 
 def _selected(selector: str, case: str) -> bool:

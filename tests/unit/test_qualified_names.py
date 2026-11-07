@@ -127,3 +127,135 @@ def test_combined_condition_with_a_text_operand_stays_textual() -> None:
     )
     assert "UT-DEEDIT-VALUE" not in code
     assert 'IF NOT (WS-ED = "  5" OR "  6")' in code
+
+
+# Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
+# (executed counterpart:
+# tests/integration/test_bug_hunt_20261105_cut_language.py). An EXPECT / MOVE
+# name declared in two groups (one copybook COPYed twice with REPLACING) and
+# not qualified, or qualified by a group it is not in, passed lint; cobc then
+# rejected the driver ("ambiguous; needs qualification") and mockymock blamed
+# itself.
+from pathlib import Path
+
+from mockymock.analysis.cut_names import check_cut_data_names, data_item_paths
+from mockymock.cli.checks import run_static_checks
+from mockymock.dsl.parser import parse_cut
+
+# --- 3. ambiguous / wrongly qualified names ---------------------------------
+
+TWICE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWICE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  CUST-REC.
+           05  CUST-ID        PIC 9(5).
+               88 CUST-OK     VALUE 1.
+       01  OUTER.
+           05  CUST-ID        PIC 9(5).
+               88 CUST-OK     VALUE 1.
+           05  ONLY-HERE      PIC 9.
+       01  WS-B               PIC 9(5).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 1 TO CUST-ID OF CUST-REC
+           GOBACK.
+"""
+
+
+def _problems(tmp_path: Path, cut_text: str, program: str = TWICE) -> list[str]:
+    source = tmp_path / "TWICE.cbl"
+    source.write_text(program)
+    cut = tmp_path / "TWICE.cut"
+    cut.write_text(cut_text)
+    return run_static_checks(source, cut, None).problems
+
+
+def test_an_unqualified_name_declared_twice_is_refused_at_its_cut_line(tmp_path):
+    problems = _problems(
+        tmp_path,
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE CUST-ID TO WS-B\n"
+        "    PERFORM MAIN-PARA\n"
+        "    EXPECT CUST-ID TO BE 1\n"
+        "    EXPECT CUST-OK TO BE TRUE\n",
+    )
+    ambiguous = [p for p in problems if "AMBIGUOUS_DATA_NAME" in p]
+    assert ambiguous == [
+        "refused (AMBIGUOUS_DATA_NAME): .cut line 3: MOVE value CUST-ID is "
+        "ambiguous in TWICE -- CUST-ID is declared 2 times; qualify it, e.g. "
+        "CUST-ID OF CUST-REC or CUST-ID OF OUTER",
+        "refused (AMBIGUOUS_DATA_NAME): .cut line 5: EXPECT CUST-ID is "
+        "ambiguous in TWICE -- CUST-ID is declared 2 times; qualify it, e.g. "
+        "CUST-ID OF CUST-REC or CUST-ID OF OUTER",
+        "refused (AMBIGUOUS_DATA_NAME): .cut line 6: EXPECT CUST-OK is "
+        "ambiguous in TWICE -- CUST-OK is declared 2 times; qualify it, e.g. "
+        "CUST-OK OF CUST-REC or CUST-OK OF OUTER",
+    ]
+
+
+def test_a_qualifier_the_name_is_not_inside_is_refused(tmp_path):
+    problems = _problems(
+        tmp_path,
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE 4 TO ONLY-HERE OF CUST-REC\n"
+        "    PERFORM MAIN-PARA\n"
+        "    EXPECT CUST-ID OF WS-B TO BE 1\n",
+    )
+    ambiguous = [p for p in problems if "AMBIGUOUS_DATA_NAME" in p]
+    assert len(ambiguous) == 2
+    assert (
+        ".cut line 3: MOVE target ONLY-HERE OF CUST-REC names no data item"
+        in (ambiguous[0])
+    )
+    assert "it is declared as ONLY-HERE OF OUTER" in ambiguous[0]
+    assert ".cut line 5: EXPECT CUST-ID OF WS-B names no data item" in ambiguous[1]
+
+
+def test_well_qualified_names_pass(tmp_path):
+    problems = _problems(
+        tmp_path,
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        "    MOVE 3 TO CUST-ID IN OUTER\n"
+        "    MOVE CUST-ID OF CUST-REC TO WS-B\n"
+        "    PERFORM MAIN-PARA\n"
+        "    EXPECT CUST-ID OF CUST-REC TO BE 1\n"
+        "    EXPECT CUST-OK OF CUST-ID OF OUTER TO BE FALSE\n"
+        "    EXPECT ONLY-HERE TO BE 0\n"
+        "    EXPECT ONLY-HERE OF OUTER TO BE 0\n",
+    )
+    assert problems == []
+
+
+def test_a_contained_program_or_an_fd_qualifier_is_left_to_cobc():
+    nested = TWICE.replace(
+        "           GOBACK.\n",
+        "           GOBACK.\n"
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. INNER.\n"
+        "       END PROGRAM INNER.\n",
+    )
+    from cobolparser import parse_cobol
+
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN-PARA\n'
+        "    EXPECT CUST-ID TO BE 1\n"
+        "    EXPECT CUST-ID OF CUST-REC OF IN-FILE TO BE 1\n"
+    )
+    single = parse_cobol(TWICE, filename="TWICE.cbl").ast
+    reasons = check_cut_data_names(suite, nested.splitlines(), "TWICE", single)
+    assert not [r for r in reasons if r.code == "AMBIGUOUS_DATA_NAME"]
+    reasons = check_cut_data_names(suite, TWICE.splitlines(), "TWICE", single)
+    assert [r.message for r in reasons if r.code == "AMBIGUOUS_DATA_NAME"] == [
+        ".cut line 4: EXPECT CUST-ID is ambiguous in TWICE -- CUST-ID is "
+        "declared 2 times; qualify it, e.g. CUST-ID OF CUST-REC or "
+        "CUST-ID OF OUTER"
+    ]
+    assert data_item_paths(single)["CUST-OK"] == [
+        ("CUST-ID", "CUST-REC"),
+        ("CUST-ID", "OUTER"),
+    ]

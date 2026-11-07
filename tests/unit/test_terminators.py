@@ -1572,3 +1572,312 @@ def test_go_to_fallthrough_section_stop_is_dropped_for_a_member_entry():
     assert _go_to_fallthrough_targets(program, {"B099-EXIT"}, bypassed) == {
         "C010": "B099-EXIT"
     }
+
+
+# Regression: bug hunt of 2026-10-27, after the SECTION-member terminator
+# support (PR #367); each program was reproduced on GnuCOBOL 3.2. Executed
+# counterpart: tests/integration/test_bug_hunt_20261027.py.
+from mockymock.analysis.refusal._gates import union_executed_paragraphs
+from mockymock.analysis.refusal._reachability import (
+    _go_to_targets,
+    _reachable_paragraphs,
+)
+
+# P1 jumps to the last paragraph of S1, which falls into S2 and then S3.
+# S2 is entered by nothing but that fall-through, so its end is no PERFORM
+# return point: the unmocked CALL in S3 runs.
+RUNAWAY = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RUNAWAY.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       S1 SECTION.
+       P1.
+           CALL 'APGM'
+           GO TO P1-EXIT.
+       P1-EXIT.
+           EXIT.
+       S2 SECTION.
+       Q1.
+           GO TO Q3.
+       Q2.
+           MOVE 'Q2' TO WS-STEP.
+       Q3.
+           MOVE 'Q3' TO WS-STEP.
+       S3 SECTION.
+       R1.
+           CALL 'CPGM'.
+"""
+
+
+def _program(source: str):
+    result = parse_cobol(source, filename="X.cbl")
+    assert result.success, result.errors
+    return result.ast
+
+
+def _bh1027_suite(*targets: str) -> MockTestSuite:
+    return MockTestSuite(
+        name="S",
+        test_cases=[MockTestCase(name=t, perform_target=t) for t in targets],
+    )
+
+
+def test_fall_through_walk_continues_past_a_section_it_fell_into():
+    seen, reasons = _reachable_paragraphs(_program(RUNAWAY), "P1", None)
+    assert reasons == []
+    assert "R1" in seen
+
+
+def test_executed_union_continues_past_a_section_it_fell_into():
+    executed = union_executed_paragraphs(_program(RUNAWAY), _bh1027_suite("P1"))
+    assert executed is not None
+    assert "R1" in executed
+
+
+def test_fall_through_hazards_continue_past_a_section_it_fell_into():
+    program = _program(RUNAWAY)
+    procedure = program.get_division("PROCEDURE")
+    safe = {
+        p.paragraph_name: name
+        for name, section in procedure._sections.items()
+        if name in ("S2", "S3")
+        for p in section.paragraphs
+    }
+    hazards = _go_to_fallthrough_targets(program, _go_to_targets(program), safe)
+    assert "R1" in hazards
+
+
+TRAILING_EXIT_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EXPGM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC      PIC 99 VALUE 0.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       A-MAIN SECTION.
+       A-START.
+           PERFORM A-CHECK
+           MOVE 'DONE' TO WS-STEP
+           EXIT PROGRAM.
+       A-CHECK.
+           CALL 'CHKSUB' USING WS-RC
+           IF WS-RC NOT = 0
+               MOVE 'EARLY' TO WS-STEP
+               GOBACK
+           END-IF.
+"""
+
+
+def test_a_trailing_exit_program_ends_the_section_range():
+    """A-CHECK is PERFORMed by name and not fallen into: EXIT PROGRAM ends
+    `PERFORM A-MAIN`'s range like GOBACK does, so nothing is refused."""
+    program, surface, scope_map, lines = _analyze(TRAILING_EXIT_PROGRAM)
+    plans, reasons = find_terminator_plans(
+        surface, program, _bh1027_suite("A-MAIN"), scope_map, lines
+    )
+    assert reasons == []
+    kinds = {p.site.paragraph_name: p.exit_kind for p in plans}
+    assert kinds == {"A-START": "SECTION", "A-CHECK": "PARAGRAPH"}
+
+
+NEVER_PERFORMED = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. NEVERP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-STEP    PIC X(10) VALUE SPACES.
+       PROCEDURE DIVISION.
+       S1 SECTION.
+       P1.
+           MOVE 'P1' TO WS-STEP
+           GO TO P1-EXIT.
+       P1-EXIT.
+           EXIT.
+       S2 SECTION.
+       Q1.
+           MOVE 'Q1' TO WS-STEP STOP RUN.
+"""
+
+
+# The STOP RUN shares its line with the MOVE, so it cannot GOBACK to the test
+# instead either (2026-11-03): the refusal stands.
+def test_refusal_names_why_a_member_has_no_mode():
+    """Q1 is never PERFORMed at all; the message used to say it was
+    "entered more than one way (by its own name and as part of its
+    section's range ...)"."""
+    program, surface, scope_map, lines = _analyze(NEVER_PERFORMED)
+    _, reasons = find_terminator_plans(
+        surface, program, _bh1027_suite("P1"), scope_map, lines
+    )
+    messages = [r.message for r in reasons if "'Q1'" in r.message]
+    assert messages
+    assert "never PERFORMed" in messages[0]
+    assert "more than one way" not in messages[0]
+
+
+# Regression: sweep blockers of 2026-10-29 -- the classic sectioned layout
+# (every SECTION's nameless main line is paragraph '') and terminators under a
+# PERFORM ... UNTIL loop.
+from mockymock.analysis.refusal._reachability import _fallthrough_safe_sections
+
+
+def _sweep_analyze(source):
+    result = parse_cobol(source, filename="X.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    scope_map = collect_scope_map(result.ast, lines)
+    annotate_nested_sites(surface, scope_map, lines)
+    return result.ast, surface, scope_map, lines
+
+
+def _plans(source, target):
+    program, surface, scope_map, lines = _sweep_analyze(source)
+    suite = MockTestSuite(
+        name="S", test_cases=[MockTestCase(name="c", perform_target=target)]
+    )
+    return find_terminator_plans(surface, program, suite, scope_map, lines)
+
+
+# Each section's main line sits right under its header, ends at a
+# `NNNN-EXIT. EXIT.` paragraph, and leaves early with GO TO NNNN-EXIT.
+SECTION_EXIT_IDIOM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SECIDIOM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-EOF-SW    PIC X VALUE 'N'.
+           88 WS-EOF    VALUE 'Y'.
+       01  WS-RC        PIC S9(4) COMP VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAINLINE SECTION.
+           PERFORM 1000-INITIALIZE
+           PERFORM 2000-PROCESS UNTIL WS-EOF
+           GOBACK.
+       0000-EXIT.
+           EXIT.
+       1000-INITIALIZE SECTION.
+           PERFORM 2100-READ.
+       1000-EXIT.
+           EXIT.
+       2000-PROCESS SECTION.
+           CALL 'SUBPGM1' USING WS-RC
+           IF WS-RC NOT = 0
+              GO TO 2000-EXIT
+           END-IF
+           PERFORM 2100-READ.
+       2000-EXIT.
+           EXIT.
+       2100-READ SECTION.
+           CALL 'GETREC' USING WS-RC
+           IF WS-RC = 4
+              SET WS-EOF TO TRUE
+           END-IF
+           IF WS-RC > 4
+              PERFORM 9999-ABEND
+           END-IF.
+       2100-EXIT.
+           EXIT.
+       9999-ABEND SECTION.
+           MOVE 16 TO RETURN-CODE
+           STOP RUN.
+       9999-EXIT.
+           EXIT.
+"""
+
+
+def test_a_goto_to_the_own_section_exit_keeps_the_section_safe():
+    """`GO TO 2000-EXIT` in 2000-PROCESS's main line used to read as a jump
+    in from outside: the enclosing section was looked up by the name ''
+    and came back as the last section with a main line (9999-ABEND)."""
+    program, _, _, _ = _sweep_analyze(SECTION_EXIT_IDIOM)
+    assert "2000-PROCESS" in _fallthrough_safe_sections(program)
+
+
+def test_the_section_exit_idiom_plans_both_terminators():
+    """Refused before: falling past 2000-EXIT was taken to run on into the
+    next section, and every main line ('') counted as fallen into."""
+    plans, reasons = _plans(SECTION_EXIT_IDIOM, "0000-MAINLINE")
+    assert reasons == []
+    assert sorted(p.site.label for p in plans) == ["GOBACK", "STOP RUN"]
+    assert {p.exit_kind for p in plans} == {"SECTION"}
+    chain = {p.target_paragraph for p in plans[0].chain_performs}
+    # Every PERFORMed section's main line is walked, not only the first ''.
+    assert chain == {"1000-INITIALIZE", "2000-PROCESS", "2100-READ", "9999-ABEND"}
+    assert [p.target_paragraph for p in plans[0].loop_performs] == ["2000-PROCESS"]
+
+
+GO_TO_INTO_A_SECTION = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOTOSEC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC        PIC S9(4) COMP VALUE 0.
+       PROCEDURE DIVISION.
+       A000-MAIN SECTION.
+           PERFORM B000-WORK
+           GOBACK.
+       B000-WORK SECTION.
+           CALL 'SUBPGM2' USING WS-RC
+           IF WS-RC NOT = 0
+              GO TO Z999-ERROR
+           END-IF
+           DISPLAY 'OK'.
+       Z999-ERROR SECTION.
+           MOVE 12 TO RETURN-CODE
+           STOP RUN.
+"""
+
+
+def test_a_main_line_entered_by_go_to_goes_back_to_the_test():
+    """Z999-ERROR is only ever entered by GO TO. Its STOP RUN was planned
+    with EXIT SECTION because A000-MAIN's main line, also named '', is in
+    section mode -- and EXIT SECTION there runs off the end of the
+    program instead of returning to the test. No EXIT verb fits, so it
+    GOBACKs to the test from the driver's call frame (2026-11-03)."""
+    plans, reasons = _plans(GO_TO_INTO_A_SECTION, "A000-MAIN")
+    assert sorted((p.site.label, p.exit_kind) for p in plans)[1] == (
+        "STOP RUN",
+        "RETURN",
+    )
+    assert reasons == []
+
+
+ALSO_UNDER_A_THRU = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ALSOTHRU.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-RC        PIC S9(4) COMP VALUE 0.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           PERFORM 1000-CHECK
+           PERFORM 2000-STEP THRU 2000-EXIT
+           GOBACK.
+       1000-CHECK.
+           IF WS-RC > 4
+              PERFORM 9999-ABEND
+           END-IF.
+       2000-STEP.
+           CALL 'SUBPGM3' USING WS-RC
+           PERFORM 1000-CHECK.
+       2000-EXIT.
+           EXIT.
+       9999-ABEND.
+           STOP RUN.
+"""
+
+
+def test_a_terminator_also_reached_under_a_thru_goes_back_to_the_test():
+    """9999-ABEND is on the plain chain (via 1000-CHECK) but also reached
+    from inside the PERFORM ... THRU range, where nothing ends the range at
+    the early exit: 2000-STEP would return into 2000-EXIT and the main line
+    would carry on. Planned (and wrong) before; now it GOBACKs to the test
+    from the driver's call frame, out of every open PERFORM."""
+    plans, reasons = _plans(ALSO_UNDER_A_THRU, "0000-MAIN")
+    assert reasons == []
+    assert [p.exit_kind for p in plans if p.site.label == "STOP RUN"] == ["RETURN"]

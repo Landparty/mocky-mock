@@ -6,7 +6,7 @@ path, not a "should not happen" key mismatch."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 SORT_CBL = """\
        IDENTIFICATION DIVISION.

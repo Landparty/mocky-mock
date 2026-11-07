@@ -551,3 +551,92 @@ def test_fit_within_columns_refuses_an_overlong_directive_rather_than_breaking_i
     assert len(problems) == 1
     assert "compiler-directing" in problems[0]
     assert repr(line) in problems[0]
+
+
+# Regression: bug hunt round 10 (splicer / export / captures). `export`'s
+# whitespace break split a literal's type prefix off it (`X"00"` -> `X "00"`),
+# and its literal continuation padded between that prefix and the opening
+# quote, with the same effect.
+import re
+
+from mockymock.cli.mainframe_export import COLUMN_LIMIT
+
+# --- export: literal type prefixes ----------------------------------------
+
+
+def test_export_whitespace_break_keeps_a_hex_literal_prefix_attached():
+    line = (
+        " " * 19
+        + 'IF WS-RETURN-CODE-FIELD = X"00" MOVE "SUCCESSFUL" TO '
+        + "WS-STATUS-MESSAGE-TEXT"
+    )
+    assert len(line) > COLUMN_LIMIT
+
+    fitted, problems = fit_within_columns([line])
+
+    assert problems == []
+    assert all(len(out) <= COLUMN_LIMIT for out in fitted)
+    joined = " ".join(fitted)
+    assert 'X"00"' in joined
+    assert 'X "00"' not in joined
+    # Nothing but whitespace changed.
+    assert "".join(joined.split()) == "".join(line.split())
+
+
+def test_export_literal_continuation_pads_before_the_literal_prefix():
+    line = " " * 19 + 'MOVE X"4142434445" TO WS-SOME-VERY-LONG-FIELD-NAME-THAT-IS-X'
+    assert len(line) > COLUMN_LIMIT
+
+    fitted, problems = fit_within_columns([line])
+
+    assert problems == []
+    assert len(fitted) > 1
+    assert all(len(out) <= COLUMN_LIMIT for out in fitted)
+    # The prefix letter sits directly against its opening quote.
+    assert re.search(r'\bX"4142', fitted[0])
+    assert not re.search(r"\bX\s+\"", fitted[0])
+    # Every continued line still fills exactly to the column limit.
+    assert all(len(out) == COLUMN_LIMIT for out in fitted[:-1])
+
+
+# Regression: bug hunt round 11.
+from mockymock.cli.mainframe_export import SourceAttribution
+
+# --- export: UPON clause on every DISPLAY fragment -------------------------
+
+
+def test_wrapped_display_keeps_upon_device_on_every_fragment():
+    line = '           DISPLAY "' + "A" * 70 + '" UPON SYSERR.'
+    wrapped, problems = wrap_long_display_lines([line])
+    assert problems == []
+    assert len(wrapped) > 1
+    assert all("UPON SYSERR" in fragment for fragment in wrapped)
+    assert all(len(fragment) <= 72 for fragment in wrapped)
+    # The literal's content is unchanged across the fragments.
+    text = "".join(fragment.split('"')[1] for fragment in wrapped)
+    assert text == "A" * 70
+
+
+# --- export: inline comment and attribution after a wrap -------------------
+
+
+def test_fit_within_columns_moves_an_inline_comment_off_the_code_line():
+    line = (
+        "                          MOVE WS-ALPHA-FIELD TO WS-BETA-FIELD "
+        '*> copy the "alpha" value over now'
+    )
+    fitted, problems = fit_within_columns([line])
+    assert problems == []
+    code_lines = [f for f in fitted if not f.lstrip().startswith("*>")]
+    assert [c.strip() for c in code_lines] == ["MOVE WS-ALPHA-FIELD TO WS-BETA-FIELD"]
+    assert any("copy the" in f and f.lstrip().startswith("*>") for f in fitted)
+
+
+def test_fit_within_columns_attributes_by_instrumented_index_after_a_wrap():
+    display = '           DISPLAY "' + "A" * 70 + '".'
+    unbreakable = "           MOVE WS-" + "A" * 80 + "-B"
+    attribution = SourceAttribution({1}, "t.cut", "", "p.cbl", "")
+    _, problems = fit_within_columns([display, unbreakable], attribution=attribution)
+    assert len(problems) == 1
+    assert "line 2 " in problems[0]
+    assert "generated test-driver code" in problems[0]

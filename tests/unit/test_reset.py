@@ -892,3 +892,69 @@ def test_an_entry_written_without_a_data_name_is_filler():
     lines = reset_move_lines(result.ast)
     assert lines
     assert not any("ANONYMOUS" in line for line in lines), lines
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+LS_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. LS.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC.
+           05  IN-AMT  PIC 9(3).
+       01  IN-ALT    PIC X(3).
+       WORKING-STORAGE SECTION.
+       01  WS-TOTAL PIC 9(4) VALUE 0.
+       LOCAL-STORAGE SECTION.
+       01  LS-COUNT PIC 9(3) VALUE 0.
+       01  LS-GRP.
+           05 LS-A PIC X(2) VALUE "AB".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           ADD 1 TO LS-COUNT
+           MOVE "ZZ" TO LS-A
+           READ IN-FILE
+           ADD IN-AMT TO WS-TOTAL
+           GOBACK.
+"""
+
+
+LS_CUT = """\
+TESTSUITE "ls"
+TESTCASE "one"
+MOCK READ IN-FILE
+    MOVE 5 TO IN-AMT
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT LS-COUNT TO BE 1
+EXPECT WS-TOTAL TO BE 5
+TESTCASE "two"
+MOCK READ IN-FILE
+END-MOCK
+PERFORM MAIN-PARA
+EXPECT LS-COUNT TO BE 1
+EXPECT WS-TOTAL TO BE 0
+"""
+
+
+def test_147_local_storage_and_the_first_fd_record_are_reset() -> None:
+    from cobolparser import parse_cobol
+
+    from mockymock.splicer.reset import reset_move_lines
+
+    lines = reset_move_lines(parse_cobol(LS_CBL).ast)
+    assert "INITIALIZE IN-REC" in lines
+    assert not any("IN-ALT" in line for line in lines)  # same FD storage
+    assert "MOVE 0 TO WS-TOTAL" in lines
+    assert "MOVE 0 TO LS-COUNT" in lines
+    assert "INITIALIZE LS-GRP" in lines
+    assert 'MOVE "AB" TO LS-A OF LS-GRP' in lines

@@ -695,3 +695,53 @@ def test_reachable_terminator_is_not_misreported_as_sort_merge():
     case = MockTestCase(name="c", perform_target="MAIN-PARA")
     reasons = check_test_case(surface, result.ast, case)
     assert not any(r.code == "UNSUPPORTED_SORT_MERGE" for r in reasons)
+
+
+# Regression: bug hunt round 10 (DSL / report / analysis).
+from mockymock.analysis import mock_surface
+from mockymock.dsl.model import MockCategory
+from mockymock.dsl.parser import parse_cut
+
+# --- ACCEPT ... FROM DATE YYYYMMDD read as console input ------------------
+
+_DATE_ACCEPT_SOURCE = """       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DATEACC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-D PIC X(8).
+       PROCEDURE DIVISION.
+       MAIN-P.
+           ACCEPT WS-D FROM DATE YYYYMMDD
+           ACCEPT WS-D FROM DAY YYYYDDD
+           DISPLAY WS-D.
+"""
+
+
+def _surface(source: str):
+    result = parse_cobol(source, filename="prog.cbl")
+    assert result.ast is not None
+    return result.ast, mock_surface.analyze(result.ast)
+
+
+def test_accept_from_date_with_format_is_not_a_console_boundary():
+    _, surface = _surface(_DATE_ACCEPT_SOURCE)
+    assert [
+        s for s in surface.boundary_sites if s.category is MockCategory.ACCEPT
+    ] == []
+    assert [a.from_source for a in surface.non_interactive_accepts] == [
+        "DATE YYYYMMDD",
+        "DAY YYYYDDD",
+    ]
+
+
+def test_accept_from_date_with_format_is_not_refused():
+    program, surface = _surface(_DATE_ACCEPT_SOURCE)
+    case = parse_cut('TESTSUITE "s"\nTESTCASE "c"\nPERFORM MAIN-P\n').test_cases[0]
+    assert check_test_case(surface, program, case, {}) == []
+
+
+def test_accept_from_console_is_still_a_boundary():
+    source = _DATE_ACCEPT_SOURCE.replace("FROM DAY YYYYDDD", "FROM CONSOLE")
+    _, surface = _surface(source)
+    accepts = [s for s in surface.boundary_sites if s.category is MockCategory.ACCEPT]
+    assert len(accepts) == 1

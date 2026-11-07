@@ -136,3 +136,76 @@ def test_console_report_lists_mocks_in_order_and_statement_count():
 
 def test_console_report_says_so_when_no_mocks_fired():
     assert "mocks fired: none" in format_trace_console(_payload(mock_hits=[]))
+
+
+# Regression: open gaps the cobol-test run on PAYMAIN + PAYCALC found
+# (2026-11-06); executed counterpart:
+# tests/integration/test_open_gaps_2026_11_06.py. `run --trace` collapses a
+# spliced statement and labels a USE REAL CALL as real.
+from mockymock.splicer.injector import REAL_SUFFIX
+
+
+def _entry(line, statement=None, paragraph=None):
+    return TraceEntry(line=line, statement=statement, paragraph=paragraph)
+
+
+def test_trace_collapses_a_spliced_statement_into_one_entry():
+    # Instrumented lines 10-14 are the dispatch block replacing source line
+    # 3 (a CALL); 20 is the next statement, line 4.
+    entries = [
+        _entry(9, paragraph="MAIN"),
+        _entry(10, "EVALUATE"),
+        _entry(11, "WHEN"),
+        _entry(12, "ADD"),
+        _entry(13, "DISPLAY"),
+        _entry(14, "CALL"),
+        _entry(20, "MOVE"),
+        _entry(10, "EVALUATE"),  # the same block, run again
+        _entry(11, "WHEN"),
+    ]
+    line_map = {9: 2, 10: 3, 11: 3, 12: 3, 13: 3, 14: 3, 20: 4}
+    original = [
+        "       MAIN.",
+        "       MAIN.",
+        "           CALL 'PAYCALC' USING PAY-AREA",
+        "           MOVE 1 TO X",
+    ]
+    payload = json.loads(
+        format_trace_json(
+            entries,
+            line_map,
+            ["CALL PAYCALC" + REAL_SUFFIX, "READ F"],
+            "c",
+            1,
+            "t.cut",
+            "p.cbl",
+            original_lines=original,
+        )
+    )
+    assert payload["path"] == [
+        {"line": 2, "paragraph": "MAIN"},
+        {"line": 3, "statement": "CALL", "spliced": True},
+        {"line": 4, "statement": "MOVE"},
+        {"line": 3, "statement": "CALL", "spliced": True},
+    ]
+    assert payload["mocks"] == [
+        {"order": 1, "label": "CALL PAYCALC", "real": True},
+        {"order": 2, "label": "READ F"},
+    ]
+    console = format_trace_console(payload)
+    assert "mocks and real calls, in order:" in console
+    assert "1. CALL PAYCALC (real program, not mocked)" in console
+    assert "CALL (mocked or linked by mockymock)" in console
+
+
+def test_trace_keeps_plain_statements_on_one_line_apart():
+    # Two statements on one instrumented line are two entries, as before.
+    entries = [_entry(5, "MOVE"), _entry(5, "MOVE")]
+    payload = json.loads(
+        format_trace_json(entries, {5: 7}, [], "c", None, "t.cut", "p.cbl")
+    )
+    assert payload["path"] == [
+        {"line": 7, "statement": "MOVE"},
+        {"line": 7, "statement": "MOVE"},
+    ]
+    assert "mocks fired: none" in format_trace_console(payload)

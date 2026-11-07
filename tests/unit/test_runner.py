@@ -466,3 +466,218 @@ def test_run_job_payload_has_no_nul(tmp_path: Path):
     payload = run_job(_zip(files), command=noisy, work_dir=tmp_path)
     assert "\x00" not in json.dumps(payload, ensure_ascii=False)
     assert "\\x00\\x00" in payload["suites"][0]["log"]
+
+
+# Regression: bug hunt of 2026-11-05 (running suites). The runner survives a
+# non-JSON answer and a corrupt pack, and keeps a timed-out step's stderr.
+from mockymock.runner import RunnerClient
+from mockymock.runner.jobs import _run_step
+
+# --- the runner -------------------------------------------------------------
+
+
+def test_client_refuses_a_body_that_is_not_json(monkeypatch) -> None:
+    """A proxy's HTML page answered with 200 raised a bare ValueError out
+    of `serve`, which stops the runner instead of retrying."""
+    client = RunnerClient("http://backend", "token")
+    monkeypatch.setattr(
+        client, "_request", lambda *a, **k: (200, b"<html>bad gateway</html>")
+    )
+    with pytest.raises(RunnerClientError, match="not JSON"):
+        client.claim("r1")
+    with pytest.raises(RunnerClientError, match="not JSON"):
+        client.report("j1", {"suites": []})
+
+
+def test_a_pack_with_a_corrupt_member_is_a_pack_error(tmp_path: Path) -> None:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("oracle.json", "{}")
+        archive.writestr("src/PROG.cbl", "PROGRAM TEXT")
+    data = bytearray(out.getvalue())
+    at = data.find(b"PROGRAM TEXT")
+    data[at] = ord("X")  # the stored CRC no longer matches
+    with pytest.raises(JobPackError, match="cannot be read"):
+        extract_pack(bytes(data), tmp_path)
+
+
+def test_a_timed_out_step_keeps_its_stderr(tmp_path: Path) -> None:
+    script = (
+        "import sys, time\n"
+        "sys.stderr.write('Traceback: the reason\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(30)\n"
+    )
+    step = _run_step([sys.executable, "-c", script], [], tmp_path, timeout=1)
+    assert step.timed_out
+    assert "Traceback: the reason" in step.log
+    assert "timed out after" in step.log
+
+
+# Regression: bug hunt of 2026-11-05 (round 2), where the runner meets the
+# LegacyLens backend. A recording that recorded nothing, and a result the
+# backend could not take at the first try.
+import logging
+
+from mockymock.runner.jobs import REPORT_RETRY_DELAYS, _report
+
+
+def test_a_record_step_that_did_not_compile_is_not_a_recording(
+    tmp_path: Path,
+    fake_command,
+) -> None:
+    """`recorded` was set whatever --record-expectations did: a suite that
+    did not compile was played, reported recorded with its STUB EXPECT
+    placeholders, and the backend kept that .cut as the module's tests."""
+    files = _pack_files(
+        _manifest("tests", record=True),
+        **{"tests/PAYMAIN.cut": "TESTSUITE\n*> NOCOMPILE\n*> STUB EXPECT X\n"},
+    )
+    pack = extract_pack(_zip(files), tmp_path)
+    (suite,) = run_pack(pack, command=fake_command)["suites"]
+    assert suite.get("recorded") is not True
+    assert "report" not in suite
+    assert suite["error"].startswith("mockymock run --record-expectations recorded")
+    assert suite["exit_code"] == 1
+    assert "compile failed" in suite["log"]
+    assert "STUB EXPECT X" in suite["cut_text"]
+
+
+class _Flaky(FakeClient):
+    def __init__(self, errors: list[RunnerClientError], jobs=None, packs=None):
+        super().__init__(jobs or [], packs or {})
+        self.errors = errors
+        self.tries = 0
+
+    def report(self, job_id: str, payload: dict) -> dict:
+        self.tries += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return super().report(job_id, payload)
+
+
+def test_report_retries_a_backend_that_is_down_or_failing() -> None:
+    client = _Flaky(
+        [RunnerClientError("refused"), RunnerClientError("HTTP 502", status=502)]
+    )
+    sleeps: list[float] = []
+    summary = _report(client, "j1", {"suites": []}, sleeps.append, logging.getLogger())  # type: ignore[arg-type]
+    assert summary == {"status": "succeeded"}
+    assert client.tries == 3 and sleeps == list(REPORT_RETRY_DELAYS[:2])
+
+
+def test_report_does_not_retry_a_refusal() -> None:
+    client = _Flaky([RunnerClientError("HTTP 409", status=409)])
+    sleeps: list[float] = []
+    with pytest.raises(RunnerClientError):
+        _report(client, "j1", {}, sleeps.append, logging.getLogger())  # type: ignore[arg-type]
+    assert client.tries == 1 and sleeps == []
+
+
+def test_report_gives_up_after_the_last_retry() -> None:
+    errors = [RunnerClientError("down") for _ in range(len(REPORT_RETRY_DELAYS) + 1)]
+    client = _Flaky(errors)
+    sleeps: list[float] = []
+    with pytest.raises(RunnerClientError):
+        _report(client, "j1", {}, sleeps.append, logging.getLogger())  # type: ignore[arg-type]
+    assert client.tries == len(REPORT_RETRY_DELAYS) + 1
+    assert sleeps == list(REPORT_RETRY_DELAYS)
+
+
+def test_serve_reports_once_the_backend_is_back(
+    tmp_path: Path,
+    fake_command,
+) -> None:
+    client = _Flaky(
+        [RunnerClientError("connection refused")],
+        jobs=[{"id": "j1", "kind": "baseline"}],
+        packs={"j1": _zip(_pack_files(_manifest()))},
+    )
+    sleeps: list[float] = []
+    ran = serve(
+        client,  # type: ignore[arg-type]
+        runner_name="r1",
+        once=True,
+        command=fake_command,
+        work_dir=tmp_path,
+        log=lambda _: None,
+        sleep=sleeps.append,
+    )
+    assert ran == 1
+    ((job_id, payload),) = client.reports
+    assert job_id == "j1" and payload["suites"][0]["baseline"]
+    assert sleeps == [REPORT_RETRY_DELAYS[0]]
+
+
+# Regression: stress test of the integrated testing stack (backend test packs +
+# oracle over a synthetic corpus of every program type), 2026-11-02.
+
+
+# --- suite timeout leaves nothing running -----------------------------------
+
+STRESS_FAKE_MOCKYMOCK = """\
+import sys, time
+from pathlib import Path
+from mockymock.runtime import native_toolchain as nt
+
+nt.install_termination_handler()
+child = Path(sys.argv[1])
+try:
+    nt._run(
+        [sys.executable, "-c",
+         f"import os, time; open({str(child)!r}, 'w').write(str(os.getpid())); "
+         "time.sleep(120)"],
+        cwd=Path("."), env=None, timeout=300, text=True,
+    )
+except SystemExit:
+    raise
+"""
+
+
+def test_runner_timeout_kills_the_compiler_mockymock_started(tmp_path):
+    """A child mockymock starts in its own session (as cobc and the test
+    binary do) must die with the suite that timed out."""
+    import os
+    import sys
+    import time
+
+    from mockymock.runner import jobs
+
+    script = tmp_path / "fake.py"
+    script.write_text(STRESS_FAKE_MOCKYMOCK)
+    pid_file = tmp_path / "child.pid"
+    step = jobs._run_step_timed(
+        [sys.executable, str(script)], [str(pid_file)], tmp_path, timeout=3
+    )
+    assert step.timed_out
+    pid = int(pid_file.read_text())
+    for _ in range(50):
+        if not _alive(pid):
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, 9)
+        raise AssertionError("the grandchild outlived the suite timeout")
+
+
+def _alive(pid: int) -> bool:
+    """Whether `pid` is still running. Not `os.kill(pid, 0)` on Windows:
+    there it *terminates* the process (TerminateProcess with exit code 0)
+    and so would make a leaked grandchild look killed."""
+    import os
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return f'"{pid}"' in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True

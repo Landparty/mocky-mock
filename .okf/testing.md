@@ -34,6 +34,20 @@ track a second generation of the DSL/mock-surface grammar living alongside the
 original -- both are still exercised, implying the surface is mid-migration
 rather than the v1 files being dead weight.
 
+**Where a regression test goes.** A regression test lives in the test file
+of the feature it exercises (`test_runner.py`, `test_dsl_parser.py`,
+`test_injector.py`, `test_terminators.py`, ...), with its provenance -- the
+issue number, or the bug hunt / audit date -- in a comment above the block
+or in the test's docstring (`# Regression: bug hunt round 11.`). Don't
+create date- or round-named test files (`test_bug_hunt_<date>.py`,
+`test_nightly_<date>.py`, `test_<audit>_<date>.py`): nobody looking for a
+feature's tests finds them. `test_issue_<number>_*.py` files stay, since the
+number traces to a GitHub issue. On 2026-11-07 (tech-debt audit item 10,
+docs/2026-11-06-tech-debt-audit.md) the 18 date/round-named unit files were
+regrouped this way, and `generate --with-data`'s shared test helper moved to
+`tests/unit/_generate.py`; `tests/integration/` still has date-named files,
+some importing their program constants from the unit feature files.
+
 # Docker-availability skip pattern
 
 Integration tests need a real GnuCOBOL compiler, which mockymock only ships

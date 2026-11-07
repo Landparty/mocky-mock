@@ -123,3 +123,39 @@ def test_run_stops_when_every_rerun_crashes_on_its_first_case(
     # The first run, then two reruns that each ran only their first case.
     assert calls == [None, positions[1:], positions[2:]]
     assert "3 case(s) left not run" in capsys.readouterr().out
+
+
+# Regression: bug hunt of 2026-11-05 (running suites). Crash reruns pick cases
+# by position.
+from mockymock.cli.checks import filter_suite_cases
+from mockymock.dsl.parser import parse_cut
+from mockymock.report.json_report import not_run_case_positions, report_case_positions
+from mockymock.report.results import parse_stdout
+
+DUPLICATE_NAMES = """\
+TESTSUITE "dup"
+TESTCASE "same"
+    PERFORM A
+TESTCASE "same"
+    PERFORM B
+TESTCASE "other"
+    PERFORM B
+"""
+
+
+# --- crash reruns pick cases by position ------------------------------------
+
+
+def test_case_positions_pick_one_of_two_cases_sharing_a_name() -> None:
+    suite = parse_cut(DUPLICATE_NAMES)
+    assert filter_suite_cases(suite, None, None, [2, 3]) == []
+    assert [case.line for case in suite.test_cases] == [4, 6]
+
+
+def test_not_run_cases_are_named_by_position() -> None:
+    suite = parse_cut(DUPLICATE_NAMES)
+    ran = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: dup\n__MOCKYMOCK__ CASE 001 START: same\n"
+    )
+    assert not_run_case_positions(ran, suite) == [2, 3]
+    assert report_case_positions(ran, suite) == [1, 2, 3]

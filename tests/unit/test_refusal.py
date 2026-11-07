@@ -1811,3 +1811,37 @@ def test_unmocked_top_level_exec_sharing_its_line_refuses_program_wide():
     unspliceable = [r for r in reasons if r.code == "UNSPLICEABLE_EXEC"]
     assert len(unspliceable) == 1
     assert "does not start its own line" in unspliceable[0].message
+
+
+# Regression: bug hunt round 11.
+
+
+# --- lossy copybook decode refusal is still live -------------------------------
+
+
+def test_cp1252_copybook_refuses_only_when_the_decode_is_lossy(tmp_path):
+    """The round-10 finding: cobol-parser now decodes a non-UTF-8 byte near
+    the top of a copybook as cp1252 (lossless), so no EXPANSION_WARNING
+    must fire for it; the refusal stays pinned by
+    test_refusal.py::test_expansion_warnings_refuse_lossy_copybook_decode
+    for the case that is still lossy."""
+    from cobolparser.preprocess import expand_copybooks
+
+    from mockymock.analysis.refusal import check_expansion_warnings
+    from tests.unit.test_refusal import COPY_PROGRAM_SOURCE
+
+    (tmp_path / "BADREC.CPY").write_bytes(
+        b"       01  BAD-FIELD PIC X(5) VALUE 'ab\xffcd'.\n"
+    )
+    expansion = expand_copybooks(COPY_PROGRAM_SOURCE, copybook_paths=[str(tmp_path)])
+    refusals = check_expansion_warnings(expansion)
+    if "abÿcd" in expansion.expanded_source:
+        # cobol-parser releases that detect cp1252 decode the byte
+        # losslessly: nothing to refuse.
+        assert refusals == []
+    else:
+        # Older published releases still decode it lossily (U+FFFD) and
+        # warn; that warning must still refuse. The compat CI job runs
+        # the published wheel, so both branches are exercised.
+        assert "\ufffd" in expansion.expanded_source
+        assert refusals

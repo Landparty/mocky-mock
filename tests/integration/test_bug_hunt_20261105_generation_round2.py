@@ -11,7 +11,7 @@ from pathlib import Path
 
 from mockymock.cli.main import main
 from tests.integration._docker import requires_docker
-from tests.unit.test_bug_hunt_20261105_generation_round2 import PRIMED
+from tests.unit.test_generator_dli_end_status import PRIMED
 
 _CASE = re.compile(r'^TESTCASE "(2000-SCAN: EVALUATE@(\d+) (WHEN [^"]+))"$', re.M)
 
