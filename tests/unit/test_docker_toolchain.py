@@ -1044,3 +1044,62 @@ def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_pat
     # whole session. errors="replace" degrades that one line instead.
     assert captured["kwargs"]["encoding"] == "utf-8"
     assert captured["kwargs"]["errors"] == "replace"
+
+
+# Regression: bug hunt of 2026-11-05 (round 2), where the runner meets the
+# LegacyLens backend.
+
+
+def test_docker_exec_output_is_read_in_bounded_memory(monkeypatch) -> None:
+    """The Docker backend's run_binary held all of a test binary's stdout
+    (400 MB of DISPLAY output peaked at 1.2 GB): it now goes through the
+    native backend's capped reader, keeping the driver's marker lines."""
+    import sys
+
+    from mockymock.runtime import native_toolchain
+    from mockymock.runtime.docker_toolchain import _exec_binary
+
+    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 1000)
+    # Bytes, not text: a text-mode stdout writes CRLF on Windows, and the
+    # real test binary (Linux, in the container) writes LF.
+    script = (
+        "import sys\n"
+        "out = sys.stdout.buffer\n"
+        "for _ in range(5000): out.write(b'X' * 99 + b'\\n')\n"
+        "out.write(b'__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\\n')\n"
+    )
+    result = _exec_binary([sys.executable, "-c", script], timeout=60)
+    assert result.returncode == 0
+    assert len(result.stdout) < 2000
+    assert result.stdout.endswith(b"__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n")
+    assert b"more bytes of output than" in result.stderr
+
+
+# Regression: bug hunt round 11.
+from mockymock.runtime import docker_toolchain
+
+# --- run_binary: non-UTF-8 and CR bytes in the program's stdout ---------------
+
+
+def test_run_binary_decodes_non_utf8_stdout_without_newline_translation(tmp_path):
+    work = tmp_path / "work"
+    sandbox = work / "mockymock-x"
+    sandbox.mkdir(parents=True)
+    binary = sandbox / "PROG"
+    stdout = b"__MOCKYMOCK__ CASE 001 FAIL: got A\xffB\rC\n"
+
+    def fake_run(argv, **kwargs):
+        if kwargs.get("text"):
+            # What text=True would have done with these bytes.
+            raise UnicodeDecodeError("utf-8", stdout, 34, 35, "invalid start byte")
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=b"")
+
+    with (
+        mock.patch(
+            "mockymock.runtime.docker_toolchain._exec_binary", side_effect=fake_run
+        ),
+        mock.patch("mockymock.runtime.docker_toolchain.WORK_ROOT", work),
+    ):
+        result = docker_toolchain.run_binary(binary)
+    assert result.stdout == "__MOCKYMOCK__ CASE 001 FAIL: got A�B\rC\n"
+    assert result.stderr == ""

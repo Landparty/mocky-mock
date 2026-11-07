@@ -1,7 +1,8 @@
-"""Unit regressions for READ ... INTO found by the 2026-10-09 nightly bug
-hunt. Executed counterparts: tests/integration/test_nightly_20261009_read_into.py."""
+"""READ ... INTO: when the spliced mock copies the FD record into the
+INTO item, and which FD record is copied and reset.
 
-from __future__ import annotations
+Regression: nightly bug hunt of 2026-10-09. Executed counterparts:
+tests/integration/test_nightly_20261009_read_into.py."""
 
 from cobolparser import parse_cobol
 

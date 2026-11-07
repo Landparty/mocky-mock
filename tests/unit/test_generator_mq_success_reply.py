@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 MQBATCH = (
     Path(__file__).resolve().parents[1] / "fixtures" / "enterprise" / "MQBATCH.cbl"
@@ -93,3 +93,55 @@ def test_the_bundle_less_placeholder_answers_compcode_and_reason_too() -> None:
     assert body[0] == 'MOCK MQ "MQOPEN"'
     assert "MOVE 0 TO WS-COMPCODE" in body
     assert "MOVE 0 TO WS-REASON" in body
+
+
+# Regression: stress test of the integrated testing stack (backend test packs +
+# oracle over a synthetic corpus of every program type), 2026-11-02. Pinned MQ
+# codes.
+
+
+# --- pinned MQ reply --------------------------------------------------------
+
+MQ_PROG = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MQPROC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-HCONN             PIC S9(9) BINARY VALUE 0.
+       01  WS-HOBJ              PIC S9(9) BINARY.
+       01  WS-COMPCODE          PIC S9(9) BINARY.
+       01  WS-REASON            PIC S9(9) BINARY.
+       01  WS-BUFLEN            PIC S9(9) BINARY VALUE 20.
+       01  WS-DATALEN           PIC S9(9) BINARY.
+       01  WS-MD                PIC X(324).
+       01  WS-GMO               PIC X(112).
+       01  WS-MSG               PIC X(20).
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           CALL 'MQGET' USING WS-HCONN WS-HOBJ WS-MD WS-GMO
+                              WS-BUFLEN WS-MSG WS-DATALEN
+                              WS-COMPCODE WS-REASON
+           IF WS-COMPCODE NOT = 0
+               DISPLAY 'NO MESSAGE ' WS-REASON
+           ELSE
+               DISPLAY 'GOT ' WS-MSG
+           END-IF
+           GOBACK.
+"""
+
+
+def test_mq_failure_case_keeps_its_completion_code(tmp_path):
+    """MQPROC: the scenario for `IF WS-COMPCODE NOT = 0` pinned a non-zero
+    CompCode, and the success default (`MOVE 0`, #205) overwrote it: the
+    no-message branch was never run."""
+    cut = _generate(tmp_path, "MQPROC", MQ_PROG, "--seed", "1", "--scenarios", "all")
+    bodies = []
+    start = 0
+    while (start := cut.find('MOCK MQ "MQGET"', start)) != -1:
+        bodies.append(cut[start : cut.index("END-MOCK", start)])
+        start += 1
+    assert any("MOVE 0 TO WS-COMPCODE" in body for body in bodies)
+    assert any(
+        "TO WS-COMPCODE" in body and "MOVE 0 TO WS-COMPCODE" not in body
+        for body in bodies
+    )

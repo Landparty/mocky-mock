@@ -110,7 +110,7 @@ def _generate_and_run(tmp_path: Path, name: str, cbl: str, *gen: str) -> int:
 def test_141_generated_suite_for_a_looped_one_row_fetch_terminates_and_passes(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import FETCH_CBL
+    from tests.unit.test_cli_generate_with_data import FETCH_CBL
 
     exit_code = _generate_and_run(tmp_path, "FETCH", FETCH_CBL, "--seed", "1")
     out = capsys.readouterr().out
@@ -122,7 +122,7 @@ def test_141_generated_suite_for_a_looped_one_row_fetch_terminates_and_passes(
 def test_142_generated_verify_for_a_duplicated_call_passes(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import TWO_CBL
+    from tests.unit.test_cli_generate_with_data import TWO_CBL
 
     exit_code = _generate_and_run(tmp_path, "TWO", TWO_CBL, "--seed", "1")
     out = capsys.readouterr().out
@@ -133,7 +133,7 @@ def test_142_generated_verify_for_a_duplicated_call_passes(
 def test_144_generated_names_compile_and_the_suite_passes(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import DUPF_CBL, QUAL_CBL
+    from tests.unit.test_cli_generate_with_data import DUPF_CBL, QUAL_CBL
 
     for name, cbl in (("QUAL", QUAL_CBL), ("DUPF", DUPF_CBL)):
         exit_code = _generate_and_run(tmp_path, name, cbl, "--seed", "1", "--rows", "2")
@@ -143,7 +143,7 @@ def test_144_generated_names_compile_and_the_suite_passes(
 
 @requires_docker
 def test_read_outside_any_loop_generated_suite_passes(tmp_path: Path, capsys) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import PARM_CBL
+    from tests.unit.test_cli_generate_with_data import PARM_CBL
 
     exit_code = _generate_and_run(
         tmp_path, "PARM", PARM_CBL, "--seed", "1", "--rows", "5"
@@ -154,7 +154,7 @@ def test_read_outside_any_loop_generated_suite_passes(tmp_path: Path, capsys) ->
 
 @requires_docker
 def test_145_dibstat_program_compiles_and_runs(tmp_path: Path, capsys) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import DIB_CBL, DIB_CUT
+    from tests.unit.test_cics_eib import DIB_CBL, DIB_CUT
 
     exit_code = _run(tmp_path, "DIB", DIB_CBL, DIB_CUT)
     out = capsys.readouterr().out
@@ -166,7 +166,7 @@ def test_145_dibstat_program_compiles_and_runs(tmp_path: Path, capsys) -> None:
 def test_145_generated_suite_for_a_looped_get_next_terminates(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import SCAN_CBL
+    from tests.unit.test_generator_dli_end_status import SCAN_CBL
 
     exit_code = _generate_and_run(tmp_path, "SCAN", SCAN_CBL, "--seed", "1")
     out = capsys.readouterr().out
@@ -209,7 +209,7 @@ def test_146_recorded_goldens_pass_on_the_next_run(tmp_path: Path, capsys) -> No
 
 @requires_docker
 def test_147_cases_pass_in_the_suite_not_just_alone(tmp_path: Path, capsys) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import LS_CBL, LS_CUT
+    from tests.unit.test_reset import LS_CBL, LS_CUT
 
     exit_code = _run(tmp_path, "LS", LS_CBL, LS_CUT)
     out = capsys.readouterr().out
@@ -263,7 +263,7 @@ def test_148_sqlcode_does_not_leak_into_the_next_case(tmp_path: Path, capsys) ->
 def test_149_read_into_and_write_from_keep_their_implicit_move(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_bug_hunt_m1_fixes import RINTO_CBL
+    from tests.unit.test_cli_export import RINTO_CBL
 
     cut = """\
 TESTSUITE "into"

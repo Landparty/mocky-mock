@@ -973,3 +973,70 @@ def test_set_breakpoints_reports_the_line_gdb_bound_not_the_one_requested():
         # Bound on splicer-inserted code: nothing truer than the request.
         {"verified": True, "line": 20, "id": 2},
     ]
+
+
+# Regression: bug hunt round 11.
+from mockymock.debug.gdb_session import GdbCommandError
+
+# --- DAP setBreakpoints: partial failure keeps inserted breakpoints tracked ---
+
+
+class _RefusingGdb:
+    def __init__(self):
+        self.live: set[int] = set()
+        self._next = 0
+
+    def set_output_handler(self, on_output):
+        pass
+
+    def set_breakpoint(self, file, line):
+        if line == 13:
+            raise GdbCommandError("No line 13 in file")
+        self._next += 1
+        self.live.add(self._next)
+        return {"number": str(self._next)}
+
+    def delete_breakpoint(self, number):
+        self.live.discard(number)
+
+    def close(self):
+        pass
+
+
+def test_set_breakpoints_partial_failure_leaves_no_untracked_breakpoint():
+    gdb = _RefusingGdb()
+    identity = {i: i for i in range(1, 30)}
+
+    def launch(arguments):
+        return DebugSession(
+            gdb=gdb,
+            line_map=LineMap(_to_original=identity, _to_instrumented=identity),
+            variable_table={},
+            generated_c_lines=[],
+            paragraph_index=ParagraphIndex(paragraph_starts=[], section_starts=[]),
+            instrumented_file="fixture.cbl",
+        )
+
+    source = {"path": "/x/fixture.cbl"}
+    requests = [
+        _request(1, "initialize"),
+        _request(2, "launch", {}),
+        _request(
+            3,
+            "setBreakpoints",
+            {"source": source, "breakpoints": [{"line": 12}, {"line": 13}]},
+        ),
+        # The editor clears every breakpoint in the file.
+        _request(4, "setBreakpoints", {"source": source, "breakpoints": []}),
+    ]
+    output = io.BytesIO()
+    adapter = DapAdapter(
+        io.BytesIO(b"".join(_frame(r) for r in requests)), output, launch
+    )
+    adapter.run()
+    responses = [m for m in _drain(output) if m.get("type") == "response"]
+    assert [r["success"] for r in responses if r["command"] == "setBreakpoints"] == [
+        False,
+        True,
+    ]
+    assert gdb.live == set()

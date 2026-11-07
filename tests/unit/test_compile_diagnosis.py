@@ -104,3 +104,30 @@ def test_an_error_in_a_real_program_with_exec_blocks_gets_no_verdict(tmp_path: P
         is None
     )
     assert calls == []
+
+
+# Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
+# (executed counterpart:
+# tests/integration/test_bug_hunt_20261105_cut_language.py). `run --coverage`
+# on a cobc without `--coverage` (GnuCOBOL 3.1) was diagnosed as "the code
+# mockymock added broke the compile".
+
+
+# --- 5. a compile flag the cobc does not know --------------------------------
+
+
+def test_an_unrecognized_cobc_option_is_not_blamed_on_mockymock(tmp_path):
+    class NeverCalled:
+        @staticmethod
+        def compile_source(path):  # pragma: no cover - must not be reached
+            raise AssertionError("the probe compile is not needed")
+
+    diagnosis = _compile_failure_diagnosis(
+        NeverCalled,  # type: ignore[arg-type]
+        tmp_path,
+        ["       PROCEDURE DIVISION."],
+        "/opt/gc/bin/cobc: unrecognized option '--coverage'\n",
+    )
+    assert diagnosis is not None
+    assert "does not support --coverage" in diagnosis
+    assert "mockymock bug" not in diagnosis

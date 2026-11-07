@@ -9,7 +9,7 @@ import pytest
 
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.parser import CutParseError, parse_cut
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 ACC_CBL = """\
        IDENTIFICATION DIVISION.

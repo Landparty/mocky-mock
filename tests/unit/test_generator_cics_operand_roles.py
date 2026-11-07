@@ -7,7 +7,7 @@ FROM(rec)` and the message for `SEND TEXT FROM(msg)` with random text."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 CICS_CBL = """\
        IDENTIFICATION DIVISION.

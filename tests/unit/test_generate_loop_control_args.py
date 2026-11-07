@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 INLINE_CBL = """\
        IDENTIFICATION DIVISION.

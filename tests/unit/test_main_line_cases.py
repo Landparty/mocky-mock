@@ -481,3 +481,136 @@ def test_comment_entries_become_comments():
     assert out[6].startswith("      *> SOFTWARE")
     assert out[8].startswith("      *> FALLS")
     assert out[9:] == lines[9:]
+
+
+# Regression: LegacyLens "Create tests" (generate, record, play) over the NIST
+# CCVS85 suite, 2026-11-02 (examples/nist-cobol85/generated/README.md).
+
+
+def _nist_generate(tmp_path: Path, name: str, source: str, capsys) -> tuple[str, str]:
+    program = tmp_path / f"{name}.cbl"
+    program.write_text(source)
+    cut = tmp_path / f"{name}.cut"
+    main(["generate", str(program), "-o", str(cut), "--force", "--scenarios", "all"])
+    return cut.read_text(), capsys.readouterr().err
+
+
+# --- generate: identical cases (72 NIST suites) ----------------------------
+
+FALLS_THROUGH = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FALLS.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN"
+               FILE STATUS IS WS-STATUS.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC.
+           05  IN-CODE  PIC X.
+       WORKING-STORAGE SECTION.
+       01  WS-STATUS PIC XX.
+       01  WS-OUT    PIC X(4).
+       PROCEDURE DIVISION.
+       START-UP.
+           MOVE SPACES TO WS-OUT.
+           OPEN INPUT IN-FILE.
+       MAIN-LINE.
+           READ IN-FILE.
+           IF IN-CODE = "A"
+               MOVE "AAAA" TO WS-OUT
+           ELSE
+               MOVE "BBBB" TO WS-OUT
+           END-IF.
+           CLOSE IN-FILE.
+           STOP RUN.
+"""
+
+
+def test_a_first_paragraph_that_runs_on_gets_main_line_cases(tmp_path, capsys):
+    """START-UP falls through into MAIN-LINE, where the IF the branch
+    scenarios target sits: every case runs the main line THRU the last
+    paragraph, so each branch case takes its own branch."""
+    text, _ = _nist_generate(tmp_path, "FALLS", FALLS_THROUGH, capsys)
+    cases = parse_cut(text).test_cases
+    assert {(c.perform_target, c.perform_thru) for c in cases} == {
+        ("START-UP", "MAIN-LINE")
+    }
+    names = [case.name for case in cases]
+    assert any("IF@" in name and "THEN" in name for name in names)
+    assert any("IF@" in name and "ELSE" in name for name in names)
+    assert "left out" not in text
+
+
+# MAIN-LINE is PERFORMed too, so its STOP RUN cannot end a main-line range,
+# and sharing its line with the CLOSE it cannot be spliced into a GOBACK to
+# the test either: the cases keep their bare PERFORM START-UP.
+PERFORMED_TOO = (
+    FALLS_THROUGH.replace(
+        "           CLOSE IN-FILE.\n           STOP RUN.\n",
+        "           CLOSE IN-FILE. STOP RUN.\n",
+    )
+    + """       RETRY-PARA.
+           PERFORM MAIN-LINE.
+"""
+)
+
+
+def test_a_performed_main_line_runs_through_when_its_stop_run_can_goback(
+    tmp_path, capsys
+):
+    """With the STOP RUN on a line of its own, the planner GOBACKs from it to
+    the test (the call frame), so the main line runs THRU the last paragraph
+    and every branch case takes its own branch."""
+    source = (
+        FALLS_THROUGH
+        + """       RETRY-PARA.
+           PERFORM MAIN-LINE.
+"""
+    )
+    text, _ = _nist_generate(tmp_path, "FALLS", source, capsys)
+    cases = parse_cut(text).test_cases
+    assert {(c.perform_target, c.perform_thru) for c in cases} == {
+        ("START-UP", "RETRY-PARA")
+    }
+    names = [case.name for case in cases]
+    assert any("IF@" in name and "THEN" in name for name in names)
+    assert any("IF@" in name and "ELSE" in name for name in names)
+
+
+def test_scenarios_whose_case_repeats_an_earlier_one_are_left_out(tmp_path, capsys):
+    """A case PERFORMs START-UP alone, so every branch case came out
+    identical to the happy path under a name claiming a branch it never
+    takes (NIST: IX215A ran one case 83 times)."""
+    text, err = _nist_generate(tmp_path, "FALLS", PERFORMED_TOO, capsys)
+    assert {c.perform_thru for c in parse_cut(text).test_cases} == {None}
+    names = [case.name for case in parse_cut(text).test_cases]
+    assert "happy path" in names
+    assert not any("IF@" in name for name in names)
+    assert "scenario(s) left out" in text
+    assert "PERFORMs START-UP alone" in err
+    bodies = [
+        tuple(
+            line.strip()
+            for line in block.splitlines()[1:]
+            if line.strip() and not line.strip().startswith("*>")
+        )
+        for block in text.split("\nTESTCASE ")[1:]
+    ]
+    assert len(bodies) == len(set(bodies))
+
+
+def test_distinct_branch_cases_are_all_kept(tmp_path, capsys):
+    """The same program with its main line in one paragraph: every branch
+    case differs from the happy path, and none is dropped."""
+    source = FALLS_THROUGH.replace(
+        "           OPEN INPUT IN-FILE.\n       MAIN-LINE.\n",
+        "           OPEN INPUT IN-FILE.\n",
+    )
+    text, _ = _nist_generate(tmp_path, "FALLS", source, capsys)
+    names = [case.name for case in parse_cut(text).test_cases]
+    assert any("IF@" in name and "THEN" in name for name in names)
+    assert any("IF@" in name and "ELSE" in name for name in names)
+    assert "left out" not in text

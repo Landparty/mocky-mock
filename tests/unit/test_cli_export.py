@@ -293,3 +293,122 @@ def test_export_never_imports_docker_toolchain(tmp_path):
     finally:
         if saved is not None:
             sys.modules["mockymock.runtime.docker_toolchain"] = saved
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+RINTO_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RINTO.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-STAT.
+           SELECT OUT-FILE ASSIGN TO "OUT.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC.
+           05  IN-AMT  PIC 9(3).
+       FD  OUT-FILE.
+       01  OUT-REC    PIC X(5).
+       WORKING-STORAGE SECTION.
+       01  WS-STAT  PIC XX.
+       01  WS-EOF   PIC X VALUE "N".
+       01  WS-REC.
+           05  WS-AMT  PIC 9(3).
+       01  WS-TOTAL PIC 9(4) VALUE 0.
+       01  WS-LINE  PIC X(5) VALUE "HELLO".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           PERFORM READ-PARA UNTIL WS-EOF = "Y"
+           GOBACK.
+       READ-PARA.
+           READ IN-FILE INTO WS-REC
+               AT END MOVE "Y" TO WS-EOF
+           END-READ
+           IF WS-EOF = "N"
+               ADD WS-AMT TO WS-TOTAL
+           END-IF.
+       WRITE-PARA.
+           WRITE OUT-REC FROM WS-LINE.
+"""
+
+
+def _rinto_case(cut_body: str) -> str:
+    return 'TESTSUITE "into"\nTESTCASE "one"\n' + cut_body
+
+
+def _exported(tmp_path: Path, cut: str) -> str:
+    from mockymock.cli.main import main
+
+    (tmp_path / "RINTO.cbl").write_text(RINTO_CBL)
+    (tmp_path / "RINTO.cut").write_text(cut)
+    out = tmp_path / "RINTO.exp.cbl"
+    exit_code = main(
+        [
+            "export",
+            str(tmp_path / "RINTO.cbl"),
+            "--cut",
+            str(tmp_path / "RINTO.cut"),
+            "--output",
+            str(out),
+        ]
+    )
+    assert exit_code == 0
+    return out.read_text()
+
+
+def test_149_read_into_rows_copy_the_record_after_each_row(tmp_path) -> None:
+    exported = _exported(
+        tmp_path,
+        _rinto_case(
+            "MOCK READ IN-FILE ROWS\n    ( IN-AMT = 5 )\n    ( IN-AMT = 7 )\n"
+            "END-MOCK\nPERFORM MAIN-PARA\nEXPECT WS-TOTAL TO BE 12\n"
+        ),
+    )
+    assert exported.count("MOVE IN-REC TO WS-REC") >= 1
+
+
+def test_149_read_into_body_copies_the_record_after_the_body(tmp_path) -> None:
+    exported = _exported(
+        tmp_path,
+        _rinto_case(
+            "MOCK READ IN-FILE\n    MOVE 9 TO IN-AMT\nEND-MOCK\n"
+            "PERFORM READ-PARA\nEXPECT WS-AMT TO BE 9\n"
+        ),
+    )
+    body, copy = (
+        exported.index("MOVE 9 TO IN-AMT"),
+        exported.index("MOVE IN-REC TO WS-REC"),
+    )
+    assert body < copy
+
+
+def test_149_a_body_that_sets_the_into_item_itself_is_not_overwritten(
+    tmp_path,
+) -> None:
+    exported = _exported(
+        tmp_path,
+        _rinto_case(
+            "MOCK READ IN-FILE\n    MOVE 4 TO WS-AMT\nEND-MOCK\n"
+            "PERFORM READ-PARA\nEXPECT WS-TOTAL TO BE 4\n"
+        ),
+    )
+    assert "MOVE IN-REC TO WS-REC" not in exported
+
+
+def test_149_write_from_moves_the_source_into_the_record(tmp_path) -> None:
+    exported = _exported(
+        tmp_path,
+        _rinto_case(
+            "MOCK WRITE OUT-REC\nEND-MOCK\n"
+            'PERFORM WRITE-PARA\nEXPECT OUT-REC TO BE "HELLO"\n'
+        ),
+    )
+    assert "MOVE WS-LINE TO OUT-REC" in exported

@@ -398,3 +398,42 @@ def test_generated_sqlca_is_the_full_136_byte_db2_layout():
     assert items["SQLCA"].calculate_size() == 136
     assert {"SQLEXT", "SQLWARN8", "SQLWARN9", "SQLWARNA", "SQLSTATE"} <= set(items)
     assert "VALUE 136." in SQLCA_FIELDS[2]
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def test_148_the_generated_sqlca_is_reset_between_cases() -> None:
+    from mockymock.splicer.sqlca import SQLCA_FIELDS, sqlca_reset_lines
+
+    assert sqlca_reset_lines(["       " + line for line in SQLCA_FIELDS])[0] == (
+        "INITIALIZE SQLCA"
+    )
+    assert sqlca_reset_lines(["       01  WS-X PIC X."]) == []
+
+
+# Regression: bug hunt round 12.
+
+
+# --- EXEC SQL INCLUDE of a copybook cobol-parser refuses to expand --------
+
+
+def test_circular_sql_include_member_refuses_instead_of_raising(tmp_path):
+    (tmp_path / "SELFREF.cpy").write_text(
+        "       01  WS-A PIC X.\n       COPY SELFREF.\n"
+    )
+    lines = [
+        "IDENTIFICATION DIVISION.",
+        "PROGRAM-ID. P.",
+        "DATA DIVISION.",
+        "WORKING-STORAGE SECTION.",
+        "    EXEC SQL INCLUDE SELFREF END-EXEC.",
+        "01  WS-X PIC X.",
+        "PROCEDURE DIVISION.",
+    ]
+
+    _, reasons = transform_data_division_exec(lines, copybook_paths=[str(tmp_path)])
+
+    assert [r.code for r in reasons] == ["UNRESOLVED_COPYBOOK"]
+    assert "SELFREF" in reasons[0].message

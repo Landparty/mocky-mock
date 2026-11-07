@@ -4,7 +4,7 @@ counterpart lives in tests/integration/test_issue_156_loop_end_reply.py."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 MQ_LOOP_CBL = """\
        IDENTIFICATION DIVISION.

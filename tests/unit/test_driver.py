@@ -530,3 +530,93 @@ def test_a_short_literal_is_emitted_unchanged():
     lines = _build(_long_literal_case('X"4D44"')).procedure_lines
     assert '           IF MQMD NOT = X"4D44"' in lines
     assert not any(line.strip().startswith("& ") for line in lines)
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def _one_case_suite():
+    from mockymock.dsl.model import ExpectDirective, MockTestCase, MockTestSuite
+
+    case = MockTestCase(
+        name="rc",
+        perform_target="MAIN-PARA",
+        expectations=[ExpectDirective("RETURN-CODE", "0")],
+    )
+    return MockTestSuite(name="rc", test_cases=[case])
+
+
+def test_140_each_case_and_the_final_stop_run_reset_return_code() -> None:
+    from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.naming import TallyRegistry
+
+    suite = _one_case_suite()
+    lines = [
+        line.strip()
+        for line in build_driver(suite, [], TallyRegistry(suite)).procedure_lines
+    ]
+    stop = lines.index("STOP RUN.")
+    assert lines[stop - 1] == "MOVE 0 TO RETURN-CODE"
+    case_start = lines.index("UT-TESTCASE-001.")
+    perform = lines.index("PERFORM MAIN-PARA")
+    assert "MOVE 0 TO RETURN-CODE" in lines[case_start:perform]
+
+
+# Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
+# (executed counterpart:
+# tests/integration/test_bug_hunt_20261105_cut_language.py). A TESTSUITE /
+# TESTCASE name (or a MOCK SQL key in a VERIFY failure message) of a few
+# hundred characters was written into one DISPLAY literal: past cobc -free's
+# 512 bytes the line was truncated and the instrumented program failed to
+# compile.
+from mockymock.dsl.parser import parse_cut
+
+# --- 1. long names -----------------------------------------------------------
+
+LONG = "n" * 1000
+
+
+def _driver_lines(cut_text: str) -> list[str]:
+    suite = parse_cut(cut_text)
+    artifact = build_driver(suite, [], TallyRegistry(suite))
+    return artifact.working_storage_lines + artifact.procedure_lines
+
+
+def test_a_long_testsuite_and_testcase_name_keep_every_line_under_512():
+    lines = _driver_lines(
+        f'TESTSUITE "{LONG}"\n'
+        f'TESTCASE "{LONG}"\n'
+        "    PERFORM MAIN-PARA\n"
+        "    EXPECT WS-B TO BE 1\n"
+    )
+    assert max(len(line) for line in lines) < 512
+    # The marker still carries the whole name, as concatenated operands.
+    start = next(i for i, line in enumerate(lines) if "START: " in line)
+    shown = "".join(
+        line.strip().removeprefix("DISPLAY ").strip('"')
+        for line in lines[start : start + 20]
+        if line.strip().startswith(('DISPLAY "', '"'))
+    )
+    assert LONG in shown
+
+
+def test_a_long_mock_key_in_a_verify_failure_message_is_split():
+    key = "SELECT " + "X" * 600
+    lines = _driver_lines(
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        f'    MOCK SQL "{key}"\n'
+        "        MOVE 0 TO SQLCODE\n"
+        "    END-MOCK\n"
+        "    PERFORM MAIN-PARA\n"
+        f'    VERIFY SQL "{key}" WAS CALLED ONCE\n'
+    )
+    assert max(len(line) for line in lines) < 512
+    assert any("FUNCTION TRIM(UT-TALLY-EDITED)" in line for line in lines)
+
+
+def test_a_short_name_still_displays_on_one_line():
+    lines = _driver_lines('TESTSUITE "s"\nTESTCASE "it\'s ok"\n    PERFORM P\n')
+    assert '           DISPLAY "__MOCKYMOCK__ TESTSUITE: s"' in lines
+    assert '           DISPLAY "__MOCKYMOCK__ CASE 001 START: it\'s ok"' in lines

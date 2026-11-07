@@ -5,7 +5,7 @@ from pathlib import Path
 
 from mockymock.cli.main import main
 from tests.integration._docker import requires_docker
-from tests.unit.test_bug_hunt_20261027 import RUNAWAY, TRAILING_EXIT_PROGRAM
+from tests.unit.test_terminators import RUNAWAY, TRAILING_EXIT_PROGRAM
 
 RUNAWAY_CUT = """\
 TESTSUITE "RUNAWAY"

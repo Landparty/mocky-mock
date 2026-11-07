@@ -464,3 +464,132 @@ def test_read_variable_marks_an_unknown_type_instead_of_dumping_the_struct():
     assert value.kind == "opaque"
     assert value.decoded == "<unsupported type 0x15>"
     assert value.raw_repr == raw_repr
+
+
+# Regression: bug hunt round 12.
+import pytest
+
+from mockymock.debug.gdb_session import parse_mi_line
+from mockymock.debug.variable_map import _unquote_c_string
+
+# --- debugger: gdb's octal escapes are bytes, repeat blocks are values ----
+
+
+def test_octal_escaped_utf8_decodes_as_one_character():
+    # Verbatim gdb 15 MI output for a `cob_u8_t[8]` holding "Café   ",
+    # C locale (gdb escapes each UTF-8 byte in the value text) ...
+    c_locale = parse_mi_line('^done,value="\\"Caf\\\\303\\\\251   \\""\n')
+    # ... and C.UTF-8 (the value is raw UTF-8, MI escapes the bytes).
+    utf8_locale = parse_mi_line('^done,value="\\"Caf\\303\\251   \\""\n')
+
+    assert _unquote_c_string(c_locale.payload["value"]) == "Caf\u00e9   "
+    assert utf8_locale.payload["value"] == '"Caf\u00e9   "'
+    assert _unquote_c_string(utf8_locale.payload["value"]) == "Caf\u00e9   "
+
+
+def test_non_utf8_escaped_byte_still_decodes_to_its_code_point():
+    assert _unquote_c_string('"\\377AB"') == "\u00ffAB"
+    assert _unquote_c_string('"\\001ABC"') == "\x01ABC"
+
+
+@pytest.mark.parametrize(
+    ("gdb_value", "expected"),
+    [
+        # All verbatim from gdb 15 `-data-evaluate-expression` of a
+        # `cob_u8_t[N]` buffer (default `print repeats` threshold of 10).
+        ("\"JANE SMITH\", ' ' <repeats 20 times>", "JANE SMITH" + " " * 20),
+        ("' ' <repeats 30 times>", " " * 30),
+        ("'\\000' <repeats 29 times>", "\x00" * 29),
+        ("'\\377' <repeats 30 times>", "\u00ff" * 30),
+        ("''' <repeats 12 times>, \"\\\\\\\"xy\"", "'" * 12 + '\\"xy'),
+        (
+            "'A' <repeats 12 times>, \"\\303\\251\\303\\251\"",
+            "A" * 12 + "\u00e9\u00e9",
+        ),
+    ],
+)
+def test_gdb_repeat_blocks_are_decoded(gdb_value, expected):
+    assert _unquote_c_string(gdb_value) == expected
+
+
+def test_truncated_gdb_string_is_not_decoded():
+    assert _unquote_c_string('"abc"...') is None
+
+
+def test_plain_pic_x_buffer_with_trailing_spaces_is_alphanumeric():
+    class _Session:
+        def send(self, command: str):
+            if command == "-data-evaluate-expression (int)(b_8).attr->type":
+                return [
+                    ResultRecord("error", {"msg": "There is no member named attr."})
+                ]
+            if command == "-data-evaluate-expression b_8":
+                return [
+                    ResultRecord(
+                        "done", {"value": "\"JANE SMITH\", ' ' <repeats 20 times>"}
+                    )
+                ]
+            raise AssertionError(command)
+
+    value = read_variable(_Session(), "WS-CUST-NAME", "b_8")
+
+    assert value.kind == "alphanumeric"
+    assert value.decoded == "JANE SMITH" + " " * 20
+
+
+def test_alphanumeric_field_memory_is_decoded_as_utf8():
+    raw = "Caf\u00e9".encode()
+
+    class _Session:
+        def send(self, command: str):
+            answers = {
+                "-data-evaluate-expression (int)(f_9).attr->type": "33",
+                "-data-evaluate-expression (int)(f_9).attr->digits": "0",
+                "-data-evaluate-expression (int)(f_9).attr->scale": "0",
+                "-data-evaluate-expression (int)(f_9).attr->flags": "0",
+                "-data-evaluate-expression (f_9).size": str(len(raw)),
+                "-data-evaluate-expression (long)(f_9).data": "4096",
+                "-data-evaluate-expression f_9": "{size = 5, ...}",
+            }
+            if command in answers:
+                return [ResultRecord("done", {"value": answers[command]})]
+            if command == f"-data-read-memory-bytes 4096 {len(raw)}":
+                return [ResultRecord("done", {"memory": [{"contents": raw.hex()}]})]
+            raise AssertionError(command)
+
+    value = read_variable(_Session(), "WS-NAME", "f_9")
+
+    assert value.kind == "alphanumeric"
+    assert value.decoded == "Caf\u00e9"
+
+
+# --- debugger: .c.l.h names are cobc's bare f->name -----------------------
+
+_DUPLICATE_HEADER = """\
+/* Data storage */
+static cob_u8_t	b_8[10] __attribute__((aligned));	/* GRP-A */
+static cob_u8_t	b_11[10] __attribute__((aligned));	/* GRP-B */
+static cob_u8_t	b_14[4] __attribute__((aligned));	/* WS_TOTAL */
+
+/* Fields (local) */
+static cob_field f_9	= {5, b_8 + 5, &a_1};	/* WS-NAME */
+static cob_field f_12	= {5, b_11 + 5, &a_1};	/* WS-NAME */
+static cob_field f_14	= {4, b_14, &a_2};	/* WS_TOTAL */
+"""
+
+
+def test_same_named_items_are_both_listed():
+    """cobc's comment is the unqualified name (cobc/codegen.c writes
+    `/* %s */` with f->name): WS-NAME OF GRP-A and WS-NAME OF GRP-B used
+    to collapse into one entry showing GRP-B's field."""
+    table = parse_local_header(_DUPLICATE_HEADER)
+
+    assert table["WS-NAME"] == "f_9"
+    assert table["WS-NAME (2)"] == "f_12"
+
+
+def test_underscore_names_are_mapped_and_prefer_their_field_wrapper():
+    """GnuCOBOL words may contain `_` (cobc/scanner.l's word pattern)."""
+    table = parse_local_header(_DUPLICATE_HEADER)
+
+    assert table["WS_TOTAL"] == "f_14"

@@ -169,3 +169,38 @@ def test_write_mode_never_clobbers_a_config_file_it_did_not_load(tmp_path):
     reloaded = load_config(tmp_path)
     assert reloaded.seed == 7
     assert reloaded.ai_mode == "hands-off"
+
+
+# Regression: bug hunt round 12.
+from mockymock.cli.ai_mode import resolve_mode
+from mockymock.cli.config import MockymockConfig
+
+# --- ai_mode provenance ---------------------------------------------------
+
+
+def test_ai_mode_origin_is_the_file_that_set_it(tmp_path):
+    toml = tmp_path / "mockymock.toml"
+    yml = tmp_path / "cobol.yml"
+    config = MockymockConfig(
+        source=toml,
+        sources=(yml, toml),
+        seed=3,
+        ai_mode="hands-off",
+        ai_mode_source=yml,
+    )
+
+    assert resolve_mode(config).source == yml
+
+
+def test_load_config_records_where_ai_mode_came_from(tmp_path):
+    pytest.importorskip("cobolparser.config")
+    from mockymock.cli.config import load_config
+
+    (tmp_path / "cobol.yml").write_text("mockymock:\n  ai_mode: hands-off\n")
+    (tmp_path / "mockymock.toml").write_text("seed = 3\n")
+
+    config = load_config(tmp_path)
+
+    assert config.source == tmp_path / "mockymock.toml"
+    assert resolve_mode(config).source == (tmp_path / "cobol.yml").resolve()
+    assert resolve_mode(config).mode == "hands-off"

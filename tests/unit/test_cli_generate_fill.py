@@ -338,3 +338,59 @@ def test_generate_force_overwrites_an_existing_cut(tmp_path, capsys):
     exit_code = main(["generate", str(cbl), "--per-paragraph", "--force"])
     assert exit_code == 0, capsys.readouterr().out
     assert cut.read_text() != _FULLY_MOCKED_CUT
+
+
+# Regression: bug hunt round 12.
+import shutil
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+_CUSTINQ = _REPO / "examples" / "custinq" / "CUSTINQ.cbl"
+
+
+# --- generate --fill keeps a CRLF .cut CRLF -------------------------------
+
+
+def test_fill_preserves_crlf_line_endings(tmp_path, monkeypatch, capsys):
+    """read_text() translated CRLF to LF, so the CRLF check was dead and a
+    CRLF .cut came back LF on POSIX (and, written without newline="", an
+    LF join would have become CRLF on Windows regardless of the input)."""
+    monkeypatch.chdir(tmp_path)
+    shutil.copy(_CUSTINQ, tmp_path / "CUSTINQ.cbl")
+    cut = tmp_path / "CUSTINQ.cut"
+    cut.write_bytes(
+        b'TESTSUITE "S"\r\n\r\nTESTCASE "t"\r\n'
+        b"    PERFORM 1000-LOOKUP-CUSTOMER\r\n"
+        b'    EXPECT WS-INQUIRY-STATUS TO BE "FOUND"\r\n'
+    )
+
+    assert main(["generate", str(tmp_path / "CUSTINQ.cbl"), "--fill", str(cut)]) == 0
+
+    written = cut.read_bytes()
+    assert b'MOCK CICS "READ"' in written
+    assert b"\r\r\n" not in written
+    assert written.count(b"\n") == written.count(b"\r\n")
+
+
+def test_fill_writes_without_newline_translation(tmp_path, monkeypatch):
+    """The in-place write must not let the platform translate "\\n"
+    (Windows would turn the CRLF join into CR CR LF)."""
+    monkeypatch.chdir(tmp_path)
+    shutil.copy(_CUSTINQ, tmp_path / "CUSTINQ.cbl")
+    cut = tmp_path / "CUSTINQ.cut"
+    cut.write_bytes(
+        b'TESTSUITE "S"\r\nTESTCASE "t"\r\n    PERFORM 1000-LOOKUP-CUSTOMER\r\n'
+    )
+    calls: list[dict] = []
+    real_write_text = Path.write_text
+
+    def spy(self, data, *args, **kwargs):
+        if self == cut:
+            calls.append(kwargs)
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    assert main(["generate", str(tmp_path / "CUSTINQ.cbl"), "--fill", str(cut)]) == 0
+    assert calls and all(call.get("newline") == "" for call in calls)

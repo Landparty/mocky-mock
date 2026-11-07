@@ -240,3 +240,46 @@ def test_dynamic_call_with_unknown_targets_is_unchanged(tmp_path, monkeypatch):
     text = (tmp_path / "UNK.cut").read_text(encoding="utf-8")
     mock = text[text.index("MOCK CALL WS-PGM-NAME") :]
     assert "EVALUATE" not in mock[: mock.index("END-MOCK")]
+
+
+# Regression: open gaps the cobol-test run on PAYMAIN + PAYCALC found
+# (2026-11-06); executed counterpart:
+# tests/integration/test_open_gaps_2026_11_06.py. A filled CALL fixture carries
+# a direction.
+from mockymock.dsl.call_arguments import _add_fields
+
+
+class _Factory:
+    def __init__(self, *_):
+        pass
+
+    def value_for(self, *_):
+        return "1"
+
+
+def _spec(name):
+    from types import SimpleNamespace
+
+    qualified = f"PAY-AREA.{name}"
+    return SimpleNamespace(
+        column=name,
+        qualified_name=qualified,
+        to_dict=lambda: {"column": name, "qualified_name": qualified},
+    )
+
+
+def test_filled_call_fixture_gets_a_direction(monkeypatch):
+    import cobolparser.generators.data.values as values
+
+    monkeypatch.setattr(values, "ValueFactory", _Factory)
+    bundle = {"scenarios": [{"name": "s", "fixtures": []}]}
+    assert _add_fields(bundle, "CALL", "PAYCALC", "A", [_spec("A")], 1, "IN")
+    fixture = bundle["scenarios"][0]["fixtures"][0]
+    assert fixture["direction"] == "IN"
+    # An older bundle's "" is filled with the argument's direction ...
+    fixture["direction"] = ""
+    assert _add_fields(bundle, "CALL", "PAYCALC", "B", [_spec("B")], 1, "OUT")
+    assert fixture["direction"] == "OUT"
+    # ... and an argument going the other way makes it BIDIRECTIONAL.
+    assert _add_fields(bundle, "CALL", "PAYCALC", "C", [_spec("C")], 1, "IN")
+    assert fixture["direction"] == "BIDIRECTIONAL"
