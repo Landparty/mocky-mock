@@ -386,7 +386,13 @@ _EXPECT_RE = re.compile(r"^EXPECT\b", re.IGNORECASE)
 _CHARACTERIZATION_RE = re.compile(r"^\*>\s*CHARACTERIZATION\b", re.IGNORECASE)
 
 
-def _copy_first_case(cut_text: str, title: str, uses: list[str], drop: Any) -> str:
+def _copy_first_case(
+    cut_text: str,
+    title: str,
+    uses: list[str],
+    drop: Any,
+    extra_mocks: list[str] | None = None,
+) -> str:
     """`cut_text` with a copy of its first TESTCASE appended under `title`,
     `uses` lines first. `drop(category, key)` names the MOCK blocks, VERIFY
     and STUB EXPECT lines to leave out (STUB EXPECT has category None); the
@@ -432,7 +438,18 @@ def _copy_first_case(cut_text: str, title: str, uses: list[str], drop: Any) -> s
         body.append(line)
     while body and not body[-1].strip():
         body.pop()
-    case = [f'TESTCASE "{title}"', *uses, *body]
+    headers = {
+        line.strip().upper() for line in body if _ANY_MOCK_RE.match(line.strip())
+    }
+    extra: list[str] = []
+    for block in extra_mocks or []:
+        block_lines = block.strip("\n").split("\n")
+        header = block_lines[0].strip().upper()
+        if header in headers:
+            continue  # the copied case already answers that key
+        headers.add(header)
+        extra += block_lines
+    case = [f'TESTCASE "{title}"', *uses, *extra, *body]
     return cut_text.rstrip("\n") + "\n\n" + "\n".join(case) + "\n"
 
 
@@ -485,12 +502,16 @@ def round_trip_case(cut_text: str, plans: list[RealFilePlan]) -> str:
     )
 
 
-def real_calls_case(cut_text: str, calls: dict[str, str]) -> str:
+def real_calls_case(
+    cut_text: str, calls: dict[str, str], callee_mocks: list[str] | None = None
+) -> str:
     """`cut_text` with one more TESTCASE: a copy of its first case where
     each statically CALLed program in `calls` (name -> source path relative
     to the `.cut`) runs for real (`USE REAL CALL`) instead of its mock, so
     the checks a program makes on what its subprograms return (NIST's IC
-    programs) run their passing side. `cut_text` comes back unchanged when
+    programs) run their passing side. `callee_mocks` are placeholder MOCK
+    blocks for the real programs' own boundaries (a key the copied case
+    already mocks keeps its mock). `cut_text` comes back unchanged when
     `calls` is empty."""
     if not calls:
         return cut_text
@@ -502,5 +523,7 @@ def real_calls_case(cut_text: str, calls: dict[str, str]) -> str:
             f'    USE REAL CALL "{key}" FROM "{path}"'
             for key, path in sorted(calls.items())
         ],
-        lambda cat, key: cat == "CALL" and key in keys,
+        lambda cat, key: (cat == "CALL" and key in keys)
+        or (cat is None and any(key.startswith(f"UT-CAP-{k}-") for k in keys)),
+        callee_mocks,
     )

@@ -504,12 +504,18 @@ TESTCASE "happy path"
     EXPECT UT-CAP-SUB1-1 TO BE 0
     *> VERIFY CALL "SUB1" WAS CALLED <count not exact by construction>
     VERIFY CALL "OTHER" WAS CALLED 1 TIMES
+    *> STUB EXPECT UT-CAP-SUB1-1 -- the value the program actually passed
 """
-    text = real_calls_case(suite, {"SUB1": "../src/SUB1.cbl"})
+    text = real_calls_case(
+        suite,
+        {"SUB1": "../src/SUB1.cbl"},
+        ["    MOCK OPEN SUB-FILE\n    END-MOCK", '    MOCK CALL "OTHER"\n    END-MOCK'],
+    )
     case = text.split('TESTCASE "real calls: SUB1"\n')[1]
     assert case.startswith('    USE REAL CALL "SUB1" FROM "../src/SUB1.cbl"\n')
     assert "SUB1" not in case.split("\n", 1)[1]
-    assert 'MOCK CALL "OTHER"' in case and 'VERIFY CALL "OTHER"' in case
+    assert case.count('MOCK CALL "OTHER"') == 1 and 'VERIFY CALL "OTHER"' in case
+    assert "    MOCK OPEN SUB-FILE\n    END-MOCK\n" in case
     assert "EXPECT" not in case
     assert len(parse_cut(text).test_cases) == 2
     assert real_calls_case(suite, {}) == suite
