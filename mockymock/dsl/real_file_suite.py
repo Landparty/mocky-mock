@@ -523,7 +523,9 @@ def real_calls_case(
             f'    USE REAL CALL "{key}" FROM "{path}"'
             for key, path in sorted(calls.items())
         ],
-        lambda cat, key: (cat == "CALL" and key in keys)
-        or (cat is None and any(key.startswith(f"UT-CAP-{k}-") for k in keys)),
+        lambda cat, key: (
+            (cat == "CALL" and key in keys)
+            or (cat is None and any(key.startswith(f"UT-CAP-{k}-") for k in keys))
+        ),
         callee_mocks,
     )

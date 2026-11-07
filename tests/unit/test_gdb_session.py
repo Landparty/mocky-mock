@@ -535,3 +535,31 @@ def test_read_until_stopped_raises_after_read_deadline_on_a_hung_debuggee():
     with mock.patch("mockymock.debug.gdb_session._READ_TIMEOUT_SECONDS", 0.05):
         with pytest.raises(GdbSessionClosedError, match="no output"):
             session.run()
+
+
+# Regression: bug hunt round 11.
+from mockymock.debug.gdb_session import _stop_event_from_payload
+
+# --- gdb/MI parsing -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["*stopped by operator", "^done with the batch", '^done,value="1" junk'],
+)
+def test_program_output_that_starts_like_an_mi_record_is_program_output(line):
+    assert parse_mi_line(line) == ProgramOutput(line)
+
+
+def test_real_mi_records_still_parse():
+    assert parse_mi_line("^done") == ResultRecord("done", {})
+    assert parse_mi_line('*stopped,reason="exited-normally"') == AsyncRecord(
+        "stopped", {"reason": "exited-normally"}
+    )
+
+
+@pytest.mark.parametrize("raw, expected", [("01", 1), ("010", 8), ("0377", 255)])
+def test_exit_code_is_read_as_gdb_octal(raw, expected):
+    event = _stop_event_from_payload({"reason": "exited", "exit-code": raw})
+    assert event.reason == "exited"
+    assert event.exit_code == expected

@@ -626,8 +626,9 @@ def test_rows_cursor_survives_hook_steps_while_verify_counts_the_case():
     assert f"MOVE {tally} TO {base}" in first
     assert f"MOVE 0 TO {registry.name(*audit)}" in first
     clear = first.index("PERFORM 0200-CLEAR")
-    assert f"MOVE {registry.name(*audit)} TO {registry.base_name(*audit)}" in (
-        first[clear + 1 :]
+    assert (
+        f"MOVE {registry.name(*audit)} TO {registry.base_name(*audit)}"
+        in (first[clear + 1 :])
     )
     assert f"IF ({tally} - {base}) NOT = 2" in first
 

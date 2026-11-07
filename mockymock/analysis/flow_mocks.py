@@ -219,7 +219,7 @@ def find_flow_mock_plans(
         return [], [
             _refusal(
                 "UNRESOLVED_FLOW_MOCK_TARGET",
-                f"MOCK {category.keyword} {key}: program has no PROCEDURE " f"DIVISION",
+                f"MOCK {category.keyword} {key}: program has no PROCEDURE DIVISION",
             )
             for category, key in flow_keys
         ]

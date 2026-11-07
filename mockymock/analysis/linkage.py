@@ -328,7 +328,7 @@ def procedure_header_clause_spans(
     the start of the first span, so the header ends on the line its clause
     starts on (the first line, unless the clause is wrapped onto a later
     one); the driver is inserted after the header's period
-    (`cli.main._insert_driver`). `[]` when the header has no such
+    (`cli._common._insert_driver`). `[]` when the header has no such
     clause. None when it cannot be blanked safely: a `CHAINING` clause (a
     different mechanism, never neutralized) or no closing period within
     `_HEADER_MAX_LINES` lines."""

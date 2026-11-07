@@ -17,7 +17,7 @@ before running, which paragraph to `PERFORM`, and what to assert after.
                                                 │
                              (consumed by splicer/ to instrument COBOL)
 
-MockSurface (static analysis) ──▶ generator.py: scaffold_cut() ──▶ starter .cut text
+MockSurface (static analysis) ──▶ generator/: scaffold_cut() ──▶ starter .cut text
 ```
 
 `model.py` holds no behavior beyond `describe()` and `all_mock_keys()` — it's
@@ -610,7 +610,7 @@ A stub on an item the program fills from the system clock (`record_rewrite.clock
 
 `FILE_OP_CATEGORIES` (frozenset of the 8 file-op categories) and
 `EXEC_CATEGORIES` (frozenset of `SQL/CICS/DLI`) are module-level constants
-used both here and by `generator.py` to branch on key-syntax family.
+used both here and by the `generator/` package to branch on key-syntax family.
 
 # Parser (`parser.py`)
 
@@ -700,7 +700,38 @@ After the full scan, two more checks raise `CutParseError`: `suite is None`
 unterminated `MOCK` body errors with the line number of the `MOCK` line
 that opened it (`tests/unit/test_dsl_parser.py` pins both).
 
-# Generator (`generator.py`)
+# Generator (`generator/` package)
+
+## Module layout
+
+`mockymock/dsl/generator/` was a single ~5,400-line `generator.py` until the
+2026-11 split; it is now a package split by boundary family. Its
+`__init__.py` keeps the long module docstring and re-exports every name
+other modules and tests import (`scaffold_cut`, `directive_snippet`,
+`ProgramContext`, `file_op_key`, `_bundle_rendered_value`, ...), so
+`from mockymock.dsl.generator import X` keeps working. Submodules, lowest
+layer first (each imports only from modules above it in this list):
+
+| Module | Holds |
+|---|---|
+| `keys.py` | `split_read_files`/`split_open_files`/`open_site_key`/`read_site_key`/`file_op_key`, `_unique_prefix`, `_directive_header`, the mockymock-vs-bundle key sets (`_mockymock_boundary_keys`, `_bundle_boundary_keys`, `_known_unmockable_keys`, `_warn_on_key_mismatch`) |
+| `_context.py` | `ProgramContext` and its builders (captures, COMMAREA setup, dynamic-call targets, UNSTRING layouts, status-driven reads), `CallCountOverride`, shared constants and small helpers (`_reply_watched_names`, `_comment_text`) |
+| `sql.py` | SQLCODE status lines, `_sql_output_layout`, `_is_looped_fetch`, `_sql_wants_rows` |
+| `cics.py` | CICS / console-ACCEPT loop-end replies, CICS operand roles and output layouts |
+| `mq.py` | `_mq_success_reply` |
+| `rows.py` | fixture value/row rendering (`_bundle_rendered_value`, `_row_move_line(s)`, delimited records, record-length MOVEs, `_single_row_body`) |
+| `ims.py` | DL/I and looped-CALL end-of-data replies (`_call_loop_end_lines`, `_dli_*`, `_without_loop_control`) |
+| `files.py` | READ bodies, AT END replication/lifting (`_at_end_handling`, `_lifted_at_end_lines`), INVALID KEY / keyed-read loops, file-status-only bodies, read exhaustion |
+| `directives.py` | bundle-less placeholder directives: `_directive_for`, `directive_snippet` |
+| `bundle.py` | bundle-driven directives: `_bundle_directive_for(_group)`, `_dli_rows_directive`, `_sql_rows_directive`, `_bundle_mock_directives` |
+| `counts.py` | EXPECT/VERIFY rendering (`_render_expectation`) and the call-count site analysis (`_conditional_call_count_keys`, `_once_per_site_counts`, ...) |
+| `normalize.py` | bundle normalization passes (`_with_read_forms`, `_with_open_modes`, `_with_site_call_counts`, `_with_accept_keys`) |
+| `scaffold.py` | `scaffold_cut`, `_scaffold_placeholder`, `_scaffold_with_bundle`, `_first_paragraph`, entry-parameter and CANCEL-cover lines |
+
+A test that monkeypatches a generator function must patch the submodule
+whose code calls it (e.g. `generator.files.lift_clause_bodies`,
+`generator.scaffold._first_paragraph`) -- patching the package re-export
+has no effect.
 
 `scaffold_cut(suite_name, surface: MockSurface) -> str` builds starter `.cut`
 text from static analysis, not from existing `.cut` files (no round-trip
@@ -735,7 +766,7 @@ Rules:
   GO TOs on to the tests, so its cases used to test that paragraph alone.
   A program that also PERFORMs its terminator's paragraph keeps the bare
   PERFORM. So does a suite `lint` refuses more cases of than of the same
-  scenarios with a bare PERFORM (`cli.main._main_line_or_bare`, a note on
+  scenarios with a bare PERFORM (`cli.commands.generate._main_line_or_bare`, a note on
   stderr): the longer range can reach statements no MOCK replaces (NIST
   IX217A's WRITE ... INVALID KEY with no END-WRITE). Identical check lines
   in a case are written once.
@@ -792,7 +823,7 @@ Rules:
   `_scaffold_placeholder` itself emits). `None` whenever `_directive_for`
   is. This is the one place `RefusalReason.suggested_fix`
   (`analysis/refusal/_gates.py`) and `generate --fill`
-  (`cli/main.py`'s `_fill_cut_file`) both get their fix text from, so a
+  (`cli/commands/generate.py`'s `_fill_cut_file`) both get their fix text from, so a
   refusal's suggestion and a fresh scaffold can never disagree about what
   a site's directive looks like. See
   docs/2026-09-15-actionable-refusals-and-fill-design.md.
@@ -947,7 +978,7 @@ the inherited one and starts its rows at 1.
 
 **This grammar is hand-authoring only.** It exists for a human (or an
 editor integration) writing a `.cut` file by hand against `mockymock
-fixtures`' JSON output; `dsl/generator.py`'s bundle-driven scaffold
+fixtures`' JSON output; `dsl/generator/`'s bundle-driven scaffold
 (`generate --with-data`/`--fixtures`, below) does **not** emit it — it
 still hand-rolls its own `EVALUATE`/`WHEN <tally> = N` block for a
 multi-row READ sequence (`_read_body`), mirroring this sugar's generated
@@ -1348,7 +1379,7 @@ paragraph-grouped path described above, unchanged. A real
 
 #### Scaffold corrections from the 2026-10-05 bug hunt (#141-#145, #148, #150)
 
-All in `dsl/generator.py`; `ProgramContext` now also carries `looped`,
+All in the `dsl/generator/` package; `ProgramContext` now also carries `looped`,
 `program`, `neutralized_goto` and `name_counts`.
 
 - **Reachability per scenario (#143).** Only boundaries reachable from the
@@ -1528,13 +1559,13 @@ str]] = frozenset()` (bundle-side string category paired with the
 fixture's own key, e.g. `("READ", "ORDER-FILE")` — matching how the CLI
 uppercases `--placeholder CATEGORY:KEY`'s category but leaves the key
 case-sensitive), only has an effect with a bundle; without one every site
-already gets a placeholder body. `--rows N` doesn't touch `generator.py`
+already gets a placeholder body. `--rows N` doesn't touch `generator/`
 at all — it maps to `DataGeneratorOptions(rows=N)` on the
-`ProgramFixtureGenerator` construction in `cli/main.py` (`_cmd_generate`'s
+`ProgramFixtureGenerator` construction in `cli/commands/generate.py` (`_cmd_generate`'s
 `--with-data` branch, mirroring `_cmd_fixtures`), so by the time a bundle
 reaches `scaffold_cut` its row counts are already baked in exactly like
 `--fixtures FILE`'s are — hence `--rows` combined with `--fixtures` is a
-clean CLI-level rejection (source of truth: `mockymock/cli/main.py`, not
+clean CLI-level rejection (source of truth: `mockymock/cli/commands/generate.py`, not
 this module).
 
 **The downgrade** (`_bundle_directive_for`/`_bundle_directive_for_group`):
@@ -1630,7 +1661,7 @@ deliberately overrides it.
   `CALL`, resolved in `parser._resolve_category` (`cat == "MQ"` returns
   `MockCategory.CALL`). If you `grep` the model for MQ handling and find
   nothing, that's correct — MQ only exists in the parser's regex layer and
-  in `generator.py`'s `is_mq` branch that re-adds the `MQ` keyword for
+  in `generator/`'s `is_mq` branches (`keys._directive_header`, `directives._directive_for`) that re-add the `MQ` keyword for
   scaffold readability. Do not add a `MockCategory.MQ`; it would break the
   `(category, key)` matching invariant described in the `MockCategory`
   docstring.

@@ -333,7 +333,7 @@ def filter_suite_cases(
         if name not in available:
             listing = ", ".join(repr(c.name) for c in suite.test_cases)
             problems.append(
-                f"no TESTCASE named {name!r} in this suite " f"(available: {listing})"
+                f"no TESTCASE named {name!r} in this suite (available: {listing})"
             )
     available_tags = {tag for case in suite.test_cases for tag in case.tags}
     # Tags select a subset as a union, so `--tag a --tag b` on a suite with
@@ -630,6 +630,9 @@ def _run_static_checks(
         out.notes.extend(item.waiver_note for item in scoped)
 
     # 5. Surface analysis, normalization, linkage layout + neutralization.
+    if parse_result.ast is None:  # a failed parse refused in step 2
+        out.problems.append(f"{source_path.name}: no AST to analyze")
+        return out
     surface = analyze(parse_result.ast)
     # A clock ACCEPT (FROM DATE/TIME/DAY/DAY-OF-WEEK) is mockable only when
     # a MOCK names it (issue #240): an opt-in site, spliced only then.
@@ -943,7 +946,9 @@ def _run_static_checks(
                 block = (
                     "BEFORE-ALL"
                     if check.for_case is None
-                    else "this TESTCASE" if check.hook == "TESTCASE" else "BEFORE-EACH"
+                    else "this TESTCASE"
+                    if check.hook == "TESTCASE"
+                    else "BEFORE-EACH"
                 )
                 out.problems.append(f"    Add to {block}:")
                 out.problems.extend(

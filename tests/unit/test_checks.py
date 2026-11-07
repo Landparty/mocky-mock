@@ -99,9 +99,7 @@ def test_unknown_tag_is_a_problem():
 
 def test_filter_by_tag_keeps_only_tagged_cases():
     suite = parse_cut(
-        'TESTSUITE "s"\n'
-        'TESTCASE "a" TAGS "slow"\nPERFORM P\n'
-        'TESTCASE "b"\nPERFORM P\n'
+        'TESTSUITE "s"\nTESTCASE "a" TAGS "slow"\nPERFORM P\nTESTCASE "b"\nPERFORM P\n'
     )
     problems = filter_suite_cases(suite, None, ["slow"])
     assert problems == []

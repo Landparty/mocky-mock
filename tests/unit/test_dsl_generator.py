@@ -339,3 +339,20 @@ def test_scaffold_mocks_boundaries_in_paragraphs_the_entry_reaches():
     assert by_entry == {"0000-MAIN": ["FIRST", "SECOND"], "1000-NEXT": ["SECOND"]}
     for case in suite.test_cases:
         assert check_test_case(surface, result.ast, case) == []
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def test_144_ambiguous_folded_field_becomes_a_stub_not_a_dotted_expect() -> None:
+    from mockymock.dsl.fixture_bundle import Expectation
+    from mockymock.dsl.generator import ProgramContext, _render_expectation
+
+    source = ProgramContext(lines=[], statement_starts=[], name_counts={"QTY": 2})
+    lines = _render_expectation(
+        Expectation(kind="field_equals", ref="A-REC.QTY", value="5"),
+        set(),
+        source=source,
+    )
+    assert lines[0].startswith("*> STUB EXPECT A-REC.QTY")

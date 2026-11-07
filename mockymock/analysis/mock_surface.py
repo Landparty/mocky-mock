@@ -40,7 +40,6 @@ whole like any other boundary statement).
 
 from __future__ import annotations
 
-import importlib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -57,6 +56,13 @@ from cobolparser.models.program import (
 )
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
+from cobolparser.models.statements.communication import (
+    DisableStatement,
+    EnableStatement,
+    PurgeStatement,
+    ReceiveStatement,
+    SendStatement,
+)
 from cobolparser.models.statements.control import (
     EvaluateStatement,
     SearchStatement,
@@ -73,15 +79,23 @@ from cobolparser.models.statements.io import (
     IOUnlockStatement,
     IOWriteStatement,
 )
+from cobolparser.models.statements.legacy import ChainStatement
 from cobolparser.models.statements.misc import (
     CancelStatement,
     ExitStatement,
+    GenerateStatement,
     GobackStatement,
+    InvokeStatement,
     MergeStatement,
     ReleaseStatement,
     ReturnStatement,
     SelectStatement,
     SortStatement,
+    XmlJsonStatement,
+)
+from cobolparser.models.statements.report_writer import (
+    InitiateStatement,
+    TerminateStatement,
 )
 from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecCicsStatement,
@@ -99,50 +113,13 @@ from mockymock.analysis.sql_whenever import (
 from mockymock.dsl.model import MockCategory
 from mockymock.splicer.io_copy import DataLayout, data_layout
 
-
-def _optional_statement_types(module: str, *names: str) -> tuple[type, ...]:
-    """The named cobolparser AST classes that exist in the installed
-    cobol-parser, as an isinstance-ready tuple (empty when none do).
-
-    mocky-mock pins only a floor on cobol-parser (see pyproject.toml), and
-    the release its CI compat lane installs predates the 2026-09-02
-    verb-coverage work that introduced the Communication Module, Report
-    Writer and legacy-verb nodes. On such a release the verbs behind these
-    classes are still warned-and-discarded by the parser, which the
-    PARSE_WARNING refusal already catches, so resolving them to nothing
-    here is sound -- the fail-closed guarantee holds either way."""
-    try:
-        mod = importlib.import_module(module)
-    except ImportError:
-        return ()
-    return tuple(t for t in (getattr(mod, n, None) for n in names) if t is not None)
-
-
-_INVOKE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "InvokeStatement"
-)
-_GENERATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "GenerateStatement"
-)
-_XML_JSON_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "XmlJsonStatement"
-)
-_CHAIN_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.legacy", "ChainStatement"
-)
-_COMMUNICATION_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.communication",
-    "SendStatement",
-    "ReceiveStatement",
-    "EnableStatement",
-    "DisableStatement",
-    "PurgeStatement",
-)
-_INITIATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.report_writer", "InitiateStatement"
-)
-_TERMINATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.report_writer", "TerminateStatement"
+# The Communication Module verbs, matched as one family by the classifier.
+_COMMUNICATION_TYPES: tuple[type, ...] = (
+    SendStatement,
+    ReceiveStatement,
+    EnableStatement,
+    DisableStatement,
+    PurgeStatement,
 )
 
 # Statement classes verified to touch nothing outside the program (data
@@ -623,10 +600,10 @@ _BOUNDARY_STATEMENT_TYPES = (
     # are refused outright, but the sticky flag still describes them
     # correctly: nothing inside could ever be spliced independently.
     *_COMMUNICATION_TYPES,
-    *_INVOKE_TYPES,
-    *_INITIATE_TYPES,
-    *_GENERATE_TYPES,
-    *_TERMINATE_TYPES,
+    InvokeStatement,
+    InitiateStatement,
+    GenerateStatement,
+    TerminateStatement,
 )
 
 # ACCEPT sources that never read the console: system registers and runtime
@@ -722,9 +699,9 @@ def _nested_statement_lists(statement) -> list[list]:
         # key (verified against cobolparser's control.py), unlike
         # EvaluateStatement's WhenClause nodes. SEARCH's AT END body is
         # already covered by "at_end_clause" in _NESTED_STATEMENT_ATTRS.
-        for when in statement.when_clauses:
-            if when.get("statements"):
-                lists.append(when["statements"])
+        for search_when in statement.when_clauses:
+            if search_when.get("statements"):
+                lists.append(search_when["statements"])
     return lists
 
 
@@ -904,7 +881,7 @@ def _classify_statement(
             add_site(None, "STOP literal", keys=(operand,) if operand else ())
         return
 
-    if isinstance(statement, _INVOKE_TYPES):
+    if isinstance(statement, InvokeStatement):
         # INVOKE object-ref "method": an external (object-oriented) call
         # mockymock has no mock category for. Detected, never spliced.
         keys = tuple(
@@ -918,7 +895,7 @@ def _classify_statement(
         add_site(None, "INVOKE", keys=keys)
         return
 
-    if isinstance(statement, _CHAIN_TYPES):
+    if isinstance(statement, ChainStatement):
         # CHAIN "PROG" USING ...: a CALL that never returns (Micro Focus).
         name = getattr(statement, "program", None) or ""
         add_site(None, "CHAIN", keys=(name,) if name else ())
@@ -931,12 +908,12 @@ def _classify_statement(
         add_site(None, "communication", keys=(cd_name,) if cd_name else ())
         return
 
-    if isinstance(statement, (*_INITIATE_TYPES, *_TERMINATE_TYPES)):
+    if isinstance(statement, (InitiateStatement, TerminateStatement)):
         # INITIATE/TERMINATE report-name ...: one site, one key per report
         # (like a multi-file OPEN/CLOSE).
         category = (
             MockCategory.INITIATE
-            if isinstance(statement, _INITIATE_TYPES)
+            if isinstance(statement, InitiateStatement)
             else MockCategory.TERMINATE
         )
         surface.file_io_paragraphs.add(paragraph_name)
@@ -945,7 +922,7 @@ def _classify_statement(
         add_site(category, category.value, keys=keys)
         return
 
-    if isinstance(statement, _GENERATE_TYPES):
+    if isinstance(statement, GenerateStatement):
         # GENERATE report-or-group-name: writes the detail group (or the
         # whole report's summary) through the report file.
         surface.file_io_paragraphs.add(paragraph_name)
@@ -953,7 +930,7 @@ def _classify_statement(
         add_site(MockCategory.GENERATE, "GENERATE", keys=(name,) if name else ())
         return
 
-    if isinstance(statement, _XML_JSON_TYPES):
+    if isinstance(statement, XmlJsonStatement):
         # XML/JSON GENERATE/PARSE act on WORKING-STORAGE only -- not a
         # boundary. Two fail-closed guards for older cobol-parser releases
         # that kept the whole clause region as text: an exception-handler

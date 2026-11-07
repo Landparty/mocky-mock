@@ -88,9 +88,9 @@ def test_generate_with_data_on_a_lowercase_program_lints_clean(
 
     assert main(["generate", str(program), "--with-data", "-o", str(generated)]) == 0
     capsys.readouterr()
-    assert (
-        main(["lint", str(program), "--cut", str(generated)]) == 0
-    ), capsys.readouterr()
+    assert main(["lint", str(program), "--cut", str(generated)]) == 0, (
+        capsys.readouterr()
+    )
 
 
 def test_normalize_flow_targets_upper_cases_every_target_field():

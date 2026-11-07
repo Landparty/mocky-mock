@@ -457,7 +457,7 @@ half-start a session a human cannot drive.
    (this revision). Call stack synthesis emerged as new, previously
    unscoped work; group items/`OCCURS`/`REDEFINES` remain unverified for
    variable mapping and are flagged, not blocking, for step 3.
-3. **CLI implementation plan** (`docs/superpowers/plans/`) — next step.
+3. **CLI implementation plan** (`docs/archive/plans/`) — next step.
    `line_map.py`, `variable_map.py`, and `call_stack.py` are all now
    concretely scoped by the spike; the plan should still budget a follow-up
    fixture pass (group items, `OCCURS`, `REDEFINES`, nested PERFORM/PERFORM

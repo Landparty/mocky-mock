@@ -143,8 +143,8 @@ def exact_count_scope(
         return set(), set()
     ordered = _source_ordered_paragraphs(procedure)
     by_name: dict[str, Any] = {}
-    for paragraph in _all_paragraphs(procedure):
-        by_name.setdefault(paragraph.paragraph_name, paragraph)
+    for para in _all_paragraphs(procedure):
+        by_name.setdefault(para.paragraph_name, para)
     section_members: dict[str, list[str]] = {
         name: [p.paragraph_name for p in section.paragraphs]
         for name, section in getattr(procedure, "_sections", {}).items()

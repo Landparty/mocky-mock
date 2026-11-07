@@ -13,7 +13,7 @@ from tests.integration.test_bug_hunt_m1_fixes import _generate_and_run
 def test_generated_priming_read_suite_terminates_and_passes(
     tmp_path: Path, capsys
 ) -> None:
-    from tests.unit.test_nightly_20261009_fixes import PRIME_CBL
+    from tests.unit.test_generator_read_loop_end import PRIME_CBL
 
     exit_code = _generate_and_run(
         tmp_path, "PRIME", PRIME_CBL, "--seed", "3", "--rows", "3"

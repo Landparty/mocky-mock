@@ -1,18 +1,23 @@
 name: CI
 
-# Mirrors the sibling cobol-parser repo's workflow shape (push/PR to main,
-# ubuntu-latest, Python 3.11-3.13 matrix matching this project's
-# requires-python floor in pyproject.toml).
+# Tiers (see .okf/testing.md):
+#   lint             push/PR   ruff check + ruff format + mypy, against the
+#                              locked dependencies (cobol-parser included, so
+#                              mypy sees its real types).
+#   unit             push/PR   tests/unit on Linux (every supported Python)
+#                              plus Windows and macOS, from uv.lock.
+#   cobol-parser-*   nightly   tests/unit against the newest published
+#                              cobol-parser and against the declared floor,
+#                              so the whole `cobol-parser>=X,<Y` range is run.
+#   integration      nightly   tests/integration: the Docker/GnuCOBOL tier.
+#                              Too slow to gate every PR, too important to
+#                              never run.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   schedule:
-    # Catches cobol-parser releases that drift from this project's pinned
-    # floor (see the cobol-parser-compat job below) without waiting for a
-    # push/PR here to surface it. Anchored off-peak; the exact minute
-    # doesn't matter since this isn't gating a deploy.
     - cron: "17 6 * * *"
   workflow_dispatch:
 
@@ -21,100 +26,84 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
-      # ruff/black/mypy read their config from pyproject.toml. mypy runs
-      # with ignore_missing_imports (see [tool.mypy]), so the cobol-parser
-      # sibling checkout is not needed for this job.
-      - name: Install lint tools
-        run: pip install ruff black mypy
-      - name: ruff
-        run: python -m ruff check .
-      - name: black
-        run: python -m black --check .
+      - name: Install (locked)
+        run: uv sync --locked --extra dev
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format
+        run: uv run ruff format --check .
       - name: mypy
-        run: python -m mypy mockymock/
+        run: uv run mypy mockymock/
 
-  test:
-    if: false # test suite removed from CI (too long); run locally with `python -m pytest tests/ -v`
-    runs-on: ubuntu-latest
+  unit:
+    if: github.event_name != 'schedule'
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      # No GnuCOBOL install: the toolchain is Docker-only (see
-      # docs/2026-07-04-docker-toolchain-design.md). ubuntu-latest runners
-      # ship with Docker; the integration tests build the mockymock-gnucobol
-      # image on first use (~1 min per job).
-
-      # cobol-parser resolves from PyPI as a normal pinned dependency (see
-      # pyproject.toml) -- no sibling checkout, no cross-repo PAT needed.
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Run tests
-        run: python -m pytest tests/ -v
-
-  # Cross-platform signal for the Python/DSL layer (parser, splicer, CLI,
-  # path/newline handling) -- the layer most likely to regress silently on
-  # a non-Linux host. Deliberately does NOT attempt the Docker/GnuCOBOL
-  # integration tier here: GitHub-hosted macos-latest runners have no
-  # reachable Docker daemon (the tier's own @requires_docker gate skips
-  # cleanly), but windows-latest runners ship a *Windows-container* Docker
-  # Engine -- `docker info` can report a live daemon while still being
-  # unable to build/run mockymock-gnucobol's Linux image, which would fail
-  # loudly rather than skip. Restricting to tests/unit sidesteps that
-  # ambiguity entirely rather than relying on unverified runner behavior.
-  # The Docker-backed compile/run path itself stays covered by `test`
-  # above (ubuntu-latest) until a self-hosted or Linux-containers-on-
-  # Windows runner is worth the added CI complexity.
-  test-cross-platform:
-    if: false # test suite removed from CI (too long); run locally with `python -m pytest tests/unit -v`
-    strategy:
-      matrix:
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
+      - name: Install (locked)
+        run: uv sync --locked --extra dev
+      - name: Unit tests
+        run: uv run pytest tests/unit
 
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Run unit tests
-        run: python -m pytest tests/unit -v
-
-  # Gates the seam between this repo and cobol-parser (2026-08-26 audit
-  # finding): pyproject.toml pins only a floor (`cobol-parser>=X,<2`), so
-  # `pip install mockymock` always resolves whatever cobol-parser has most
-  # recently published to PyPI within that range -- there was previously
-  # nothing here that noticed when a new release changed parser behavior
-  # this project's tests depend on (the exact way the pinned floor had to
-  # be bumped to 1.8.0 once cobol-parser fixed the phantom-arithmetic-
-  # terminator-paragraph bug test_refusal.py's UNSUPPORTED_PHANTOM_PARAGRAPH
-  # tests were built to reproduce). This job installs the real published
-  # package -- no sibling checkout, no local build -- exactly as a fresh
-  # `pip install mockymock` would, and runs the fast, Docker-free unit
-  # tier against it, so drift shows up as a red scheduled run instead of on
-  # a user's first install.
-  cobol-parser-compat:
+  # Both ends of the declared cobol-parser range. The lockfile pins one
+  # version; users get whatever pip resolves, so the newest release and the
+  # floor are each run nightly. A red run here means: bump the floor, or
+  # tighten the cap, before users hit it.
+  cobol-parser-range:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        end: [newest, floor]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
+      # One resolve per leg, so everything else is resolved against the
+      # cobol-parser under test. The floor is read from pyproject.toml, the
+      # single place it is declared.
+      - name: Install (unlocked)
+        run: |
+          uv venv
+          if [ "${{ matrix.end }}" = floor ]; then
+            floor=$(uv run --no-project python -c 'import re, tomllib; deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]; print(next(re.search(r">=\s*([\w.]+)", d).group(1) for d in deps if d.startswith("cobol-parser")))')
+            echo "cobol-parser floor: $floor"
+            uv pip install -e ".[dev]" "cobol-parser==$floor"
+          else
+            uv pip install -e ".[dev]" --upgrade
+          fi
+      - name: Unit tests
+        run: uv run --no-sync pytest tests/unit
 
-      - name: Install dependencies (published cobol-parser from PyPI)
-        run: pip install -r requirements-dev.txt
-
-      - name: Run unit tests against the published cobol-parser
-        run: python -m pytest tests/unit -v
+  integration:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Install (locked)
+        run: uv sync --locked --extra dev
+      # ubuntu-latest ships a Linux Docker daemon; the tier builds the
+      # mockymock-gnucobol image on first use (~1 min).
+      - name: Integration tests
+        run: uv run pytest tests/integration --no-cov

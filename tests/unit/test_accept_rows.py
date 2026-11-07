@@ -9,7 +9,7 @@ import pytest
 
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.parser import CutParseError, parse_cut
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 ACC_CBL = """\
        IDENTIFICATION DIVISION.
@@ -52,9 +52,7 @@ def test_accept_rows_without_terminal_is_refused() -> None:
     with pytest.raises(CutParseError, match="TERMINAL"):
         parse_cut(
             _cut(
-                "    MOCK ACCEPT WS-IN ROWS\n"
-                '        ( WS-IN = "AAA" )\n'
-                "    END-MOCK\n"
+                '    MOCK ACCEPT WS-IN ROWS\n        ( WS-IN = "AAA" )\n    END-MOCK\n'
             )
         )
 

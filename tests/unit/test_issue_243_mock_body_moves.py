@@ -25,15 +25,14 @@ def _messages(body):
 
 def test_typo_in_mock_body_move_target_is_refused_at_its_line():
     assert _messages('        MOVE "00" TO WS-RCX\n') == [
-        '.cut line 4: MOCK CALL "SUBPGM" body MOVE target WS-RCX is not a ' "data item"
+        '.cut line 4: MOCK CALL "SUBPGM" body MOVE target WS-RCX is not a data item'
     ]
 
 
 def test_every_target_and_a_bare_value_are_checked():
     messages = _messages("        MOVE WS-RCZ TO WS-RC WS-CNTX  *> note\n")
     assert messages == [
-        '.cut line 4: MOCK CALL "SUBPGM" body MOVE target WS-CNTX is not a '
-        "data item",
+        '.cut line 4: MOCK CALL "SUBPGM" body MOVE target WS-CNTX is not a data item',
         '.cut line 4: MOCK CALL "SUBPGM" body MOVE value WS-RCZ is neither a '
         "literal nor a data item -- quote it if it is text",
     ]

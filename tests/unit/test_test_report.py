@@ -520,8 +520,9 @@ def test_execute_and_mutate_reuse_saved_results(ordrproc, monkeypatch):
     assert "Reused the saved result of `mockymock run`" in run["summary"]
     assert run["status"] == "ok"
     assert report["summary"]["coverage"] == pytest.approx(83.33)
-    assert "Reused the saved result of `mockymock mutate`" in (
-        _step(report, "mutation")["summary"]
+    assert (
+        "Reused the saved result of `mockymock mutate`"
+        in (_step(report, "mutation")["summary"])
     )
     assert [c["level"] for c in report["cases"]] == ["L3", "L3"]
 
@@ -584,7 +585,8 @@ def test_orphan_labels_are_named_in_the_inventory(ordrproc):
     )
     inventory = _step(build_report(_options(ordrproc)), "inventory")
     assert inventory["status"] == "warn"
-    assert "1 INTENT/CHARACTERIZATION label(s) cover no assertion" in (
-        inventory["summary"]
+    assert (
+        "1 INTENT/CHARACTERIZATION label(s) cover no assertion"
+        in (inventory["summary"])
     )
     assert inventory["details"]["orphanLabels"][0]["line"] == 23

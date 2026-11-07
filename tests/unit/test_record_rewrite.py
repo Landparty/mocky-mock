@@ -683,3 +683,46 @@ def test_rewrite_keeps_a_crlf_file_crlf_throughout():
     assert "\r\r" not in rewritten
     assert rewritten.count("\r\n") == rewritten.count("\n")
     assert rewritten.endswith("EXPECT WS-NET-TOTAL TO BE 5\r\n")
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+from mockymock.report.results import parse_stdout
+
+
+def test_146_a_value_decoded_with_replacement_chars_is_skipped_not_recorded() -> None:
+    from mockymock.analysis.stub_expectations import scan_stub_expectations
+    from mockymock.dsl.parser import parse_cut
+    from mockymock.report.record_rewrite import build_recording_report
+
+    text = (
+        'TESTSUITE "rec"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+        "*> STUB EXPECT WS-HIGH\n*> STUB EXPECT WS-NAME\n"
+    )
+    scan = scan_stub_expectations(text, parse_cut(text))
+    result = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: rec\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        "__MOCKYMOCK__ RECORD 001 WS-HIGH: ��\n"
+        "__MOCKYMOCK__ RECORD 001 WS-NAME: SAM  \n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n"
+    )
+    report = build_recording_report(scan, result)
+    assert [r.stub.data_name for r in report.recorded] == ["WS-NAME"]
+    assert report.skipped[0].data_name == "WS-HIGH"
+    assert "HIGH-VALUES" in report.skipped[0].reason
+
+
+# Regression: bug hunt round 10 (DSL / report / analysis).
+
+
+def test_golden_with_a_control_character_is_a_hex_literal_that_parses():
+    rendered = render_expect_value("AB\x0cCD   ", "X(8)")
+    assert rendered == 'X"41420C4344"'
+    suite = parse_cut(
+        f'TESTSUITE "s"\nTESTCASE "c"\nPERFORM P\nEXPECT WS-X TO BE {rendered}\n'
+    )
+    assert suite.test_cases[0].expectations[0].expected_value == rendered
+    # Plain text is unchanged.
+    assert render_expect_value("SMITH  ", "X(7)") == '"SMITH"'

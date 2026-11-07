@@ -37,3 +37,4 @@ and reports pass/fail. Version 0.8.0 (`mockymock/__init__.py`, kept in step with
 ## Change History
 
 * [log.md](log.md) — Dated update log, **newest entry first**
+* [docs/index.md](../docs/index.md) — every design record and audit in `docs/` with its current status (implemented / partial / superseded), checked against the code; the two open gaps the designs still name

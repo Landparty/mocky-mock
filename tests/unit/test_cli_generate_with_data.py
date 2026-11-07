@@ -1,6 +1,6 @@
 """CLI behavior tests for `mockymock generate --with-data`'s `--rows` and
 `--placeholder` flags (Task 4 of the unify-with-data reconciliation plan,
-docs/2026-08-04-unify-with-data-plan.md). Companion to
+docs/archive/plans/2026-08-04-unify-with-data-plan.md). Companion to
 tests/unit/test_dsl_generator_bundle.py (which drives `scaffold_cut`
 directly) and tests/integration/test_fixturedemo_golden.py (which pins the
 no-new-flags `--fixtures` output byte-for-byte).
@@ -540,3 +540,388 @@ def test_generate_scaffolds_chkclr_through_its_closed_thru_range(tmp_path, capsy
     captured = capsys.readouterr()
     assert rc == 0
     assert "UNSUPPORTED_TERMINATOR_LAYOUT" not in captured.out + captured.err
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+import shutil
+
+import pytest
+
+from tests.unit._generate import _generate
+
+FETCH_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FETCH.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           EXEC SQL INCLUDE SQLCA END-EXEC.
+       01  HV-ID     PIC X(4).
+       01  WS-COUNT  PIC 9(4) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           EXEC SQL OPEN C1 END-EXEC
+           PERFORM FETCH-PARA UNTIL SQLCODE = 100
+           EXEC SQL CLOSE C1 END-EXEC
+           DISPLAY WS-COUNT
+           GOBACK.
+       FETCH-PARA.
+           EXEC SQL FETCH C1 INTO :HV-ID END-EXEC
+           IF SQLCODE = 0
+               ADD 1 TO WS-COUNT
+           END-IF.
+"""
+
+
+def test_141_one_row_looped_fetch_is_mocked_with_rows_and_counted_once_more(
+    tmp_path,
+) -> None:
+    cut = _generate(tmp_path, "FETCH", FETCH_CBL, "--seed", "1")
+    assert 'MOCK SQL "FETCH" ROWS' in cut
+    assert 'VERIFY SQL "FETCH" WAS CALLED 2 TIMES' in cut
+
+
+def test_141_fetch_outside_a_loop_keeps_its_single_row_body(tmp_path) -> None:
+    cbl = FETCH_CBL.replace(
+        "PERFORM FETCH-PARA UNTIL SQLCODE = 100", "PERFORM FETCH-PARA"
+    )
+    cut = _generate(tmp_path, "FETCH", cbl, "--seed", "1")
+    assert 'MOCK SQL "FETCH" ROWS' not in cut
+    assert 'VERIFY SQL "FETCH" WAS CALLED 1 TIMES' in cut
+
+
+TWO_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TWO.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "FMT" USING WS-N
+           CALL "FMT" USING WS-N
+           GOBACK.
+"""
+
+
+def test_142_two_call_sites_of_one_key_render_one_summed_verify(tmp_path) -> None:
+    cut = _generate(tmp_path, "TWO", TWO_CBL, "--seed", "1")
+    assert cut.count('VERIFY CALL "FMT"') == 1
+    assert 'VERIFY CALL "FMT" WAS CALLED 2 TIMES' in cut
+
+
+def test_142_a_conditional_extra_site_demotes_the_summed_count(tmp_path) -> None:
+    cbl = TWO_CBL.replace(
+        '           CALL "FMT" USING WS-N\n           GOBACK.',
+        '           IF WS-N > 5\n               CALL "FMT" USING WS-N\n'
+        "           END-IF\n           GOBACK.",
+    )
+    cut = _generate(tmp_path, "TWO", cbl, "--seed", "1")
+    assert 'VERIFY CALL "FMT" WAS CALLED 2 TIMES' not in cut
+    assert '*> VERIFY CALL "FMT" WAS CALLED <count not exact' in cut
+
+
+UNR_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. UNR.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-N PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL "SUBA" USING WS-N
+           GOBACK.
+       DEAD-PARA.
+           CALL "SUBB" USING WS-N.
+"""
+
+
+def test_143_generate_does_not_mock_a_boundary_the_case_cannot_reach(
+    tmp_path, capsys
+) -> None:
+    from mockymock.cli.main import main
+
+    cut = _generate(tmp_path, "UNR", UNR_CBL, "--seed", "1")
+    assert 'MOCK CALL "SUBA"' in cut
+    assert '"SUBB"' not in cut
+    capsys.readouterr()
+    assert main(["lint", str(tmp_path / "UNR.cbl")]) == 0, capsys.readouterr().out
+
+
+_ENTERPRISE = Path(__file__).resolve().parents[1] / "fixtures" / "enterprise"
+
+
+@pytest.mark.parametrize(
+    "program", sorted(p.stem for p in _ENTERPRISE.glob("*.cbl")), ids=str
+)
+def test_143_no_generated_enterprise_cut_has_an_unmatched_mock(
+    tmp_path, capsys, program
+) -> None:
+    from mockymock.cli.main import main
+
+    source = tmp_path / f"{program}.cbl"
+    shutil.copy(_ENTERPRISE / f"{program}.cbl", source)
+    shutil.copytree(_ENTERPRISE / "copybooks", tmp_path / "copybooks")
+    copybooks = ["--copybook-path", str(tmp_path / "copybooks")]
+    out = tmp_path / f"{program}.cut"
+    if (
+        main(
+            [
+                "generate",
+                str(source),
+                "--with-data",
+                "--seed",
+                "1",
+                "-o",
+                str(out),
+                *copybooks,
+            ]
+        )
+        != 0
+        # Since #231 generate exits 1 when lint refuses the scaffold it
+        # still wrote; that file must still carry no UNMATCHED_MOCK.
+        and not out.exists()
+    ):
+        pytest.skip("generate --with-data does not support this program")
+    capsys.readouterr()
+    main(["lint", str(source), *copybooks])
+    assert "UNMATCHED_MOCK" not in capsys.readouterr().out
+
+
+QUAL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. QUAL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-REC.
+           05  WS-QTY PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 42 TO WS-QTY
+           DISPLAY WS-QTY
+           GOBACK.
+"""
+
+
+DUPF_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPF.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT IN-FILE ASSIGN TO "IN.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-IN-STATUS.
+           SELECT OUT-FILE ASSIGN TO "OUT.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  IN-FILE.
+       01  IN-REC.
+           05  CUST-ID   PIC X(5).
+           05  CUST-AMT  PIC 9(5).
+       FD  OUT-FILE.
+       01  OUT-REC.
+           05  CUST-ID   PIC X(5).
+           05  CUST-AMT  PIC 9(5).
+       WORKING-STORAGE SECTION.
+       01  WS-IN-STATUS PIC XX.
+       01  WS-EOF       PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN INPUT IN-FILE
+           OPEN OUTPUT OUT-FILE
+           PERFORM READ-PARA UNTIL WS-EOF = "Y"
+           CLOSE IN-FILE
+           CLOSE OUT-FILE
+           GOBACK.
+       READ-PARA.
+           READ IN-FILE
+               AT END MOVE "Y" TO WS-EOF
+           END-READ
+           IF WS-EOF = "N"
+               MOVE CUST-ID OF IN-REC TO CUST-ID OF OUT-REC
+               MOVE CUST-AMT OF IN-REC TO CUST-AMT OF OUT-REC
+               WRITE OUT-REC
+           END-IF.
+"""
+
+
+def test_144_expect_uses_the_cobol_leaf_name_not_record_dot_field(tmp_path) -> None:
+    cut = _generate(tmp_path, "QUAL", QUAL_CBL, "--seed", "1")
+    assert "EXPECT WS-QTY TO BE 42" in cut
+    assert "WS-REC.WS-QTY" not in cut
+
+
+def test_144_ambiguous_read_fields_are_qualified_with_their_record(tmp_path) -> None:
+    cut = _generate(tmp_path, "DUPF", DUPF_CBL, "--seed", "1", "--rows", "2")
+    assert "TO CUST-ID OF IN-REC" in cut
+    assert "TO CUST-ID\n" not in cut
+
+
+PARM_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PARM.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT PARM-FILE ASSIGN TO "PARM.DAT"
+               ORGANIZATION IS LINE SEQUENTIAL.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  PARM-FILE.
+       01  PARM-REC.
+           05  PARM-DAYS  PIC 9(3).
+       WORKING-STORAGE SECTION.
+       01  WS-DAYS PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN INPUT PARM-FILE
+           READ PARM-FILE
+           MOVE PARM-DAYS TO WS-DAYS
+           CLOSE PARM-FILE
+           GOBACK.
+"""
+
+
+def test_read_outside_any_loop_is_verified_once_whatever_the_row_count(
+    tmp_path,
+) -> None:
+    """Found while checking #144 against the legacy corpus (DORMACCT): a
+    parameter-card READ got `VERIFY ... 10 TIMES` from the bundle's row
+    count."""
+    cut = _generate(tmp_path, "PARM", PARM_CBL, "--seed", "1", "--rows", "5")
+    assert "VERIFY READ PARM-FILE WAS CALLED 1 TIMES" in cut
+
+
+def test_148_generated_sql_open_and_close_bodies_set_sqlcode(tmp_path) -> None:
+    cut = _generate(tmp_path, "FETCH", FETCH_CBL, "--seed", "1")
+    for key in ("OPEN", "CLOSE"):
+        block = cut.split(f'MOCK SQL "{key}"', 1)[1].split("END-MOCK", 1)[0]
+        assert "MOVE 0 TO SQLCODE" in block
+
+
+DLITCBL_CBL = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DLIENT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DLI-GU     PIC X(4) VALUE "GU  ".
+       01  WS-SEG     PIC X(10).
+       LINKAGE SECTION.
+       01  CUST-PCB.
+           05  PCB-DBD     PIC X(8).
+           05  PCB-LEVEL   PIC XX.
+           05  PCB-STATUS  PIC XX.
+       PROCEDURE DIVISION.
+       ENTRY 'DLITCBL' USING CUST-PCB.
+       MAIN-PARA.
+           CALL 'CBLTDLI' USING DLI-GU CUST-PCB WS-SEG
+           GOBACK.
+"""
+
+
+def test_150_an_ims_dlitcbl_program_falls_back_to_its_first_paragraph(
+    tmp_path,
+) -> None:
+    cut = _generate(tmp_path, "DLIENT", DLITCBL_CBL, "--seed", "1")
+    assert "TESTCASE" in cut
+    assert "PERFORM MAIN-PARA" in cut
+
+
+def test_150_generate_fails_when_no_scenario_becomes_a_case(
+    tmp_path, monkeypatch
+) -> None:
+    from mockymock.cli.main import main
+    from mockymock.dsl.generator import scaffold as generator
+
+    monkeypatch.setattr(generator, "_first_paragraph", lambda program: None)
+    source = tmp_path / "DLIENT.cbl"
+    source.write_text(DLITCBL_CBL)
+    out = tmp_path / "DLIENT.cut"
+    assert main(["generate", str(source), "--with-data", "-o", str(out)]) == 1
+
+
+# Regression: LegacyLens "Create tests" (generate, record, play) over the NIST
+# CCVS85 suite, 2026-11-02 (examples/nist-cobol85/generated/README.md).
+from mockymock.dsl.parser import parse_cut
+
+# --- generate: a READ whose rows move nothing (NIST IX301M) ----------------
+
+EMPTY_ROWS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EMPTYROW.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT TFIL ASSIGN TO "TFIL"
+               ORGANIZATION IS INDEXED
+               ACCESS MODE IS RANDOM
+               RECORD KEY IS RKEY.
+       DATA DIVISION.
+       FILE SECTION.
+       FD  TFIL.
+       01  FREC.
+           03 RKEY  PIC X(8).
+       WORKING-STORAGE SECTION.
+       01  STATE    PIC X(4) VALUE SPACES.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           OPEN I-O TFIL.
+           PERFORM READ-PARA 3 TIMES.
+           CLOSE TFIL.
+           STOP RUN.
+       READ-PARA.
+           READ TFIL INVALID KEY MOVE "INV" TO STATE
+               NOT INVALID KEY MOVE "OK" TO STATE.
+"""
+
+
+def _nist_generate(tmp_path: Path, name: str, source: str, capsys) -> tuple[str, str]:
+    program = tmp_path / f"{name}.cbl"
+    program.write_text(source)
+    cut = tmp_path / f"{name}.cut"
+    main(["generate", str(program), "-o", str(cut), "--force", "--scenarios", "all"])
+    return cut.read_text(), capsys.readouterr().err
+
+
+def test_read_rows_that_move_nothing_get_no_empty_when(tmp_path, capsys):
+    """A keyed READ of a record holding only its key: each generated row
+    moved nothing, and `WHEN tally = 1 ... WHEN tally = 10 END-EVALUATE`
+    with no statement failed cobc 3.1 ("invalid expression")."""
+    text, _ = _nist_generate(tmp_path, "EMPTYROW", EMPTY_ROWS, capsys)
+    assert "UT-READ-TFIL-TALLY" not in text
+    for case in parse_cut(text).test_cases:
+        assert case.perform_target == "MAIN-PARA"
+
+
+# --- a WRITE of a record qualified by its file (NIST SQ207M) ---------------
+
+
+def test_write_of_a_qualified_record_keys_on_the_record_name(tmp_path, capsys):
+    """`WRITE PRINT-REC IN PRINT-FILE` made generate write `MOCK WRITE
+    PRINT-REC IN PRINT-FILE`, which the .cut grammar cannot parse: the
+    whole suite failed to load."""
+    source = (
+        EMPTY_ROWS.replace(
+            "       FD  TFIL.\n       01  FREC.\n           03 RKEY  PIC X(8).\n",
+            "       FD  TFIL.\n       01  FREC.\n           03 RKEY  PIC X(8).\n"
+            "       FD  PFIL.\n       01  PREC PIC X(10).\n",
+        )
+        .replace(
+            '           SELECT TFIL ASSIGN TO "TFIL"\n',
+            '           SELECT PFIL ASSIGN TO "PFIL".\n'
+            '           SELECT TFIL ASSIGN TO "TFIL"\n',
+        )
+        .replace(
+            "           CLOSE TFIL.\n",
+            "           CLOSE TFIL.\n           OPEN OUTPUT PFIL.\n"
+            "           WRITE PREC IN PFIL.\n           WRITE PREC OF PFIL.\n"
+            "           CLOSE PFIL.\n",
+        )
+    )
+    text, _ = _nist_generate(tmp_path, "QUALWRT", source, capsys)
+    suite = parse_cut(text)
+    keys = {(d.category.value, d.key) for d in suite.test_cases[0].mocks}
+    assert ("WRITE", "PREC") in keys
+    assert not any(" " in key for _, key in keys)

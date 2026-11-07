@@ -143,8 +143,7 @@ def _object(value: Any, what: str) -> dict[str, Any]:
     of two-character strings (`["AB"]` -> `{"A": "B"}`)."""
     if not isinstance(value, dict):
         raise MalformedBundleError(
-            f"fixture bundle {what} must be a JSON object, got "
-            f"{type(value).__name__}"
+            f"fixture bundle {what} must be a JSON object, got {type(value).__name__}"
         )
     return dict(value)
 

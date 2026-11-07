@@ -203,3 +203,68 @@ def test_gcov_is_resolved_on_the_trees_path(monkeypatch, tmp_path):
     gcov.chmod(gcov.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", "/nonexistent")
     assert native_toolchain._gcov_program(native_toolchain._env(home)) == str(gcov)
+
+
+# Regression: bug hunt of 2026-11-05 (running suites). A case looping over a
+# DISPLAY is read in bounded memory.
+
+
+def test_capped_stdout_keeps_only_marker_lines_past_the_limit() -> None:
+    capped = native_toolchain._CappedStdout(limit=10, marker_limit=1000)
+    capped.feed(b"0123456789")
+    capped.feed(b"noise\n__MOCKYMOCK__ CASE 001 E")
+    capped.feed(b"ND\nmore noise\n__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0")
+    out = capped.result()
+    assert out == (
+        b"0123456789__MOCKYMOCK__ CASE 001 END\n__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0"
+    )
+    assert capped.dropped == len(b"noise\nmore noise\n")
+
+
+def test_capped_stdout_bounds_marker_lines_too() -> None:
+    capped = native_toolchain._CappedStdout(limit=0, marker_limit=30)
+    capped.feed(b"__MOCKYMOCK__ MOCK: CALL X\n" * 5)
+    assert capped.result() == b"__MOCKYMOCK__ MOCK: CALL X\n"
+    assert capped.dropped == 4 * len(b"__MOCKYMOCK__ MOCK: CALL X\n")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+def test_run_capped_keeps_memory_bounded_and_the_markers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 1000)
+    script = (
+        "import sys\n"
+        "sys.stdout.write('x' * 100 + '\\n')\n"
+        "sys.stdout.write(('noise' * 20 + '\\n') * 20000)\n"
+        "sys.stdout.write('__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\\n')\n"
+    )
+    code, stdout, _, dropped = native_toolchain._run_capped(
+        [sys.executable, "-c", script], cwd=tmp_path, env={}, timeout=30
+    )
+    assert code == 0
+    assert len(stdout) < 1200
+    assert stdout.endswith(b"__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\n")
+    assert dropped > 1_000_000
+    assert "more bytes of output" in native_toolchain._not_kept_note(dropped)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+def test_run_capped_times_out_with_what_was_printed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 100)
+    script = (
+        "import sys\n"
+        "sys.stdout.write('__MOCKYMOCK__ CASE 001 START: loop\\n')\n"
+        "while True: sys.stdout.write('spam\\n')\n"
+    )
+    with pytest.raises(Exception) as caught:
+        native_toolchain._run_capped(
+            [sys.executable, "-c", script], cwd=tmp_path, env={}, timeout=1
+        )
+    exc = caught.value
+    assert exc.__class__.__name__ == "TimeoutExpired"
+    assert exc.stdout.startswith(b"__MOCKYMOCK__ CASE 001 START: loop\n")
+    assert len(exc.stdout) <= 100 + 4096
+    assert exc.not_kept > 0

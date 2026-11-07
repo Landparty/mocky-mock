@@ -97,12 +97,7 @@ def test_expect_unsubscripted_name_still_parses():
 
 
 def test_expect_unbalanced_paren_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        "    EXPECT WS-A ( TO BE 5\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN\n    EXPECT WS-A ( TO BE 5\n'
     with pytest.raises(CutParseError, match="unrecognized statement"):
         parse_cut(text)
 
@@ -137,23 +132,13 @@ def test_move_subscripted_value_and_target_both_parse():
 
 
 def test_move_unsubscripted_target_still_parses():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    MOVE 100 TO WS-RESULT\n"
-        "    PERFORM MAIN\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO WS-RESULT\n    PERFORM MAIN\n'
     case = parse_cut(text).test_cases[0]
     assert case.setup_moves == [("100", "WS-RESULT")]
 
 
 def test_move_unbalanced_paren_target_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    MOVE 100 TO WS-A (\n"
-        "    PERFORM MAIN\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO WS-A (\n    PERFORM MAIN\n'
     with pytest.raises(CutParseError, match="unrecognized statement"):
         parse_cut(text)
 
@@ -167,24 +152,14 @@ def test_move_unbalanced_paren_target_raises():
 # covered; these no-space forms were the actual gap.
 @pytest.mark.parametrize("target", ["WS-TAB(1", "WS-TAB(1))"])
 def test_move_no_space_unbalanced_paren_target_raises(target):
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        f"    MOVE 100 TO {target}\n"
-        "    PERFORM MAIN\n"
-    )
+    text = f'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO {target}\n    PERFORM MAIN\n'
     with pytest.raises(CutParseError, match="unbalanced"):
         parse_cut(text)
 
 
 @pytest.mark.parametrize("name", ["WS-X(1", "WS-X(1))"])
 def test_expect_no_space_unbalanced_paren_raises(name):
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        f"    EXPECT {name} TO BE 5\n"
-    )
+    text = f'TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN\n    EXPECT {name} TO BE 5\n'
     with pytest.raises(CutParseError, match="unbalanced"):
         parse_cut(text)
 
@@ -276,12 +251,7 @@ def test_multi_call_steps_are_checked_as_entry_points():
 
 
 def test_second_testsuite_line_raises_with_line_number():
-    text = (
-        'TESTSUITE "first"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        'TESTSUITE "second"\n'
-    )
+    text = 'TESTSUITE "first"\nTESTCASE "c"\n    PERFORM MAIN\nTESTSUITE "second"\n'
     with pytest.raises(CutParseError, match="line 4: second TESTSUITE"):
         parse_cut(text)
 
@@ -430,7 +400,7 @@ def test_provider_block_parses_without_affecting_unrelated_cases():
 
 
 def test_provider_row_before_header_raises():
-    text = 'TESTSUITE "s"\n' "PROVIDER StateNames\n" '    ROW "AZ", "Arizona"\n'
+    text = 'TESTSUITE "s"\nPROVIDER StateNames\n    ROW "AZ", "Arizona"\n'
     with pytest.raises(CutParseError, match="line 3: ROW before HEADER"):
         parse_cut(text)
 
@@ -486,13 +456,13 @@ def test_provider_before_testsuite_raises():
 
 
 def test_header_outside_provider_raises():
-    text = 'TESTSUITE "s"\n' "HEADER A, B\n"
+    text = 'TESTSUITE "s"\nHEADER A, B\n'
     with pytest.raises(CutParseError, match="line 2: HEADER outside PROVIDER"):
         parse_cut(text)
 
 
 def test_row_outside_provider_raises():
-    text = 'TESTSUITE "s"\n' '    ROW "x"\n'
+    text = 'TESTSUITE "s"\n    ROW "x"\n'
     with pytest.raises(CutParseError, match="line 2: ROW outside PROVIDER"):
         parse_cut(text)
 
@@ -592,12 +562,7 @@ def test_stray_mock_inside_open_provider_raises():
 
 
 def test_provider_row_bare_blank_value_between_commas_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        "PROVIDER Triple\n"
-        "    HEADER A, B, C\n"
-        '    ROW "x", , "z"\n'
-    )
+    text = 'TESTSUITE "s"\nPROVIDER Triple\n    HEADER A, B, C\n    ROW "x", , "z"\n'
     with pytest.raises(
         CutParseError,
         match=r"line 4: ROW value for column 'B' in PROVIDER 'Triple' is blank",
@@ -758,7 +723,7 @@ def test_value_with_no_placeholder_repeated_identically():
 
 
 def test_undeclared_provider_reference_raises():
-    text = 'TESTSUITE "s"\n' 'TESTCASE "c" USING PROVIDER Ghost\n' "    PERFORM MAIN\n"
+    text = 'TESTSUITE "s"\nTESTCASE "c" USING PROVIDER Ghost\n    PERFORM MAIN\n'
     with pytest.raises(
         CutParseError,
         match="line 2: TESTCASE 'c' uses PROVIDER 'Ghost', which was never declared",
@@ -1073,3 +1038,187 @@ def test_perform_names_are_upper_cased_but_placeholders_kept_verbatim():
     assert suite.test_cases[0].perform_thru == "READ-ONE-EXIT"
     assert suite.test_cases[1].perform_target == "{Para}"
     assert suite.before_each_steps[0].target == "INIT-PARA"
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def test_144_parser_refuses_a_dotted_data_name() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    with pytest.raises(CutParseError, match="contains a '.'"):
+        parse_cut(
+            'TESTSUITE "Q"\nTESTCASE "c"\nPERFORM MAIN-PARA\n'
+            "EXPECT WS-REC.WS-QTY TO BE 42\n"
+        )
+
+
+def test_150_an_expect_or_verify_above_the_perform_is_refused() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    head = 'TESTSUITE "s"\nTESTCASE "c"\n'
+    for body in (
+        "EXPECT WS-A TO BE 3\nPERFORM MAIN-PARA\n",
+        'VERIFY CALL "X" WAS CALLED ONCE\nPERFORM MAIN-PARA\n',
+    ):
+        with pytest.raises(CutParseError, match="before the PERFORM"):
+            parse_cut(head + body)
+
+
+def test_150_a_setup_move_below_the_last_perform_is_refused() -> None:
+    from mockymock.dsl.parser import CutParseError, parse_cut
+
+    with pytest.raises(CutParseError, match="MOVE after the last PERFORM"):
+        parse_cut('TESTSUITE "s"\nTESTCASE "c"\nPERFORM MAIN-PARA\nMOVE 4 TO WS-A\n')
+
+
+# Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
+# (executed counterpart:
+# tests/integration/test_bug_hunt_20261105_cut_language.py).
+
+
+def test_a_no_break_space_outside_a_literal_becomes_a_blank():
+    """6. A no-break space pasted into a MOCK body line was spliced as is;
+    cobc read `MOVE<NBSP>7` as one word and the compile failed after lint
+    passed. Inside a literal it is data and stays."""
+    suite = parse_cut(
+        'TESTSUITE "s"\n'
+        'TESTCASE "c"\n'
+        '    MOCK CALL "SUB"\n'
+        "        MOVE\u00a07 TO WS-B\u2003\n"
+        '        MOVE "a\u00a0b" TO WS-A\n'
+        "    END-MOCK\n"
+        "    PERFORM\u00a0MAIN-PARA\n"
+    )
+    body = suite.test_cases[0].mocks[0].body_lines
+    assert body == ["MOVE 7 TO WS-B", 'MOVE "a\u00a0b" TO WS-A']
+    assert suite.test_cases[0].perform_target == "MAIN-PARA"
+
+
+# Regression: bug hunt round 10 (DSL / report / analysis).
+
+
+# --- EXPECT sentence period hidden by an inline comment -------------------
+
+
+def test_expect_period_before_inline_comment_is_refused():
+    with pytest.raises(CutParseError, match="ends with a period"):
+        parse_cut('TESTSUITE "s"\nTESTCASE "c"\nPERFORM P\nEXPECT WS-X TO BE 5. *> x\n')
+
+
+def test_expect_period_inside_inline_comment_is_accepted():
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\nPERFORM P\nEXPECT WS-X TO BE "A" *> done.\n'
+    )
+    # The trailing comment is stripped, never spliced (issue #236).
+    assert suite.test_cases[0].expectations[0].expected_value == '"A"'
+
+
+# --- comma inside a (...) group split ROWS / TERMINAL / PROVIDER values ---
+
+
+def test_rows_value_with_comma_subscript_is_one_value():
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\nMOCK READ F ROWS\n'
+        "( A = WS-TAB(1, 2), B = FUNCTION MAX(3, 4) )\n"
+        "TERMINAL ( A = WS-TAB(2, 1) )\n"
+        "END-MOCK\nPERFORM P\n"
+    )
+    mock = suite.test_cases[0].mocks[0]
+    assert mock.rows == [[("A", "WS-TAB(1, 2)"), ("B", "FUNCTION MAX(3, 4)")]]
+    assert mock.terminal_row == [("A", "WS-TAB(2, 1)")]
+
+
+def test_provider_row_value_with_comma_subscript_is_one_value():
+    suite = parse_cut(
+        'TESTSUITE "s"\nPROVIDER P1\nHEADER Src, Want\n'
+        "ROW WS-TAB(1, 2), 5\n"
+        'TESTCASE "c" USING PROVIDER P1\nMOVE {Src} TO WS-X\nPERFORM P\n'
+        "EXPECT WS-Y TO BE {Want}\n"
+    )
+    case = suite.test_cases[0]
+    assert case.setup_moves == [("WS-TAB(1, 2)", "WS-X")]
+    assert case.expectations[0].expected_value == "5"
+
+
+def test_rows_quoted_comma_still_splits_correctly():
+    suite = parse_cut(
+        'TESTSUITE "s"\nTESTCASE "c"\nMOCK READ F ROWS\n'
+        '( A = "X, (Y", B = 2 )\nEND-MOCK\nPERFORM P\n'
+    )
+    assert suite.test_cases[0].mocks[0].rows == [[("A", '"X, (Y"'), ("B", "2")]]
+
+
+# --- MOVE sentence period (issue #197) -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 5. TO WS-N\nPERFORM P\n',
+        'TESTSUITE "s"\nBEFORE-EACH\n    MOVE 5. TO WS-N\nEND-BEFORE\n'
+        'TESTCASE "c"\nPERFORM P\n',
+    ],
+)
+def test_setup_and_hook_move_value_ending_in_a_period_is_refused(text):
+    with pytest.raises(CutParseError, match="line 3: MOVE value '5.' ends with"):
+        parse_cut(text)
+
+
+def test_move_period_substituted_from_a_provider_row_is_refused():
+    with pytest.raises(CutParseError, match="line 4: MOVE value '5.' ends with"):
+        parse_cut(
+            'TESTSUITE "s"\nPROVIDER P1\nHEADER Src\nROW 5.\n'
+            'TESTCASE "c" USING PROVIDER P1\nMOVE {Src} TO WS-X\nPERFORM P\n'
+        )
+
+
+def test_move_period_inside_a_quoted_value_is_kept():
+    suite = parse_cut('TESTSUITE "s"\nTESTCASE "c"\nMOVE "A." TO WS-X\nPERFORM P\n')
+    assert suite.test_cases[0].setup_moves == [('"A."', "WS-X")]
+
+
+# Regression: bug hunt round 11.
+
+
+# --- DSL refusals -----------------------------------------------------------
+
+
+def _parse_case(body: str):
+    return parse_cut('TESTSUITE "S"\nTESTCASE "C"\n' + body)
+
+
+@pytest.mark.parametrize("line", ["PERFORM P.", "PERFORM P THRU Q."])
+def test_perform_target_with_sentence_period_is_refused(line):
+    with pytest.raises(CutParseError, match="period"):
+        _parse_case(line + "\n")
+
+
+def test_expect_not_after_to_be_is_refused():
+    with pytest.raises(CutParseError, match="malformed EXPECT comparison"):
+        _parse_case("EXPECT WS-X TO BE NOT 5\n")
+    # A value that merely starts with NOT- is still an ordinary value.
+    suite = _parse_case("PERFORM P\nEXPECT WS-X TO BE NOT-FOUND\n")
+    assert suite.test_cases[0].expectations[0].expected_value == "NOT-FOUND"
+
+
+def test_rows_line_with_two_groups_is_refused():
+    with pytest.raises(CutParseError, match="malformed ROWS row"):
+        _parse_case("MOCK READ F ROWS\n( A = 1 ) ( B = 2 )\nEND-MOCK\n")
+
+
+def test_terminal_line_with_two_groups_is_refused():
+    with pytest.raises(CutParseError, match="malformed TERMINAL group"):
+        _parse_case(
+            "MOCK READ F ROWS\n( A = 1 )\nTERMINAL ( A = 1 ) ( B = 2 )\nEND-MOCK\n"
+        )
+
+
+def test_rows_with_parenthesized_value_and_quoted_paren_still_parse():
+    suite = _parse_case(
+        'MOCK READ F ROWS\n( A = FUNCTION MAX(1, 2), B = ")" )\nEND-MOCK\n'
+    )
+    assert suite.test_cases[0].mocks[0].rows == [
+        [("A", "FUNCTION MAX(1, 2)"), ("B", '")"')]
+    ]

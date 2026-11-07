@@ -92,7 +92,7 @@ def working_storage_lines(plan: CicsEibPlan) -> list[str]:
     """The `01 DFHEIBLK.` group's WORKING-STORAGE text, unindented (callers
     add whatever column-position prefix their own insertion point needs --
     matching how `driver.build_driver`'s own bookkeeping fields are
-    generated and later prefixed by `cli.main._insert_driver`).
+    generated and later prefixed by `cli._common._insert_driver`).
 
     The full fixed `DFHEIBLK` layout when any EIB name is referenced, and
     the `DLIDIB` block when any DIB name is (issue #145) -- each whole,

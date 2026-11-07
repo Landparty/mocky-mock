@@ -7,7 +7,7 @@ moves the record's length (the layout's, clamped into the FD's range)."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 VARYING_CBL = """\
        IDENTIFICATION DIVISION.

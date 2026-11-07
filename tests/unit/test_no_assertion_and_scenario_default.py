@@ -210,3 +210,68 @@ def test_lint_warns_on_a_label_that_covers_no_assertion(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f"warning (ORPHAN_ASSERTION_LABEL): .cut line {line}:" in out
     assert "mockymock lint: no problems found." in out
+
+
+# Regression: open gaps the cobol-test run on PAYMAIN + PAYCALC found
+# (2026-11-06); executed counterpart:
+# tests/integration/test_open_gaps_2026_11_06.py. lint and generate agree on
+# cases that only hold `*> STUB EXPECT` comments.
+import shutil
+
+from mockymock.cli.checks import (
+    cases_asserting_nothing,
+    no_assertion_warnings,
+    stub_case_lines,
+)
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "open_gaps_2026_11_06"
+
+
+CUT = """TESTSUITE "T"
+
+TESTCASE "stubbed"
+    PERFORM 0000-MAIN
+    *> STUB EXPECT WS-A -- set by the program
+    *> STUB EXPECT WS-B
+
+TESTCASE "empty"
+    PERFORM 0000-MAIN
+
+TESTCASE "asserted"
+    PERFORM 0000-MAIN
+    EXPECT WS-A TO BE "X"
+"""
+
+
+def test_stub_case_lines_counts_each_case_block():
+    suite = parse_cut(CUT)
+    assert stub_case_lines(CUT, suite) == {3: 2}
+
+
+def test_lint_names_the_pending_stubs_generate_leaves_out():
+    suite = parse_cut(CUT)
+    warnings = no_assertion_warnings(suite, CUT)
+    assert len(warnings) == 2
+    assert 'TESTCASE "stubbed" asserts nothing yet' in warnings[0]
+    assert "2 `*> STUB EXPECT` comment(s)" in warnings[0]
+    assert "--record-expectations" in warnings[0]
+    assert 'TESTCASE "empty" asserts nothing --' in warnings[1]
+    # generate's count: the stubbed case is left out, as before.
+    assert cases_asserting_nothing(CUT, stubs_count=True) == [
+        '.cut line 8: TESTCASE "empty"'
+    ]
+    # Without the text (older callers) the wording is unchanged.
+    assert all("yet" not in w for w in no_assertion_warnings(suite))
+
+
+def test_generate_and_lint_counts_now_add_up(tmp_path, monkeypatch, capsys):
+    shutil.copy(FIXTURES / "PAYMAIN.cbl", tmp_path / "PAYMAIN.cbl")
+    monkeypatch.chdir(tmp_path)
+    assert main(["generate", "PAYMAIN.cbl", "--per-paragraph"]) == 0
+    out = capsys.readouterr().out
+    assert "1 test case(s) assert nothing" in out
+    assert "2 test case(s) have no EXPECT yet, only `*> STUB EXPECT`" in out
+    main(["lint", "PAYMAIN.cbl"])
+    lint = capsys.readouterr().out
+    assert lint.count("warning (NO_ASSERTION)") == 3
+    assert lint.count("asserts nothing yet") == 2

@@ -231,7 +231,13 @@ def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
         )
 
     root = Path(__file__).resolve().parents[2] / "mockymock"
-    for path in (root / "cli" / "main.py", root / "mutation" / "runner.py"):
+    commands = root / "cli" / "commands"
+    for path in (
+        commands / "run.py",
+        commands / "debug.py",
+        commands / "export.py",
+        root / "mutation" / "runner.py",
+    ):
         tree = _ast.parse(path.read_text(encoding="utf-8"))
         builds = _calls(tree, "reset_move_lines")
         resets = _calls(tree, "extra_reset_lines_for")
@@ -448,3 +454,55 @@ def test_the_splicer_still_refuses_items_of_different_layouts():
     assert plans == []
     assert len(unresolved) == 1
     assert "names different items at different call sites" in unresolved[0]
+
+
+# Regression: bug hunt round 10 (splicer / export / captures). A `UT-CAP-`
+# target for a non-ASCII literal was sized in characters, not the bytes PIC X
+# counts; a `UT-CAP-` mirror of `PIC X(9)` was reset with `MOVE ZERO` (the
+# repeat count's 9 read as a numeric symbol).
+from mockymock.splicer.captures import _declaration_for, _literal_declaration
+
+# --- captures: synthesized field sizing and reset --------------------------
+
+
+def test_a_non_ascii_literal_capture_is_sized_in_bytes():
+    declaration, _ = _literal_declaration("T", '"ÉCOLE"')
+    assert declaration == "01  T  PIC X(6)."
+
+
+def test_a_non_ascii_literal_capture_end_to_end():
+    source = (
+        "       IDENTIFICATION DIVISION.\n"
+        "       PROGRAM-ID. CAPU.\n"
+        "       DATA DIVISION.\n"
+        "       WORKING-STORAGE SECTION.\n"
+        "       01  WS-A               PIC X(5).\n"
+        "       PROCEDURE DIVISION.\n"
+        "       MAIN-PARA.\n"
+        '           CALL "SUBX" USING "ÉCOLE" WS-A.\n'
+    )
+    cut = (
+        'TESTSUITE "S"\n\nTESTCASE "one"\n    MOCK CALL "SUBX"\n'
+        "        CAPTURE ARG 1 INTO UT-CAP-SUBX-1\n    END-MOCK\n"
+        "    PERFORM MAIN-PARA\n"
+    )
+    result = parse_cobol(source, filename="capu.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    plans, unresolved = plan_captures(result.ast, parse_cut(cut), surface, lines)
+    assert unresolved == []
+    assert capture_working_storage_lines(plans) == ["01  UT-CAP-SUBX-1  PIC X(6)."]
+
+
+def test_an_alphanumeric_capture_whose_repeat_count_has_a_9_resets_to_spaces():
+    for picture in ("X(9)", "X(19)", "X(90)"):
+        built = _declaration_for("T", {"picture": picture, "usage": "DISPLAY"})
+        assert built == (f"01  T  PIC {picture}.", "MOVE SPACES TO T")
+    assert _declaration_for("T", {"picture": "9(5)", "usage": "DISPLAY"})[1] == (
+        "MOVE ZERO TO T"
+    )
+    assert _declaration_for("T", {"picture": "ZZ9", "usage": "DISPLAY"})[1] == (
+        "MOVE ZERO TO T"
+    )

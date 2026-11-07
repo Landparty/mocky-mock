@@ -647,6 +647,8 @@ class JobRun:
         text = source.read_text(encoding="utf-8", errors="replace")
         expanded = _expanded(text, source, self.options.copybook_paths)
         ast = parse_cobol(expanded, filename=source.name).ast
+        if ast is None:
+            return [], f"step {name}: {source.name} does not parse"
         plans, _ = plan_real_files(ast, analyze(ast))
         assigns = _assigns(ast)
         files: list[StepFile] = []
@@ -821,7 +823,9 @@ def step_suite(cut_text: str, files: list[StepFile], step: str) -> str:
             perform_seen = True
             for spec in files:
                 if spec.source is not None:
-                    out.append(f'    USE REAL FILE {spec.file} FROM "{spec.source}"')
+                    out.append(
+                        f'    USE REAL FILE {spec.file} FROM "{spec.source.as_posix()}"'
+                    )
                 else:
                     out.append(f"    USE REAL FILE {spec.file}")
             out.append(line)

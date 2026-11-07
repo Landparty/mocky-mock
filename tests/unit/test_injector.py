@@ -820,3 +820,147 @@ def test_a_multi_file_open_takes_mode_qualified_mocks_per_file():
     sq = registry.name(MockCategory.OPEN, "SQ-FS1 INPUT")
     rl = registry.name(MockCategory.OPEN, "RL-FR1 OUTPUT")
     assert lines.index(f"ADD 1 TO {sq}") < lines.index(f"ADD 1 TO {rl}")
+
+
+# Regression: bug hunt of 2026-11-05 (round 2), test generation: a DL/I program
+# that primes its loop with the same GHN on the same PCB the loop repeats. The
+# one `MOCK CALL "CBLTDLI"` answered both calls with the first site's row,
+# pinned to the loop's status, so the loop never ran (ACCTPRG, LNRECOV). Rows
+# are now dispatched on the calling paragraph (`UT-CALLING-PARAGRAPH`), the
+# status is pinned only at the call in the branch's own paragraph, and the
+# end-of-data reply counts each site's own calls (`UT-SITE-TALLY`). Executed
+# counterpart: tests/integration/test_bug_hunt_20261105_generation_round2.py.
+from types import SimpleNamespace
+
+from mockymock.splicer.injector import passed_argument_names, site_tally_lines
+
+
+def _r2gen_site(paragraph: str, line: int = 40):
+    statement = SimpleNamespace(using_parameters=[])
+    return SimpleNamespace(statement=statement, paragraph_name=paragraph, line=line)
+
+
+class _Registry:
+    def site_tally(self, line):
+        return f"UT-SITE-{line}-TALLY"
+
+    @staticmethod
+    def site_case(line):
+        return f"UT-SITE-{line}-CASE"
+
+
+def test_calling_paragraph_and_site_tally_name_the_sites_own():
+    body = 'IF UT-CALLING-PARAGRAPH = "2000-SCAN" AND UT-SITE-TALLY > 1'
+    assert (
+        passed_argument_names(body, _r2gen_site("2000-scan"), _Registry())
+        == 'IF "2000-SCAN" = "2000-SCAN" AND UT-SITE-40-TALLY > 1'
+    )
+    # The site counter restarts for each case.
+    assert site_tally_lines(_r2gen_site("P"), _Registry()) == [
+        "IF UT-SITE-40-CASE NOT = UT-CURRENT-CASE",
+        "    MOVE UT-CURRENT-CASE TO UT-SITE-40-CASE",
+        "    MOVE 0 TO UT-SITE-40-TALLY",
+        "END-IF",
+        "ADD 1 TO UT-SITE-40-TALLY",
+    ]
+
+
+# Regression: stress test of the integrated testing stack (backend test packs +
+# oracle over a synthetic corpus of every program type), 2026-11-02. Mock
+# bodies naming the argument a call passed, and identical case branches merged.
+from mockymock.splicer.injector import _case_selectors, merge_identical_branches
+
+# --- UT-PASSED-ARG-n --------------------------------------------------------
+
+
+def _stress_site(*names):
+    statement = SimpleNamespace(
+        using_parameters=[SimpleNamespace(name=name) for name in names]
+    )
+    return SimpleNamespace(statement=statement)
+
+
+def test_passed_argument_names_quote_the_sites_own_argument():
+    site = _stress_site("DLI-GU", "db-pcb", "WS-SEG")
+    body = 'IF UT-PASSED-ARG-2 = "DB-PCB" AND UT-PASSED-ARG-9 = " "'
+    assert passed_argument_names(body, site) == 'IF "DB-PCB" = "DB-PCB" AND " " = " "'
+    assert passed_argument_names("MOVE 1 TO X", site) == "MOVE 1 TO X"
+
+
+# --- merged case branches ---------------------------------------------------
+
+BODY = ["                   ADD 1 TO UT-WRITE-OUT-TALLY"]
+
+
+OTHER = [
+    "               WHEN OTHER",
+    '                   DISPLAY "trap"',
+    "           END-EVALUATE",
+]
+
+
+def _stress_dispatch(bodies):
+    lines = ["           EVALUATE UT-CURRENT-CASE"]
+    for case_id, body in bodies:
+        lines.append(f'               WHEN "{case_id}"')
+        lines.extend(body)
+    return lines + OTHER
+
+
+def test_identical_case_branches_are_emitted_once():
+    """HUGE01: 300 WRITE sites x 305 generated cases spliced 490k lines,
+    and gcc ran out of time (and 9 GB of memory) compiling them."""
+    special = ["                   MOVE 1 TO X"]
+    cases = [(f"{n:03d}", BODY) for n in range(1, 306)]
+    cases[4] = ("005", special)
+    merged = merge_identical_branches(_stress_dispatch(cases))
+    assert merged == [
+        "           EVALUATE UT-CURRENT-CASE",
+        '               WHEN "001" THRU "004"',
+        '               WHEN "006" THRU "305"',
+        *BODY,
+        '               WHEN "005"',
+        *special,
+        *OTHER,
+    ]
+
+
+def test_dispatch_with_no_shared_branch_is_unchanged():
+    lines = _stress_dispatch([("001", BODY), ("002", ["                   CONTINUE"])])
+    assert merge_identical_branches(lines) == lines
+
+
+def test_case_selectors_keep_short_runs_and_odd_ids_apart():
+    assert _case_selectors(["001", "002", "004", "005", "006", "SUITE"]) == [
+        '"001"',
+        '"002"',
+        '"004" THRU "006"',
+        '"SUITE"',
+    ]
+    # Ids of different widths never share a range.
+    assert _case_selectors(["998", "999", "1000"]) == ['"998"', '"999"', '"1000"']
+
+
+# Regression: sweep blockers of 2026-10-29 -- the classic sectioned layout
+# (every SECTION's nameless main line is paragraph '') and terminators under a
+# PERFORM ... UNTIL loop.
+from mockymock.splicer.injector import prefix_loop_conditions
+
+
+def test_prefix_loop_conditions_extends_each_until():
+    lines = [
+        "    PERFORM 2000-PROCESS UNTIL WS-EOF",
+        "    PERFORM 3000-X",
+        "        UNTIL WS-NAME = 'UNTIL' *> UNTIL here is a comment",
+        "    PERFORM 4000-Y UNTIL-FLAG",
+    ]
+    out = prefix_loop_conditions(lines, 1, 3)
+    assert out[0] == '    PERFORM 2000-PROCESS UNTIL UT-EARLY-EXIT = "Y" OR WS-EOF'
+    assert out[2] == (
+        "        UNTIL UT-EARLY-EXIT = \"Y\" OR WS-NAME = 'UNTIL' "
+        "*> UNTIL here is a comment"
+    )
+    # Outside the span, and a word that only starts with UNTIL, untouched.
+    assert out[3] == lines[3]
+    assert prefix_loop_conditions(lines, 4, 4) == lines
+    assert len(out) == len(lines)

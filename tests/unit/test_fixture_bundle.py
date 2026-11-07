@@ -276,3 +276,32 @@ def test_missing_optional_fields_default_sensibly():
     assert fixture.terminal is None
     assert fixture.status == {}
     assert fixture.unresolved == []
+
+
+# Regression: bug hunt round 11.
+
+
+# --- fixture bundle: non-object rows -----------------------------------------
+
+
+@pytest.mark.parametrize("row", ["abc", "AB", ["A", "1"]])
+def test_fixture_bundle_non_object_sequence_row_is_a_typed_error(row):
+    data = {
+        "bundle_version": 1,
+        "seed": 1,
+        "scenarios": [
+            {
+                "name": "s",
+                "fixtures": [
+                    {
+                        "category": "READ",
+                        "key": "F",
+                        "direction": "IN",
+                        "sequence": [row],
+                    }
+                ],
+            }
+        ],
+    }
+    with pytest.raises(MalformedBundleError):
+        load_fixture_bundle(data)

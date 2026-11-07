@@ -353,9 +353,7 @@ def test_format_junit_xml_survives_control_characters():
 
 
 def test_format_junit_xml_crashed_case_with_control_char_in_name():
-    stdout = (
-        "__MOCKYMOCK__ TESTSUITE: s\n" "__MOCKYMOCK__ CASE 001 START: crash\x1bname\n"
-    )
+    stdout = "__MOCKYMOCK__ TESTSUITE: s\n__MOCKYMOCK__ CASE 001 START: crash\x1bname\n"
     xml_text = format_junit_xml(parse_stdout(stdout))
     ElementTree.fromstring(xml_text)
     assert "crash\\x1bname" in xml_text
@@ -766,3 +764,154 @@ def test_format_console_escapes_terminal_control_characters():
     assert "[FAIL] esc\\x07case" in text
     # The parsed result (what the JSON report is built from) keeps the bytes.
     assert "\x1b[2J" in suite.results[0].failure_reasons[0]
+
+
+# Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
+# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+
+
+def test_139_marker_after_no_advancing_output_is_still_parsed() -> None:
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: noadv\n"
+        "__MOCKYMOCK__ CASE 001 START: one\n"
+        "PROGRESS...__MOCKYMOCK__ CASE 001 FAIL: expected WS-A = 2, got 1\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ CASE 002 START: two\n"
+        "PROGRESS...__MOCKYMOCK__ CASE 002 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=2 FAILURES=1\n"
+    )
+    suite = parse_stdout(stdout)
+    one, two = suite.results
+    assert one.failure_reasons == ["expected WS-A = 2, got 1"]
+    assert one.ended and not one.passed
+    assert two.passed
+    assert not suite.all_passed
+
+
+def test_150_cases_that_never_started_are_listed_in_console_and_junit() -> None:
+    from xml.etree.ElementTree import fromstring
+
+    from mockymock.dsl.parser import parse_cut
+    from mockymock.report.formatters import format_console, format_junit_xml
+    from mockymock.report.json_report import not_run_case_names
+
+    cut = parse_cut(
+        'TESTSUITE "goto"\nTESTCASE "one"\nPERFORM MAIN-PARA\n'
+        'TESTCASE "two"\nPERFORM MAIN-PARA\n'
+    )
+    suite = parse_stdout(
+        "__MOCKYMOCK__ TESTSUITE: goto\n__MOCKYMOCK__ CASE 001 START: one\n"
+    )
+    not_run = not_run_case_names(suite, cut)
+    assert not_run == ["two"]
+
+    console = format_console(suite, not_run=not_run)
+    assert "[NOT RUN] two" in console
+    assert "1 not run" in console
+
+    root = fromstring(format_junit_xml(suite, not_run=not_run).split("\n", 1)[1])
+    assert root.get("tests") == "2"
+    assert root.get("errors") == "2"
+    names = [case.get("name") for case in root.iter("testcase")]
+    assert names == ["one", "two"]
+
+
+# Regression: bug hunt of 2026-11-05 (running suites). A case looping over a
+# DISPLAY keeps bounded output.
+from mockymock.report import results
+
+# --- a looping DISPLAY: bounded case output ---------------------------------
+
+
+def _case_output(lines: list[str]) -> list[str]:
+    stdout = "__MOCKYMOCK__ CASE 001 START: loop\n" + "".join(
+        f"{line}\n" for line in lines
+    )
+    return parse_stdout(stdout).results[0].output
+
+
+def test_case_output_past_the_cap_is_counted_and_hashed(monkeypatch) -> None:
+    monkeypatch.setattr(results, "MAX_CASE_OUTPUT_LINES", 3)
+    output = _case_output(["L1", "L2", "L3", "L4", "L5"])
+    assert output[:3] == ["L1", "L2", "L3"]
+    assert output[3].startswith("(mockymock: 3 more output line(s) not kept, sha256 ")
+    # A baseline still tells two outputs apart past the cap.
+    other = _case_output(["L1", "L2", "L3", "L4", "XX"])
+    assert other[3] != output[3]
+    assert _case_output(["L1", "L2", "L3", "L4", "L5"]) == output
+
+
+def test_case_output_under_the_cap_is_kept_whole() -> None:
+    assert _case_output(["A", "B"]) == ["A", "B", ""]
+
+
+# Regression: bug hunt round 10 (DSL / report / analysis).
+import pytest
+
+# --- stdout protocol split on form feed / VT / NEL ------------------------
+
+
+@pytest.mark.parametrize("control", ["\x0c", "\x0b", "\x1c", "\x85", " "])
+def test_fail_reason_keeps_value_past_a_control_character(control):
+    stdout = (
+        "__MOCKYMOCK__ TESTSUITE: s\n"
+        "__MOCKYMOCK__ CASE 001 START: c\n"
+        f"__MOCKYMOCK__ CASE 001 FAIL: expected WS-X = 1, got AB{control}CD\n"
+        "__MOCKYMOCK__ CASE 001 END\n"
+        "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=000000001\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].failure_reasons == [f"expected WS-X = 1, got AB{control}CD"]
+
+
+def test_recorded_value_keeps_value_past_a_form_feed():
+    stdout = (
+        "__MOCKYMOCK__ CASE 001 START: c\r\n"
+        "__MOCKYMOCK__ RECORD 001 WS-X: AB\x0cCD\r\n"
+        "__MOCKYMOCK__ CASE 001 END\r\n"
+    )
+    suite = parse_stdout(stdout)
+    assert suite.results[0].recorded == [("WS-X", "AB\x0cCD")]
+    assert suite.results[0].ended
+
+
+# --- JUnit/console: binary died before any CASE START ---------------------
+
+
+def test_junit_reports_error_when_binary_died_before_first_case():
+    suite = parse_stdout("__MOCKYMOCK__ TESTSUITE: s\n")
+    xml = format_junit_xml(suite, crash_detail="binary exited with code 134")
+    assert 'tests="1"' in xml
+    assert 'errors="1"' in xml
+    assert "binary exited with code 134" in xml
+    console = format_console(suite, crash_detail="binary exited with code 134")
+    assert "binary exited with code 134" in console
+
+
+def test_junit_empty_clean_run_is_unchanged():
+    xml = format_junit_xml(parse_stdout(""))
+    assert 'tests="0"' in xml and 'errors="0"' in xml
+
+
+# Regression: bug hunt round 11.
+from mockymock.report import results as report_results
+
+# --- JUnit attribute whitespace ----------------------------------------------
+
+
+def test_junit_attribute_keeps_tabs_and_newlines():
+    reason = "expected\t5\ngot 6"
+    suite = report_results.TestSuiteResult(
+        suite_name="S",
+        results=[
+            report_results.TestResult(
+                case_id="001", case_name="C", failure_reasons=[reason], ended=True
+            )
+        ],
+        tests_run=1,
+        failures=1,
+    )
+    root = ElementTree.fromstring(format_junit_xml(suite))
+    failure = root.find("testcase/failure")
+    assert failure is not None
+    assert failure.get("message") == reason

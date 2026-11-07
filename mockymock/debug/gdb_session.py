@@ -84,7 +84,7 @@ def _readline_with_deadline(stream, timeout: float) -> str:
         return result.get(timeout=timeout)
     except queue.Empty:
         raise GdbSessionClosedError(
-            f"gdb produced no output for {timeout:.0f}s (the debuggee may " "be hung)"
+            f"gdb produced no output for {timeout:.0f}s (the debuggee may be hung)"
         ) from None
 
 
@@ -245,7 +245,7 @@ def _parse_mi_value(text: str, i: int) -> tuple[object, int]:
         return _parse_mi_tuple(text, i)
     if text[i] == "[":
         return _parse_mi_list(text, i)
-    raise MalformedMIRecordError(f"unexpected MI value at {i}: {text[i:i + 20]!r}")
+    raise MalformedMIRecordError(f"unexpected MI value at {i}: {text[i : i + 20]!r}")
 
 
 def _parse_mi_tuple(text: str, i: int) -> tuple[dict, int]:

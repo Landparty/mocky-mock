@@ -211,3 +211,44 @@ def test_collect_boundaries_without_a_cut(capsys):
 def test_collect_without_boundaries_still_needs_a_cut(capsys):
     assert main(["collect", "--json"]) == 1
     assert "--cut is required" in json.loads(capsys.readouterr().out)["error"]
+
+
+# Regression: bug hunt round 12.
+import pytest
+
+from mockymock.cli.main import _collect_boundaries
+
+# --- collect --boundaries reports lines of the .cbl, not the expansion ----
+
+_r12_COPY_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. P.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       COPY WSREC.
+       01  WS-X PIC X.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           CALL "SUBA" USING WS-X
+           GOBACK.
+"""
+
+
+def test_collect_boundaries_lines_are_program_lines(tmp_path):
+    from cobolparser.preprocess import expand_copybooks
+
+    books = tmp_path / "copybooks"
+    books.mkdir()
+    (books / "WSREC.cpy").write_text(
+        "".join(f"       01  WS-{c} PIC X.\n" for c in "ABCD")
+    )
+    program = tmp_path / "P.cbl"
+    program.write_text(_r12_COPY_PROGRAM)
+    if not expand_copybooks(
+        _r12_COPY_PROGRAM, copybook_paths=[str(books)], preserve_source_locations=True
+    ).source_location_map:
+        pytest.skip("installed cobol-parser does not fill in a source map")
+
+    boundaries = _collect_boundaries(program, [str(books)])
+
+    assert [(b["label"], b["line"]) for b in boundaries] == [("CALL", 9)]

@@ -7,11 +7,9 @@ per-paragraph complexity, the call graph, every lint rule, duplicate
 code, the program's external interface, and a data cross-reference --
 so the report shows what the program *is* next to what its tests prove.
 
-Each analyzer is soft-imported and run in isolation. cobol-parser grew
-them over several releases (lint, xref, the program signature and the
-SQL/CICS check arrived in 1.9.0; this project's floor is 1.7.7), so an
-analyzer that is missing is listed in `unavailable` with the reason, and
-one that raises costs only its own section. A section that could not be
+Each analyzer is imported and run in isolation: an analyzer that cannot
+be loaded is listed in `unavailable` with the reason, and one that raises
+costs only its own section. A section that could not be
 produced is `None`, never an empty list that would read as "nothing
 found".
 
@@ -154,7 +152,7 @@ def analyze_program(
     out["signature"] = _signature(signature, orig) if signature else None
 
     def _boundaries(cls: Any) -> Any:
-        from cobolparser.generators import ProgramLayoutIndex
+        from cobolparser.generators.data.program_layout import ProgramLayoutIndex
 
         return cls().analyze(ast, ProgramLayoutIndex.build(ast)).to_dict()
 

@@ -87,7 +87,7 @@ change needed):
   on its default entry (grepped `legacy-application/cobol`,
   `mocky-mock/examples`, `mocky-mock/tests`: zero hits). That broader
   "ordinary CALLed subprogram" pattern is explicitly out of scope here — it
-  remains Milestone B (`docs/superpowers/plans/2026-07-06-real-world-readiness.md`)
+  remains Milestone B (`docs/archive/plans/2026-07-06-real-world-readiness.md`)
   territory, untested and unsolved by this design.
 
 ## Approaches considered
@@ -199,7 +199,7 @@ directly, and one test case now exercises the real entry point end-to-end.
 - `docs/corpus-sweep-report.md`: note that the 5 IMS programs now go
   through this transform (no longer "zero refusal codes" in the naive
   sense measured by the original sweep).
-- `docs/superpowers/plans/2026-07-06-real-world-readiness.md`: note that
+- `docs/archive/plans/2026-07-06-real-world-readiness.md`: note that
   Milestone B's scope narrows — the IMS named-ENTRY subset is solved by
   this design; general CALL-based subprogram driving remains future work.
 

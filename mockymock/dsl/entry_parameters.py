@@ -23,7 +23,8 @@ from typing import Any
 def fixture_generator(rows: int | None) -> Any:
     """A `ProgramFixtureGenerator` that generates the entry parameters
     itself when the installed cobol-parser knows the keyword."""
-    from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
+    from cobolparser.generators.data.options import DataGeneratorOptions
+    from cobolparser.generators.program_fixtures import ProgramFixtureGenerator
 
     options = DataGeneratorOptions(rows=rows) if rows is not None else None
     try:
@@ -112,7 +113,9 @@ def _entry_parameter_layout(
 
     index = ProgramLayoutIndex.from_file(program_path, copybook_paths=copybook_paths)
     ast = index.ast
-    procedure = ast.get_division("PROCEDURE") if ast is not None else None
+    if ast is None:
+        return None
+    procedure = ast.get_division("PROCEDURE")
     if procedure is None:
         return None
     names = [

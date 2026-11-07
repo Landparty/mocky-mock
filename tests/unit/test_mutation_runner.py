@@ -23,7 +23,7 @@ FAILING_STDOUT = (
     "__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=1\n"
 )
 
-CRASHED_STDOUT = "__MOCKYMOCK__ TESTSUITE: s\n" "__MOCKYMOCK__ CASE 001 START: c\n"
+CRASHED_STDOUT = "__MOCKYMOCK__ TESTSUITE: s\n__MOCKYMOCK__ CASE 001 START: c\n"
 
 
 def test_clean_exit_and_all_passed_is_passed():

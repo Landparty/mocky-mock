@@ -4,7 +4,7 @@ key the program set before the SELECT."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 SEL_CBL = """\
        IDENTIFICATION DIVISION.

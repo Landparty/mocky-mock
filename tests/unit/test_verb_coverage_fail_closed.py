@@ -19,7 +19,6 @@ covers them there -- the fail-closed property holds on both.
 import re
 from pathlib import Path
 
-import pytest
 from cobolparser import parse_cobol
 
 from mockymock.analysis import mock_surface
@@ -95,7 +94,6 @@ INVOKE_BODY = """\
 """
 
 
-@pytest.mark.skipif(not mock_surface._INVOKE_TYPES, reason="no InvokeStatement")
 def test_invoke_is_detected_and_refused_when_reachable():
     program = _program(INVOKE_BODY)
     (site,) = _none_sites(program)
@@ -105,7 +103,6 @@ def test_invoke_is_detected_and_refused_when_reachable():
     assert "UNSUPPORTED_INVOKE" in _codes(program, _case())
 
 
-@pytest.mark.skipif(not mock_surface._INVOKE_TYPES, reason="no InvokeStatement")
 def test_invoke_not_refused_when_unreachable_or_flow_mocked():
     program = _program(INVOKE_BODY)
     assert "UNSUPPORTED_INVOKE" not in _codes(program, _case(target="OTHER-PARA"))
@@ -121,7 +118,6 @@ CHAIN_BODY = """\
 """
 
 
-@pytest.mark.skipif(not mock_surface._CHAIN_TYPES, reason="no ChainStatement")
 def test_chain_is_detected_and_refused():
     program = _program(CHAIN_BODY)
     (site,) = _none_sites(program)
@@ -144,9 +140,6 @@ COMM_BODY = """\
 """
 
 
-@pytest.mark.skipif(
-    len(mock_surface._COMMUNICATION_TYPES) < 5, reason="no communication nodes"
-)
 def test_communication_verbs_are_detected_and_refused():
     program = _program(COMM_BODY)
     sites = _none_sites(program)
@@ -324,13 +317,6 @@ def _report_writer_program():
     return result.ast
 
 
-rw_available = pytest.mark.skipif(
-    not (mock_surface._INITIATE_TYPES and mock_surface._TERMINATE_TYPES),
-    reason="no Report Writer nodes",
-)
-
-
-@rw_available
 def test_report_writer_verbs_are_classified_by_report_name():
     program = _report_writer_program()
     sites = analyze(program).boundary_sites
@@ -347,7 +333,6 @@ def test_report_writer_verbs_are_classified_by_report_name():
     assert not check_whole_program(parse_cobol(REPORT_WRITER_SOURCE))
 
 
-@rw_available
 def test_report_writer_unmocked_refuses_with_its_own_code():
     program = _report_writer_program()
     case = _case(
@@ -381,7 +366,6 @@ def test_report_writer_directives_parse_as_bare_keys():
     assert (verify.category, verify.key) == (MockCategory.GENERATE, "DETAIL-LINE")
 
 
-@rw_available
 def test_report_writer_scaffold_emits_bare_directives():
     program = _report_writer_program()
     text = scaffold_cut("rwtest", analyze(program))
@@ -390,7 +374,6 @@ def test_report_writer_scaffold_emits_bare_directives():
     assert "MOCK TERMINATE SALES-RPT" in text
 
 
-@rw_available
 def test_report_writer_lint_and_export_splice_the_verbs_out(tmp_path, capsys):
     cbl = tmp_path / "RWTEST.cbl"
     cut = tmp_path / "RWTEST.cut"
@@ -441,16 +424,6 @@ def _xml_parse_statement(program):
     return program.get_division("PROCEDURE").paragraphs[0].statements[0]
 
 
-xml_structured = pytest.mark.skipif(
-    not mock_surface._XML_JSON_TYPES
-    or not hasattr(
-        mock_surface._XML_JSON_TYPES[0]("XML", "PARSE", None), "processing_procedure"
-    ),
-    reason="cobol-parser without structured XML PARSE clauses",
-)
-
-
-@xml_structured
 def test_xml_parse_processing_procedure_is_a_reachability_edge():
     program = _xml_parse_program()
     reachable, reasons = _reachable_paragraphs(program, "MAIN-PARA", None)
@@ -471,7 +444,6 @@ def test_xml_parse_processing_procedure_is_a_reachability_edge():
     )
 
 
-@xml_structured
 def test_xml_parse_without_structured_fields_fails_closed():
     """Simulate the older cobol-parser shape: clause kept as text only."""
     program = _xml_parse_program()

@@ -41,6 +41,44 @@ mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved r
 mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integration-test jobs, runs `run --record-baseline/--baseline` or `--record-expectations` + `--json-report` per suite as child processes)
 ```
 
+## Module layout (2026-11-07)
+
+`cli/main.py` used to hold every subcommand (6,800 lines). It now keeps only
+`main()`, `build_parser()` and its help helpers (`_TopLevelParser`,
+`_polish_help`, `_tidy_metavar`, `_COMMAND_GROUPS_EPILOG` /
+`_GROUPED_COMMANDS`, `_subcommand_names`, `_reject_unknown_command`,
+`_parse_command_line`) plus the argparse `type=` helpers only the parser uses
+(`_timeout_seconds`, `_percent`, `_positive_seconds`, `_suite_name`).
+
+* `cli/_common.py` -- helpers more than one subcommand calls:
+  `_resolve_program_and_cut`, `_apply_config_to_args` / `_with_copybook_aliases`,
+  `_check_input_files`, `_layout`, `_check_rows_non_negative`,
+  `_write_report_file`, `_save_result`, `_default_output`, `_several_suites`,
+  `_report_broken_claims`, the console notes (`_print_linkage_neutralization`,
+  `_print_cics_eib_synthesis`, `_report_unsupported_boundaries`,
+  `_warn_asserting_nothing`, `_distinct_case_count`) and the whole
+  driver-insertion splice (`_insert_driver`, `_insert_driver_with_origins`,
+  `mark_recursive`, `comment_out_comment_entries`,
+  `_insert_end_of_program_trap`, ...), which `mutation/runner.py` also uses.
+* `cli/commands/<name>.py` -- one module per subcommand or family:
+  `environment` (setup, doctor, dashboard), `init`, `generate` (with
+  `_fill_cut_file`, `_main_line_or_bare`, `_refuse_unusable_scaffold`),
+  `fixtures`, `suites`, `run` (`_cmd_run`, `_cmd_run_suite`, `_run_directory`,
+  the crash-isolation reruns, baseline, branch coverage,
+  `_compile_failure_diagnosis`), `debug`, `lint`, `mutate`, `export`,
+  `collect` (collect, explain, and `_print_command_error`, which compares
+  `args.func` against `_cmd_collect` / `_cmd_fixtures`), `skills`, `report`,
+  `journal`, `clean`, `runner`, `analyze`, `job`.
+
+Commands modules import from `_common` and each other, never from `main` at
+import time; the one exception is `_cmd_init`, which imports `build_parser`
+at call time to re-parse its generate/run argv. `main.py` imports every
+`_cmd_*` (so `set_defaults(func=...)` and `args.func is _cmd_doctor` resolve
+through its globals) and re-exports the helpers tests import from
+`mockymock.cli.main`. A test that monkeypatches a function a command calls
+patches the command's module (`mockymock.cli.commands.init._cmd_run`,
+`mockymock.cli.commands.run._cmd_run_suite`), not `main`.
+
 If no argument at all is given, `main()` prints help and returns 2 (a usage
 error, as `cobol-parser` and `jcl-parser` do).
 
@@ -132,7 +170,7 @@ rather than falling back to the default.
 suites as from the project root.
 
 `run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
-`--cut`: `_resolve_program_and_cut()` (`cli/main.py`) fills in whichever one
+`--cut`: `_resolve_program_and_cut()` (`cli/_common.py`) fills in whichever one
 is missing from its same-stem sibling file via
 `mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
 (mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). A `.cut`
@@ -286,7 +324,7 @@ readiness without building or starting anything, use `doctor` instead.
 
 Composes `generate --with-data` + `run --record-expectations` into one
 step, so a first scaffold has real generated data and recorded expected
-values instead of empty mock bodies. `_cmd_init` (`cli/main.py`):
+values instead of empty mock bodies. `_cmd_init` (`cli/commands/init.py`):
 
 1. `_check_input_files` on `program`; refuses if the resolved output
    `.cut` path already exists and `--force` wasn't given (a check `init`
@@ -898,7 +936,7 @@ Starts an interactive Debug Adapter Protocol (DAP) session for a single
 test case — breakpoints, stepping, a synthesized COBOL call stack, and
 read-only variable inspection. See
 docs/2026-07-22-dap-debugger-design.md and
-docs/superpowers/plans/2026-07-22-dap-debugger-cli.md for the full design
+docs/archive/plans/2026-07-22-dap-debugger-cli.md for the full design
 and empirical basis (both were verified against a real container, not
 just planned).
 
@@ -1223,8 +1261,7 @@ finds it read by a statement other than its own ADD/SUBTRACT update and
 DISPLAY (MOVE, condition, CALL argument, ...). A counter that is only
 incremented and DISPLAYed is a missing assertion first -- seeding alone
 would not kill it -- so it gets no hint and `mockymock report` files it as
-`missing-assertion`; it used to be labelled untestable. xref is new in
-cobol-parser 1.10 (floor 1.7.7): without it, or on any xref error, the
+`missing-assertion`; it used to be labelled untestable. On any xref error, the
 field counts as observed and the hint stays. The statement must also run
 at most once per case (`_may_run_more_than_once`, issue #203): an
 ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)
@@ -1407,7 +1444,7 @@ is the exact `MOCK <category> <key>` header `dsl.generator.directive_snippet`
 would scaffold for the site (quoted where the DSL requires it, the
 shortest-unique prefix for SQL/CICS/DLI, `null` when the scaffold skips the
 site), so a consumer inserts what the parser accepts instead of re-deriving
-the quoting rules. `_collect_boundaries()` (`cli/main.py`) parses `program`
+the quoting rules. `_collect_boundaries()` (`cli/commands/collect.py`) parses `program`
 directly, expanding COPY through the same copybook lookup lint/run use
 (`--copybook-path`, else the config file's `copybook_path`, plus the
 program's `copybooks/` folder via `_apply_config_to_args`; issue #200 --

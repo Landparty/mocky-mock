@@ -123,7 +123,7 @@ def test_real_dynamic_route_tests_the_subscripted_entry():
     if not call.get_metadata("called_program_reference"):
         return  # an older cobol-parser keeps no reference: bare-name route
     suite = _suite(
-        '    USE REAL CALL "SUB" FROM "SUB.cbl"\n' "    MOCK CALL WS-ENT\n    END-MOCK"
+        '    USE REAL CALL "SUB" FROM "SUB.cbl"\n    MOCK CALL WS-ENT\n    END-MOCK'
     )
     site = _site("DYNCALL", "dynamic CALL", keys=("WS-ENT",), statement=call)
     lines = _dispatch(suite, site, real_statement=["CALL WS-ENT(WS-I)"])

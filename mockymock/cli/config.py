@@ -67,7 +67,7 @@ _MEMBER_NAME = re.compile(r"[A-Za-z0-9@#$][A-Za-z0-9@#$_-]*")
 # Every key a config file may carry. Anything else is rejected rather
 # than ignored: a typo'd `copybook-path` (hyphen) or a `timeout` key
 # (deliberately not config-overridable -- see `_apply_config_to_args` in
-# cli/main.py) that quietly did nothing would be a config the user
+# cli/_common.py) that quietly did nothing would be a config the user
 # believes is in effect and isn't.
 _KNOWN_KEYS = frozenset(
     {_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS, _ALIASES_KEY, _EXTENSIONS_KEY}
@@ -181,7 +181,7 @@ def _normalize_copybook_aliases(value: object, source: Path) -> dict[str, str]:
 def _normalize_copybook_extensions(value: object, source: Path) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ConfigError(
-            f"mockymock: {source}: '{_EXTENSIONS_KEY}' must be a list of " f"strings"
+            f"mockymock: {source}: '{_EXTENSIONS_KEY}' must be a list of strings"
         )
     extensions = []
     for ext in value:
@@ -291,15 +291,8 @@ def _universal_values(path: Path) -> dict[str, Any]:
     first, and the two drifting is exactly the failure a single universal
     file exists to prevent.
     """
-    try:
-        from cobolparser.config import ConfigError as ParserConfigError
-        from cobolparser.config import load_project_config
-    except ImportError as exc:  # pragma: no cover - depends on installed version
-        raise ConfigError(
-            f"mockymock: {path} needs a cobol-parser that can read it "
-            f"(>= 1.10). Upgrade with 'pip install -U cobol-parser', or "
-            f"move these settings into a mockymock.toml."
-        ) from exc
+    from cobolparser.config import ConfigError as ParserConfigError
+    from cobolparser.config import load_project_config
 
     try:
         project = load_project_config(path=path)
@@ -338,8 +331,7 @@ def find_tool_config(start_dir: Path | None = None) -> tuple[Path, dict] | None:
                 mm_table = tool_table["mockymock"]
                 if not isinstance(mm_table, dict):
                     raise ConfigError(
-                        f"mockymock: {pyproject_path}: [tool.mockymock] "
-                        f"must be a table"
+                        f"mockymock: {pyproject_path}: [tool.mockymock] must be a table"
                     )
                 return pyproject_path, mm_table
 

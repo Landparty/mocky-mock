@@ -13,7 +13,7 @@ mockymock-cobc container: `libcob: error: module 'SUB' not found`).
 
 import pytest
 
-from mockymock._lines import PARSER_SPLITS_ON_RECORD_DELIMITERS, split_source_lines
+from mockymock._lines import split_source_lines
 from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
 
@@ -48,27 +48,9 @@ CUT = (
 NON_RECORD_BREAKS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " "]
 
 
-needs_record_splitting_parser = pytest.mark.skipif(
-    not PARSER_SPLITS_ON_RECORD_DELIMITERS,
-    reason="installed cobolparser numbers lines the str.splitlines() way",
-)
-
-
-@needs_record_splitting_parser
 @pytest.mark.parametrize("sep", NON_RECORD_BREAKS)
 def test_split_source_lines_keeps_non_record_breaks_inside_the_line(sep):
     assert split_source_lines(f"a{sep}b\nc") == [f"a{sep}b", "c"]
-
-
-@pytest.mark.parametrize("sep", NON_RECORD_BREAKS)
-def test_split_source_lines_agrees_with_the_installed_parser(sep):
-    # An older cobolparser (no `cobolparser._lines`) numbers records the
-    # str.splitlines() way itself; mockymock must follow whichever it is.
-    text = f"a{sep}b\nc"
-    expected = (
-        [f"a{sep}b", "c"] if PARSER_SPLITS_ON_RECORD_DELIMITERS else text.splitlines()
-    )
-    assert split_source_lines(text) == expected
 
 
 def test_split_source_lines_mirrors_splitlines_on_real_record_breaks():
@@ -90,7 +72,6 @@ def test_boundary_site_line_indexes_the_mocked_statement(tmp_path, sep):
     assert 'CALL "SUB"' in checked.lines[site.line - 1]
 
 
-@needs_record_splitting_parser
 def test_mutate_list_reports_original_line_numbers(tmp_path, capsys):
     program = tmp_path / "FFPROG.cbl"
     program.write_text(SOURCE.format(sep="\x0c"), encoding="utf-8")
@@ -102,3 +83,40 @@ def test_mutate_list_reports_original_line_numbers(tmp_path, capsys):
     # MOVE 1 is on record 10 and MOVE 2 on record 12 -- not 11 and 13.
     assert "line 10 [move-literal] MOVE 1 -> MOVE 2" in out
     assert "line 12 [move-literal] MOVE 2 -> MOVE 3" in out
+
+
+# Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
+# (executed counterpart:
+# tests/integration/test_bug_hunt_20261105_cut_language.py). `.cut` text was
+# split with `str.splitlines()`: a form feed (or VT, NEL, U+2028) inside a `*>`
+# comment cut the comment in two, and every later line number was one off in
+# lint, stub scanning and the --record-expectations rewrite.
+from mockymock.analysis.stub_expectations import scan_stub_expectations
+from mockymock.cli.discovery import read_program_line
+from mockymock.dsl.parser import parse_cut
+
+# --- 2. form feed inside .cut text ------------------------------------------
+
+FF_CUT = (
+    'TESTSUITE "ff"\n'
+    "*> page\x0c eject and a line separator\n"
+    'TESTCASE "a"\n'
+    "    PERFORM MAIN-PARA\n"
+    "    *> STUB EXPECT WS-B\n"
+    "    EXPECT WS-B TO BE 1\n"
+)
+
+
+def test_a_form_feed_in_a_comment_neither_splits_it_nor_shifts_lines():
+    suite = parse_cut(FF_CUT)
+    case = suite.test_cases[0]
+    assert case.line == 3
+    assert case.expectations[0].line == 6
+
+
+def test_stub_scan_and_program_directive_count_lines_the_same_way(tmp_path):
+    stubs = scan_stub_expectations(FF_CUT, parse_cut(FF_CUT))
+    assert [stub.line for stub in stubs.stubs] == [5]
+    cut = tmp_path / "ff.cut"
+    cut.write_text('*> \x0c PROGRAM "WRONG.cbl"\nTESTSUITE "s"\nPROGRAM "P.cbl"\n')
+    assert read_program_line(cut) == "P.cbl"

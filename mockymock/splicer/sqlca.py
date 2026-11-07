@@ -390,8 +390,7 @@ def _handle_block(
             reasons.extend(resolve_reasons)
             return end + 1, None
         replacement = [
-            f"      *> EXEC SQL INCLUDE {member} replaced by resolved "
-            f"copybook content:"
+            f"      *> EXEC SQL INCLUDE {member} replaced by resolved copybook content:"
         ] + resolved_lines
         result[start : end + 1] = replacement
         new_index = start + len(replacement)

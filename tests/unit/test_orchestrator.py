@@ -771,3 +771,72 @@ def test_capture_of_a_literal_argument_moves_the_literal_not_a_same_named_item()
     assert "MOVE 'D''E' TO WS-T2" in moves
     assert "MOVE WS-AMT TO WS-T3" in moves
     assert "MOVE ABC TO WS-T1" not in moves
+
+
+# Regression: bug hunt round 10 (splicer / export / captures). A mocked
+# statement whose sentence period was followed by an inline `*>` comment lost
+# the period in its replacement, so the EVALUATE ran unterminated into the next
+# paragraph header.
+from mockymock.dsl.parser import parse_cut
+from mockymock.splicer.orchestrator import _span_ends_sentence
+
+# --- splice: period before an inline comment ------------------------------
+
+INLINE_COMMENT_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. INLCMT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC X(5).
+       01  WS-B                PIC 9(3) VALUE 0.
+       PROCEDURE DIVISION.
+       P1.
+           CALL "SUBPGM" USING WS-A. *> call it
+       P2.
+           ADD 1 TO WS-B.
+"""
+
+
+INLINE_COMMENT_CUT = """\
+TESTSUITE "S"
+
+TESTCASE "one"
+    MOCK CALL "SUBPGM"
+        MOVE "HELLO" TO WS-A
+    END-MOCK
+    PERFORM P1
+    EXPECT WS-A TO BE "HELLO"
+"""
+
+
+def test_replacement_keeps_the_sentence_period_before_an_inline_comment():
+    result = parse_cobol(INLINE_COMMENT_SOURCE, filename="inlcmt.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(INLINE_COMMENT_SOURCE.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    suite = parse_cut(INLINE_COMMENT_CUT)
+
+    spliced = splice_program(
+        lines,
+        collect_boundaries(result.ast),
+        surface,
+        suite,
+        TallyRegistry(suite),
+    )
+
+    p2 = next(i for i, line in enumerate(spliced) if line.strip() == "P2.")
+    previous_code = next(
+        line
+        for line in reversed(spliced[:p2])
+        if line.strip() and not line.lstrip().startswith("*>")
+    )
+    assert previous_code.strip() == "END-EVALUATE."
+
+
+def test_span_sentence_end_is_judged_on_code_not_comment_text():
+    assert _span_ends_sentence(['CALL "X". *> done'], 1, 1)
+    assert _span_ends_sentence(['CALL "X".', "*> trailing note"], 1, 2)
+    # `*>` inside a literal is not a comment.
+    assert not _span_ends_sentence(['CALL "X*>." USING WS-A'], 1, 1)
+    assert not _span_ends_sentence(['CALL "X" *> note.'], 1, 1)

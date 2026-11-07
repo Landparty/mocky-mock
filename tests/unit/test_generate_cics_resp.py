@@ -4,7 +4,7 @@ guarded on its own RESP gets an end-of-file reply)."""
 
 from __future__ import annotations
 
-from tests.unit.test_bug_hunt_m1_fixes import _generate
+from tests.unit._generate import _generate
 
 READ_CBL = """\
        IDENTIFICATION DIVISION.

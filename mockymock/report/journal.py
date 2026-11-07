@@ -147,8 +147,7 @@ def parse_batch(text: str) -> list[dict[str, Any]]:
                 datetime.strptime(str(item["time"]), _TIME_FORMAT)
             except ValueError:
                 raise JournalError(
-                    f"entry {number}: time {item['time']!r} is not "
-                    f"YYYY-MM-DDTHH:MM:SSZ"
+                    f"entry {number}: time {item['time']!r} is not YYYY-MM-DDTHH:MM:SSZ"
                 ) from None
         status = item.get("status", "ok")
         if status not in STATUSES:

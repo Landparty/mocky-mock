@@ -56,6 +56,8 @@ from mockymock.dsl.model import (
 )
 
 if TYPE_CHECKING:
+    from cobolparser.models.program import CobolProgram
+
     from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 
 
@@ -74,7 +76,7 @@ class PreparedReal:
 
     spec: RealSpec
     program_id: str
-    ast: object
+    ast: CobolProgram
     lines: list[str]
     surface: MockSurface
     file_status_fields: dict[str, str]

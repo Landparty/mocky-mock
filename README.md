@@ -25,7 +25,8 @@ over.
 
 For deep internals (DSL grammar, splicer, runtime, refusal rules), see
 the [OKF knowledge bundle](.okf/index.md) — start there before making
-non-trivial changes.
+non-trivial changes. Design records, audits and their current status are
+indexed in [docs/index.md](docs/index.md).
 
 ## Installation
 

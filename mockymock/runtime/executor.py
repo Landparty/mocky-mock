@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 
 # Conventional exit codes so ExecutionResult.exit_code stays a plain int and
-# every consumer (report/results.py's parse_stdout, main.py's _cmd_run)
+# every consumer (report/results.py's parse_stdout, cli/commands/run.py's _cmd_run)
 # keeps working unmodified. 124 matches both the `timeout` shell command and
 # the container-side `timeout` wrapper the Docker toolchain uses.
 TIMEOUT_EXIT_CODE = 124
