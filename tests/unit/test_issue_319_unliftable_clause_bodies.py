@@ -118,8 +118,7 @@ def test_an_if_closed_by_the_sentence_period_gets_its_end_if():
 def test_an_if_left_open_before_the_next_clause_is_still_unliftable():
     source = PROGRAM.format(exception_exit="GO TO 3000-EXIT").replace(
         '                   MOVE "N" TO WS-OK\n',
-        '                   IF WS-OK = "?"\n'
-        '                       MOVE "N" TO WS-OK\n',
+        '                   IF WS-OK = "?"\n                       MOVE "N" TO WS-OK\n',
     )
     result = parse_cobol(source, filename="GOREAD.cbl")
     assert result.success, result.errors

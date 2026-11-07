@@ -96,7 +96,8 @@ def test_truth_moved_to_a_plain_item_is_refused(tmp_path):
 def test_false_without_when_set_to_false_is_refused(tmp_path):
     problems = _problems(tmp_path, "", terminal="EOF-YES = FALSE")
     assert len(problems) == 1
-    assert "(CONDITION_NAME_MISMATCH): .cut line 9: TERMINAL EOF-YES = FALSE" in (
-        problems[0]
+    assert (
+        "(CONDITION_NAME_MISMATCH): .cut line 9: TERMINAL EOF-YES = FALSE"
+        in (problems[0])
     )
     assert "WHEN SET TO FALSE" in problems[0]

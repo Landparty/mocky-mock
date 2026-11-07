@@ -287,8 +287,7 @@ def resolve_cut_path(
         )
     listed = ", ".join(str(s) for s in suites)
     raise DiscoveryError(
-        f"{program_path} has {len(suites)} suites ({listed}); pass --cut "
-        f"to pick one"
+        f"{program_path} has {len(suites)} suites ({listed}); pass --cut to pick one"
     )
 
 

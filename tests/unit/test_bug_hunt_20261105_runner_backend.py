@@ -21,7 +21,8 @@ from tests.unit.test_runner import (  # noqa: F401 - fixture
 
 
 def test_a_record_step_that_did_not_compile_is_not_a_recording(
-    tmp_path: Path, fake_command  # noqa: F811
+    tmp_path: Path,
+    fake_command,  # noqa: F811
 ) -> None:
     """`recorded` was set whatever --record-expectations did: a suite that
     did not compile was played, reported recorded with its STUB EXPECT
@@ -82,7 +83,8 @@ def test_report_gives_up_after_the_last_retry() -> None:
 
 
 def test_serve_reports_once_the_backend_is_back(
-    tmp_path: Path, fake_command  # noqa: F811
+    tmp_path: Path,
+    fake_command,  # noqa: F811
 ) -> None:
     client = _Flaky(
         [RunnerClientError("connection refused")],
@@ -115,10 +117,13 @@ def test_docker_exec_output_is_read_in_bounded_memory(monkeypatch) -> None:
     from mockymock.runtime.docker_toolchain import _exec_binary
 
     monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 1000)
+    # Bytes, not text: a text-mode stdout writes CRLF on Windows, and the
+    # real test binary (Linux, in the container) writes LF.
     script = (
         "import sys\n"
-        "for _ in range(5000): sys.stdout.write('X' * 99 + '\\n')\n"
-        "sys.stdout.write('__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\\n')\n"
+        "out = sys.stdout.buffer\n"
+        "for _ in range(5000): out.write(b'X' * 99 + b'\\n')\n"
+        "out.write(b'__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0\\n')\n"
     )
     result = _exec_binary([sys.executable, "-c", script], timeout=60)
     assert result.returncode == 0

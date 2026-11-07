@@ -74,6 +74,6 @@ def test_every_catalogued_code_still_exists_in_the_codebase():
 def test_every_explanation_is_a_real_sentence():
     for code, explanation in REFUSAL_EXPLANATIONS.items():
         assert len(explanation) > 40, f"{code}'s explanation looks too short"
-        assert (
-            explanation.strip() == explanation
-        ), f"{code}'s explanation has stray whitespace"
+        assert explanation.strip() == explanation, (
+            f"{code}'s explanation has stray whitespace"
+        )

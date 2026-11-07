@@ -97,12 +97,7 @@ def test_expect_unsubscripted_name_still_parses():
 
 
 def test_expect_unbalanced_paren_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        "    EXPECT WS-A ( TO BE 5\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN\n    EXPECT WS-A ( TO BE 5\n'
     with pytest.raises(CutParseError, match="unrecognized statement"):
         parse_cut(text)
 
@@ -137,23 +132,13 @@ def test_move_subscripted_value_and_target_both_parse():
 
 
 def test_move_unsubscripted_target_still_parses():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    MOVE 100 TO WS-RESULT\n"
-        "    PERFORM MAIN\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO WS-RESULT\n    PERFORM MAIN\n'
     case = parse_cut(text).test_cases[0]
     assert case.setup_moves == [("100", "WS-RESULT")]
 
 
 def test_move_unbalanced_paren_target_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    MOVE 100 TO WS-A (\n"
-        "    PERFORM MAIN\n"
-    )
+    text = 'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO WS-A (\n    PERFORM MAIN\n'
     with pytest.raises(CutParseError, match="unrecognized statement"):
         parse_cut(text)
 
@@ -167,24 +152,14 @@ def test_move_unbalanced_paren_target_raises():
 # covered; these no-space forms were the actual gap.
 @pytest.mark.parametrize("target", ["WS-TAB(1", "WS-TAB(1))"])
 def test_move_no_space_unbalanced_paren_target_raises(target):
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        f"    MOVE 100 TO {target}\n"
-        "    PERFORM MAIN\n"
-    )
+    text = f'TESTSUITE "s"\nTESTCASE "c"\n    MOVE 100 TO {target}\n    PERFORM MAIN\n'
     with pytest.raises(CutParseError, match="unbalanced"):
         parse_cut(text)
 
 
 @pytest.mark.parametrize("name", ["WS-X(1", "WS-X(1))"])
 def test_expect_no_space_unbalanced_paren_raises(name):
-    text = (
-        'TESTSUITE "s"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        f"    EXPECT {name} TO BE 5\n"
-    )
+    text = f'TESTSUITE "s"\nTESTCASE "c"\n    PERFORM MAIN\n    EXPECT {name} TO BE 5\n'
     with pytest.raises(CutParseError, match="unbalanced"):
         parse_cut(text)
 
@@ -276,12 +251,7 @@ def test_multi_call_steps_are_checked_as_entry_points():
 
 
 def test_second_testsuite_line_raises_with_line_number():
-    text = (
-        'TESTSUITE "first"\n'
-        'TESTCASE "c"\n'
-        "    PERFORM MAIN\n"
-        'TESTSUITE "second"\n'
-    )
+    text = 'TESTSUITE "first"\nTESTCASE "c"\n    PERFORM MAIN\nTESTSUITE "second"\n'
     with pytest.raises(CutParseError, match="line 4: second TESTSUITE"):
         parse_cut(text)
 
@@ -430,7 +400,7 @@ def test_provider_block_parses_without_affecting_unrelated_cases():
 
 
 def test_provider_row_before_header_raises():
-    text = 'TESTSUITE "s"\n' "PROVIDER StateNames\n" '    ROW "AZ", "Arizona"\n'
+    text = 'TESTSUITE "s"\nPROVIDER StateNames\n    ROW "AZ", "Arizona"\n'
     with pytest.raises(CutParseError, match="line 3: ROW before HEADER"):
         parse_cut(text)
 
@@ -486,13 +456,13 @@ def test_provider_before_testsuite_raises():
 
 
 def test_header_outside_provider_raises():
-    text = 'TESTSUITE "s"\n' "HEADER A, B\n"
+    text = 'TESTSUITE "s"\nHEADER A, B\n'
     with pytest.raises(CutParseError, match="line 2: HEADER outside PROVIDER"):
         parse_cut(text)
 
 
 def test_row_outside_provider_raises():
-    text = 'TESTSUITE "s"\n' '    ROW "x"\n'
+    text = 'TESTSUITE "s"\n    ROW "x"\n'
     with pytest.raises(CutParseError, match="line 2: ROW outside PROVIDER"):
         parse_cut(text)
 
@@ -592,12 +562,7 @@ def test_stray_mock_inside_open_provider_raises():
 
 
 def test_provider_row_bare_blank_value_between_commas_raises():
-    text = (
-        'TESTSUITE "s"\n'
-        "PROVIDER Triple\n"
-        "    HEADER A, B, C\n"
-        '    ROW "x", , "z"\n'
-    )
+    text = 'TESTSUITE "s"\nPROVIDER Triple\n    HEADER A, B, C\n    ROW "x", , "z"\n'
     with pytest.raises(
         CutParseError,
         match=r"line 4: ROW value for column 'B' in PROVIDER 'Triple' is blank",
@@ -758,7 +723,7 @@ def test_value_with_no_placeholder_repeated_identically():
 
 
 def test_undeclared_provider_reference_raises():
-    text = 'TESTSUITE "s"\n' 'TESTCASE "c" USING PROVIDER Ghost\n' "    PERFORM MAIN\n"
+    text = 'TESTSUITE "s"\nTESTCASE "c" USING PROVIDER Ghost\n    PERFORM MAIN\n'
     with pytest.raises(
         CutParseError,
         match="line 2: TESTCASE 'c' uses PROVIDER 'Ghost', which was never declared",

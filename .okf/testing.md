@@ -358,11 +358,12 @@ print a path inside the sibling `cobol-parser` checkout, not
 `site-packages`.
 
 *(Historical, from the git-SHA-pin era: since cobol-parser moved to PyPI,
-`pyproject.toml` declares a version floor (`cobol-parser>=1.7.7,!=1.8.2,<4`) and
+`pyproject.toml` declares a version floor (`cobol-parser>=3.1.1,<4`) and
 `requirements-dev.txt` is just `-e .[dev]`, so a fresh dev install resolves
 the newest published release, not a sibling checkout. The same lesson
 holds with "the floor" in place of "the pin": to check behaviour at the
-floor, `pip install "cobol-parser==1.7.7"` into a throwaway venv.)*
+floor, `uv pip install "cobol-parser==3.1.1"` into a throwaway venv, which
+is what the nightly `cobol-parser-range` job does.)*
 
 **Fixing the above isn't the same as verifying against the pin.** After
 the fix, `import cobolparser` resolves to the *editable sibling
@@ -399,97 +400,55 @@ a stand-in "unsupported verb" line for a mockymock fixture:**
 
 # CI (.github/workflows/ci.yml)
 
-Four jobs: `lint`, `test`, `test-cross-platform`, `cobol-parser-compat`.
-**Two of them are switched off.** Triggers are push/PR to `main`, a nightly
-`schedule` (cron `17 6 * * *`, there for `cobol-parser-compat`), and
+Re-tiered 2026-11-07 (tech-debt audit `docs/2026-11-06-tech-debt-audit.md`,
+items 3-5). Every job installs with `uv` from `uv.lock` (`uv sync --locked
+--extra dev`), so CI runs the same ruff/mypy/pytest/cobol-parser versions as
+a local `uv run`; a new tool release can no longer turn `main` red with no
+code change. Triggers: push/PR to `main`, nightly `schedule` (`17 6 * * *`),
 `workflow_dispatch`.
 
-**`test` and `test-cross-platform` both carry `if: false`** ("test suite
-removed from CI (too long); run locally"), so neither has run since
-`930b391` (2026-08-15). What actually gates a PR today is `lint` plus
-`cobol-parser-compat`'s unit run -- the Docker compile/run tier is gated
-nowhere, and **a green CI run does not mean the test suite passed**. The
-2026-09-05 audit reproduced the cost of this (finding 3: `main` was red on
-a `test_smoke.py` invariant nothing was running). The "too long" rationale
-does not survive measurement: `tests/unit` is **1,595 passed, 32 skipped
-in 7.5s** (measured 2026-09-15 at `9108464`, published cobol-parser, cold
-venv), and the audit clocked the same tier at 9.07s. Run `python -m pytest
-tests/ -v` locally before pushing; treat the two disabled jobs below as
-documentation of what CI *would* cover if re-enabled.
+| job | when | what |
+|---|---|---|
+| `lint` | push/PR | `ruff check .`, `ruff format --check .` (ruff replaced black), `mypy mockymock/` |
+| `unit` | push/PR | `pytest tests/unit` on ubuntu x Python 3.11-3.14, plus windows-latest and macos-latest on 3.13 |
+| `cobol-parser-range` | nightly / dispatch | `pytest tests/unit` unlocked, against the newest published cobol-parser in range and against `COBOL_PARSER_FLOOR` |
+| `integration` | nightly / dispatch | `pytest tests/integration --no-cov`, the Docker/GnuCOBOL tier on ubuntu-latest |
 
-## `lint` (the one always-on gate)
+## `lint`
 
-`ubuntu-latest`, Python 3.13, `pip install ruff black mypy` -- then `ruff
-check .`, `black --check .`, `mypy mockymock/`. It deliberately installs no
-project dependencies: `[tool.mypy]`'s `ignore_missing_imports` covers the
-absent `cobolparser`. That shortcut is itself an audit finding (2026-09-05,
-finding 4): with the real dependency absent, the whole cobolparser seam
-degrades to `Any`, and a clean checkout *with* cobol-parser installed
-reports 4 mypy errors this job calls success.
+mypy runs with the project installed, cobol-parser included, so the
+dependency seam is type-checked against real classes. Before 2026-11-07 the
+job installed only the three tools, `ignore_missing_imports` turned every
+`cobolparser` type into `Any`, and 26 real errors stayed hidden.
 
-## `cobol-parser-compat` (on, and the only job running tests)
+## `unit`
 
-`ubuntu-latest`, Python 3.13, `pip install -r requirements-dev.txt`, then
-`pytest tests/unit -v`. Added after the 2026-08-26 audit finding that
-`pyproject.toml` pins only a floor (`cobol-parser>=1.7.7,!=1.8.2,<4`), so any
-install resolves whatever cobol-parser most recently published inside that
-range. This job installs the **published** package -- no sibling checkout,
-no local build, exactly what `pip install mockymock` gets -- and runs the
-Docker-free unit tier against it, so parser drift shows up as a red
-scheduled run rather than on a user's first install. Tests that need parser
-behavior newer than the floor skip themselves by capability probe rather
-than fail (see `tests/unit/test_enterprise_corpus.py` and
-`test_fixture_bundle_contract.py`). That is not free: on the declared
-floor, 31 unit tests never execute -- the 22 enterprise-corpus cases plus
-9 in `test_verb_coverage_fail_closed.py` (Report Writer nodes, XML PARSE
-clauses, `ChainStatement`, communication nodes). Bumping the floor is what
-turns them back on.
+The fast, Docker-free tier on every push/PR. `tests/unit` must pass on
+Windows and macOS too: the cross-platform jobs were switched off from
+2026-08-15 to 2026-11-07, and four Windows-only failures built up in that
+time (process-tree kill on timeout, a CRLF-sensitive assertion, a socket
+error surfacing in place of an HTTP status, a path separator in a generated
+`USE REAL FILE ... FROM`).
 
-## `test` (Linux, full pipeline) -- DISABLED (`if: false`)
+## `cobol-parser-range`
 
-- Push/PR to `main`, `ubuntu-latest`, Python 3.11/3.12/3.13 matrix.
-- `pip install -r requirements-dev.txt` only. There is **no** sibling
-  `Landparty/cobol-parser` checkout and no `secrets.COBOL_PARSER_PAT` step
-  any more: cobol-parser resolves from PyPI as an ordinary pinned
-  dependency (see [integration](integration.md) and
-  [publishing](publishing.md)).
-- No GnuCOBOL install step -- the Docker toolchain builds
-  `mockymock-gnucobol` on first use inside the job (~1 min cold).
-- Single run step: `python -m pytest tests/ -v` -- unit and integration
-  tests run together; integration tests self-skip if `docker info` fails,
-  but `ubuntu-latest` ships Docker so this job would exercise both tiers.
+`pyproject.toml` declares `cobol-parser>=X,<4`; the lockfile pins one
+version, but `pip install mockymock` resolves anything in range. This job
+installs unlocked (`uv pip install -e ".[dev]" --upgrade`) and runs the unit
+tier at the newest release, then again with `cobol-parser==$COBOL_PARSER_FLOOR`.
+Keep `COBOL_PARSER_FLOOR` equal to the floor in `pyproject.toml`. Red at
+`newest` means a new release broke us (fix, or cap); red at `floor` means
+code now needs a newer release (raise the floor, never add a shim).
 
-## `test-cross-platform` (Windows + macOS, unit tier only) -- DISABLED (`if: false`)
+## `integration`
 
-Added 2026-07-21 as part of a cross-OS install audit (see
-[log.md](log.md)'s entry of the same date) -- previously CI ran on
-`ubuntu-latest` only, despite the 2026-07-04 Docker-only rewrite's whole
-premise being to fix chronic *Windows* compile failures (see
-[runtime](runtime.md)). Nothing verified that fix held up outside one
-developer's machine -- and since this job was switched off, nothing does
-again.
-
-- Matrix of `windows-latest` / `macos-latest`, single Python version
-  (3.13) -- this job is about catching OS-specific bugs in the Python/DSL
-  layer (paths, encoding, newline handling), not Python-version bugs,
-  which the Linux `test` job's 3.11-3.13 matrix already covers.
-- `pip install -r requirements-dev.txt`, same as `test` -- `mockymock/analysis/`,
-  `mockymock/splicer/`, and `mockymock/cli/` all import `cobolparser` at
-  module level, so even the no-Docker unit tier can't import `mockymock`
-  without it.
-- Runs `pytest tests/unit -v` **only** -- deliberately does not attempt
-  the Docker/GnuCOBOL integration tier. `macos-latest` GitHub-hosted
-  runners have no reachable Docker daemon (the tier's own
-  `@requires_docker` gate skips cleanly there, so `pytest tests/` would
-  have been safe on macOS specifically), but `windows-latest` runners
-  ship a *Windows-container* Docker Engine -- `docker info` can report a
-  live daemon while still being structurally unable to build/run the
-  Linux `mockymock-gnucobol` image, which would fail the job loudly
-  instead of skipping. Restricting both platforms to `tests/unit`
-  sidesteps that asymmetry rather than relying on unverified runner
-  behavior.
-- Verified locally before adding: `tests/unit` (681 tests at the time)
-  passed clean on native Windows Python 3.14.
+`tests/integration` (82 files, `@requires_docker`) compiles and runs real
+COBOL under GnuCOBOL. ubuntu-latest ships a Linux Docker daemon; the tier
+builds `mockymock-gnucobol` on first use (~1 min). It is nightly rather than
+per-PR because of its runtime, not skipped: run it locally (`uv run pytest
+tests/integration --no-cov`) before merging splicer, runtime or toolchain
+changes. Windows runners are deliberately excluded here: their Docker
+Engine runs Windows containers and cannot build the Linux image.
 
 # Enterprise program-type corpus (2026-09-15)
 
@@ -502,16 +461,9 @@ scaffold with none (no mockable boundary), or a refusal under exactly one
 code. Adding a program type means adding it to both corpora and to that
 table; the matrix is `cobol-parser/docs/enterprise-program-types.md`.
 
-Because that corpus exercises what cobol-parser's 2026-09-15 release added
-(OO units, DECLARATIVES modelling, the 6.x data clauses), the whole module
-skips itself on an older pin -- `pytestmark = skipif(not
-hasattr(CobolProgram, "program_attributes"))`, the same capability-probe
-pattern `test_fixture_bundle_contract.py` uses. On the declared floor
-(`cobol-parser>=1.7.7`) those programs parse with warnings and every
-outcome would read `PARSE_WARNING`, saying nothing about mockymock. The
-skip is a placeholder for a pin bump, not the end state: until
-`pyproject.toml`'s floor moves, `cobol-parser-compat` never runs these
-assertions.
+That corpus exercises what cobol-parser's 2026-09-15 release added (OO
+units, DECLARATIVES modelling, the 6.x data clauses); every release the
+>= 3.1.1 floor allows has it, so the module runs unconditionally.
 
 # See Also
 

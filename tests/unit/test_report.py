@@ -353,9 +353,7 @@ def test_format_junit_xml_survives_control_characters():
 
 
 def test_format_junit_xml_crashed_case_with_control_char_in_name():
-    stdout = (
-        "__MOCKYMOCK__ TESTSUITE: s\n" "__MOCKYMOCK__ CASE 001 START: crash\x1bname\n"
-    )
+    stdout = "__MOCKYMOCK__ TESTSUITE: s\n__MOCKYMOCK__ CASE 001 START: crash\x1bname\n"
     xml_text = format_junit_xml(parse_stdout(stdout))
     ElementTree.fromstring(xml_text)
     assert "crash\\x1bname" in xml_text

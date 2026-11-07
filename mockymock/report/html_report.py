@@ -712,7 +712,7 @@ def _cases(report: dict[str, Any]) -> str:
         '<div class="table-wrap"><table id="cases"><thead><tr>'
         "<th>Level</th><th>Test case</th><th>Result</th><th>Runs paragraph</th>"
         '<th>Checks</th><th class="num" title="High or medium GnuCOBOL vs IBM COBOL differences this test reaches">Mainframe risks</th>'
-        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
     )
 
 
@@ -755,8 +755,8 @@ def _steps(report: dict[str, Any]) -> str:
     for step in report["steps"]:
         status = step["status"]
         items.append(
-            f"<li><details><summary><span><span class=\"s-title\">{_e(step['title'])}</span>"
-            f"<span class=\"s-sum\">{_e(step['summary'])}</span></span>"
+            f'<li><details><summary><span><span class="s-title">{_e(step["title"])}</span>'
+            f'<span class="s-sum">{_e(step["summary"])}</span></span>'
             f"{_pill(status, _STEP_TITLES_NOTE.get(status, status))}</summary>"
             f'<div class="inner">{_step_details(step)}</div></details></li>'
         )
@@ -898,7 +898,7 @@ def _rules(report: dict[str, Any]) -> str:
     return (
         '<div class="table-wrap"><table><thead><tr><th>Rule</th><th>Kind</th><th>Paragraph</th>'
         '<th class="num">Line</th><th>Condition / formula</th><th>Intent</th></tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
 
@@ -909,7 +909,7 @@ def _risks(report: dict[str, Any]) -> str:
     rows = "".join(
         f"<tr><td>{_pill(r['severity'])}</td><td><code>{_e(r['code'])}</code></td>"
         f'<td class="num">{_e(r["line"] or "copybook")}</td><td><code>{_e(r["paragraph"])}</code></td>'
-        f"<td>{_e(r['message'])}<div class=\"why mono\">{_e(r['detail'])}</div></td></tr>"
+        f'<td>{_e(r["message"])}<div class="why mono">{_e(r["detail"])}</div></td></tr>'
         for r in risks
     )
     return (
@@ -927,7 +927,7 @@ def _table(
     )
     return (
         f'<div class="table-wrap"><table><thead><tr>{cells}</tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
 
@@ -1034,7 +1034,7 @@ def _call_graph_svg(graph: dict[str, Any]) -> str:
         '<defs><marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
         'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
         '<path d="M0,0 L10,5 L0,10 z"/></marker></defs>'
-        f'{"".join(paths)}{"".join(boxes)}</svg></div>'
+        f"{''.join(paths)}{''.join(boxes)}</svg></div>"
         '<div class="legend" style="margin-top:6px">'
         '<span><i style="background:var(--ok)"></i>reached by a test</span>'
         '<span><i style="background:var(--warn)"></i>no test reaches it</span>'
@@ -1127,8 +1127,8 @@ def _analysis_complexity(complexity: dict[str, Any]) -> str:
             frozenset(range(1, 9)),
         )
         + f'<p class="note">Total {_e(s.get("total_complexity"))}, mean '
-        f'{_e(s.get("mean_complexity"))}, max {_e(s.get("max_complexity"))}. '
-        f'Moderate from {_e(t.get("moderate"))}, high from {_e(t.get("high"))}. '
+        f"{_e(s.get('mean_complexity'))}, max {_e(s.get('max_complexity'))}. "
+        f"Moderate from {_e(t.get('moderate'))}, high from {_e(t.get('high'))}. "
         "Extended complexity also counts each AND/OR in a condition.</p>"
     )
 
@@ -1138,8 +1138,8 @@ def _analysis_lint(lint: dict[str, Any]) -> str:
     severity_pill = {"error": "fail", "warning": "warn", "info": "info"}
     head = (
         f'<p class="note">{_e(_plural(s.get("total", 0), "finding"))}: {_e(s.get("error", 0))} error, '
-        f'{_e(s.get("warning", 0))} warning, {_e(s.get("info", 0))} info. Rules run: '
-        f'{_e(", ".join(lint["rulesRun"]) or "none")}.</p>'
+        f"{_e(s.get('warning', 0))} warning, {_e(s.get('info', 0))} info. Rules run: "
+        f"{_e(', '.join(lint['rulesRun']) or 'none')}.</p>"
     )
     extra = "".join(
         f'<p class="note">Could not check: {_e(c)}</p>' for c in lint["caveats"]
@@ -1280,7 +1280,7 @@ def _analysis_interface(analysis: dict[str, Any]) -> str:
     if sql is not None and (sql["sqlStatements"] or sql["cicsStatements"]):
         parts.append(
             f'<h3>SQL / CICS checks</h3><p class="note">{_e(sql["sqlStatements"])} SQL and '
-            f'{_e(_plural(sql["cicsStatements"], "CICS statement"))}, {_plural(len(sql["violations"]), "problem")}.</p>'
+            f"{_e(_plural(sql['cicsStatements'], 'CICS statement'))}, {_plural(len(sql['violations']), 'problem')}.</p>"
         )
         if sql["violations"]:
             parts.append(
@@ -1375,7 +1375,7 @@ def _analysis(report: dict[str, Any]) -> str:
         )
     cycles = "".join(
         f'<p class="note">Cycle ({_e(c["kind"] or "loop")}): '
-        f'<code>{_e(" → ".join(c["nodes"]))}</code></p>'
+        f"<code>{_e(' → '.join(c['nodes']))}</code></p>"
         for c in graph["cycles"]
     )
     parts.append(
@@ -1642,9 +1642,9 @@ def render_html(report: dict[str, Any], *, standalone: bool = True) -> str:
 <div class="wrap">
 <header>
   <span class="eyebrow">mockymock report · {_e(suite)}</span>
-  <h1><code>{_e(program['name'])}</code> test report</h1>
+  <h1><code>{_e(program["name"])}</code> test report</h1>
   <p class="lede">{_e(_verdict_sentence(report))}</p>
-  <div class="meta">{''.join(meta)}</div>
+  <div class="meta">{"".join(meta)}</div>
   <nav class="toc" aria-label="Sections">{nav}<a href="#h-glossary">Glossary</a></nav>
 </header>
 {_summary_strip(report)}

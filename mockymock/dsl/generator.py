@@ -52,7 +52,7 @@ import re
 import sys
 from collections.abc import Collection
 from dataclasses import dataclass, field, replace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mockymock._decimal import decimal_point_is_comma, localize_numeric
 from mockymock.analysis.clause_bodies import (
@@ -105,6 +105,9 @@ from mockymock.report.record_rewrite import (
 )
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.reset import _POINTER_USAGES
+
+if TYPE_CHECKING:
+    from cobolparser.models.program import CobolProgram
 
 _PLACEHOLDER_BODIES: dict[MockCategory, list[str]] = {
     MockCategory.CALL: ["MOVE 0 TO RETURN-CODE"],
@@ -406,7 +409,7 @@ class ProgramContext:
     #: The parsed program and the GO TO targets the splicer turns into EXIT
     #: PARAGRAPH -- the same two inputs `lint`'s reachability walk uses, so
     #: `reachable_from` agrees with what lint will check (issue #143).
-    program: object = None
+    program: CobolProgram | None = None
     neutralized_goto: frozenset[str] = frozenset()
     #: Name (uppercased, unqualified) -> how many data items declare it,
     #: so a bundle's `RECORD.FIELD` name is rendered as a bare leaf only
@@ -500,9 +503,7 @@ class ProgramContext:
         """The statements of the PROCEDURE DIVISION paragraph `name`, or
         [] when there is none (or no parsed program)."""
         procedure = (
-            self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
-            if self.program is not None
-            else None
+            self.program.get_division("PROCEDURE") if self.program is not None else None
         )
         if procedure is None or not name:
             return []
@@ -550,9 +551,7 @@ class ProgramContext:
         off the end of the program, so the case crashed and every later case
         never ran (INTCALC's 2200-CALCULATE-INTEREST THRU 2200-EXIT)."""
         procedure = (
-            self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
-            if self.program is not None
-            else None
+            self.program.get_division("PROCEDURE") if self.program is not None else None
         )
         if procedure is None:
             return None
@@ -646,7 +645,7 @@ class ProgramContext:
         )
         from mockymock.splicer.source_map import collect_scope_map
 
-        procedure = self.program.get_division("PROCEDURE")  # type: ignore[attr-defined]
+        procedure = self.program.get_division("PROCEDURE")
         ordered = _source_ordered_paragraphs(procedure) if procedure else None
         if not ordered:
             return None
@@ -3310,23 +3309,23 @@ def _keyed_read_loop_not_found(
     if not (looped if require_loop else keyed):
         return None
     reply = {OUTCOME_FIELD: "23"}
-    status = analyze_file_status_fields(source.program).get(key)
+    status = (
+        analyze_file_status_fields(source.program).get(key)
+        if source.program is not None
+        else None
+    )
     if status:
         reply[status] = "23"
     return reply
 
 
 def _paragraph_order(
-    site: BoundarySite, program: object
+    site: BoundarySite, program: CobolProgram | None
 ) -> tuple[list, set[str]] | None:
     """(the paragraphs from `site`'s own on, in source order; the names of
     that paragraph and every one before it), or None when unknown."""
     name = (site.paragraph_name or "").upper()
-    procedure = (
-        program.get_division("PROCEDURE")  # type: ignore[attr-defined]
-        if program is not None
-        else None
-    )
+    procedure = program.get_division("PROCEDURE") if program is not None else None
     if not name or procedure is None:
         return None
     paragraphs = sorted(
@@ -3354,7 +3353,7 @@ def _goes_back(statements: list, earlier: set[str]) -> bool:
     )
 
 
-def _in_goto_loop(site: BoundarySite, program: object) -> bool:
+def _in_goto_loop(site: BoundarySite, program: CobolProgram | None) -> bool:
     """Whether `site`'s paragraph, or one after it, holds a GO TO back to
     that paragraph or one before it (source order): the `GO TO READ-TEST`
     loop of programs written without PERFORM UNTIL."""
@@ -3365,7 +3364,7 @@ def _in_goto_loop(site: BoundarySite, program: object) -> bool:
     return any(_goes_back(list(p.statements), earlier) for p in following)
 
 
-def _clause_goes_back(site: BoundarySite, program: object) -> bool:
+def _clause_goes_back(site: BoundarySite, program: CobolProgram | None) -> bool:
     """Whether `site`'s INVALID KEY clause GOes TO its own paragraph or an
     earlier one: a retry, which a not-found reply would repeat forever
     (NIST RL107A: `READ RL-FR7 INVALID KEY ... GO TO TEST-13` inside

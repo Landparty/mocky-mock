@@ -330,7 +330,7 @@ def test_ensure_toolchain_recreates_when_concurrent_rm_already_removed_it(tmp_pa
             return _completed(
                 argv,
                 returncode=1,
-                stderr="Error response from daemon: No such container: " f"{CONTAINER}",
+                stderr=f"Error response from daemon: No such container: {CONTAINER}",
             )
         return _completed(argv)
 
@@ -782,7 +782,7 @@ def test_run_gcov_execs_gcov_with_container_dir_and_gcda_name(tmp_path):
     def fake_run(argv, **kwargs):
         calls.append(argv)
         (source.parent / "PROG.cbl.gcov").write_text(
-            "        -:    0:Source:PROG.cbl\n" "       1*:    1:DISPLAY 'X'.\n"
+            "        -:    0:Source:PROG.cbl\n       1*:    1:DISPLAY 'X'.\n"
         )
         return _completed(argv)
 

@@ -183,10 +183,8 @@ Communication Module, Report Writer and STOP-literal ones, each of which
 got its own branch; `tests/unit/test_verb_coverage_fail_closed.py`'s corpus
 test pins that no `examples/**/*.cbl` yields a catch-all site, and
 `test_every_passthrough_name_is_a_real_cobolparser_statement_class` pins
-that the allowlist has no typos. The new node classes are imported through
-`_optional_statement_types` (importlib, empty tuple when absent) so the
-module still imports on the released cobol-parser the CI compat lane
-installs -- where those verbs still warn, so PARSE_WARNING covers them.
+that the allowlist has no typos. The node classes are imported directly: every release the dependency floor
+allows (>= 3.1.1) ships them.
 
 The label -> refusal-code table for detected-unmockable sites lives in
 `refusal/_types.py`'s `_UNSUPPORTED_SITE_CODES` (INVOKE ->

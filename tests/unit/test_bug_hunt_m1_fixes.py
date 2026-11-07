@@ -668,8 +668,9 @@ def test_149_read_into_body_copies_the_record_after_the_body(tmp_path) -> None:
             "PERFORM READ-PARA\nEXPECT WS-AMT TO BE 9\n"
         ),
     )
-    body, copy = exported.index("MOVE 9 TO IN-AMT"), exported.index(
-        "MOVE IN-REC TO WS-REC"
+    body, copy = (
+        exported.index("MOVE 9 TO IN-AMT"),
+        exported.index("MOVE IN-REC TO WS-REC"),
     )
     assert body < copy
 

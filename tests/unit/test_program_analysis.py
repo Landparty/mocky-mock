@@ -3,7 +3,6 @@
 interface and data cross-reference -- and how it degrades when the
 installed cobol-parser predates an analyzer."""
 
-import importlib
 import shutil
 from pathlib import Path
 
@@ -14,17 +13,6 @@ from mockymock.report.html_report import render_html
 from mockymock.report.test_report import ReportOptions, build_report
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
-
-
-def _has(module: str, name: str) -> bool:
-    try:
-        return hasattr(importlib.import_module(module), name)
-    except ImportError:
-        return False
-
-
-HAS_LINT = _has("cobolparser", "LintAnalyzer")
-HAS_XREF = _has("cobolparser.analysis.xref", "XrefAnalyzer")
 
 
 @pytest.fixture
@@ -111,7 +99,6 @@ def test_call_graph_folds_branch_nodes_into_their_paragraph():
     assert graph["nodes"][1]["testedBy"] == ["t1"]
 
 
-@pytest.mark.skipif(not HAS_LINT, reason="cobol-parser without LintAnalyzer")
 def test_lint_findings_carry_rule_severity_and_original_line(tmp_path):
     program = (EXAMPLES / "ordrproc" / "ORDRPROC.cbl").read_text(encoding="utf-8")
     program = program.replace(
@@ -128,7 +115,6 @@ def test_lint_findings_carry_rule_severity_and_original_line(tmp_path):
     assert "unused-variables" in lint["rulesRun"]
 
 
-@pytest.mark.skipif(not HAS_XREF, reason="cobol-parser without XrefAnalyzer")
 def test_data_items_say_where_each_field_is_written_and_read(ordrproc):
     data = _report(ordrproc)["analysis"]["dataItems"]
     by_name = {i["name"]: i for i in data["items"]}

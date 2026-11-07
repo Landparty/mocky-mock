@@ -25,7 +25,9 @@ HEADER = """\
 
 # PERFORM BAIL-OUT THRU BAIL-OUT-EX, with an internal GO TO to a member
 # that falls through into the range end; DOWNSTREAM physically follows.
-CLOSED = HEADER + """\
+CLOSED = (
+    HEADER
+    + """\
        MAIN-PARA.
            PERFORM BAIL-OUT THRU BAIL-OUT-EX.
            GOBACK.
@@ -40,6 +42,7 @@ CLOSED = HEADER + """\
            CALL "DOWNSTRM".
            STOP RUN.
 """
+)
 
 
 def _reach(source, start, thru=None):
@@ -79,7 +82,9 @@ def test_fall_through_into_the_range_from_outside_drops_it():
     PERFORM of the range active. BAIL-OUT itself ends in an unconditional
     GO TO, so P0's own walk stops there -- only the dynamic exposure check
     stops BAIL-OUT-WRITE's walk from wrongly ending at BAIL-OUT-EX."""
-    source = HEADER + """\
+    source = (
+        HEADER
+        + """\
        MAIN-PARA.
            PERFORM BAIL-OUT THRU BAIL-OUT-EX.
            GO TO P0.
@@ -95,6 +100,7 @@ def test_fall_through_into_the_range_from_outside_drops_it():
            CALL "DOWNSTRM".
            STOP RUN.
 """
+    )
     assert "DOWNSTREAM" in _reach(source, "MAIN-PARA")
 
 
@@ -102,7 +108,9 @@ def test_the_test_cases_own_thru_range_is_a_closed_range():
     """The driver's own PERFORM CALL-TEST-1 THRU CALL-WRITE-1 returns at
     CALL-WRITE-1's end, so the internal GO TO CALL-WRITE-1 must not cascade
     into the next test's paragraphs (IC101A's shape)."""
-    source = HEADER + """\
+    source = (
+        HEADER
+        + """\
        CALL-TEST-1.
            IF WS-A = SPACE GO TO CALL-WRITE-1.
            DISPLAY "FAIL".
@@ -112,6 +120,7 @@ def test_the_test_cases_own_thru_range_is_a_closed_range():
            CALL "OTHER".
            STOP RUN.
 """
+    )
     assert "CALL-TEST-2" not in _reach(source, "CALL-TEST-1", "CALL-WRITE-1")
     # ...but a plain PERFORM CALL-TEST-1 returns at CALL-TEST-1's end, so
     # its GO TO CALL-WRITE-1 leaves the performed range and really does

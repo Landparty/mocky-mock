@@ -225,8 +225,7 @@ def _odo_reason(item) -> str | None:
         occurs = getattr(child, "occurs_clause", None)
         if occurs is not None and getattr(occurs, "depending_on", None):
             return (
-                f"it holds {child.name} OCCURS ... DEPENDING ON "
-                f"{occurs.depending_on}"
+                f"it holds {child.name} OCCURS ... DEPENDING ON {occurs.depending_on}"
             )
         nested = _odo_reason(child)
         if nested:

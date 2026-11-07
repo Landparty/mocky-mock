@@ -110,7 +110,7 @@ def test_a_key_also_called_from_a_paragraph_the_entry_never_reaches_is_not_count
     # the counts were summed into "2 TIMES" while the case calls FINISH
     # once (ACCTINQ: its CICS RETURN is also in the HANDLE CONDITION NOTFND
     # paragraph, and the scaffold `init` wrote failed its own first run).
-    cbl = PROGRAM + ("       ORPHAN-PARA.\n" '           CALL "FINISH" USING WS-N.\n')
+    cbl = PROGRAM + ('       ORPHAN-PARA.\n           CALL "FINISH" USING WS-N.\n')
     cut = _generate(tmp_path, cbl)
     assert 'VERIFY CALL "FINISH" WAS CALLED 2 TIMES' not in cut
     assert 'VERIFY CALL "FINISH" WAS CALLED 1 TIMES' not in cut

@@ -347,9 +347,13 @@ def test_client_speaks_the_runner_api(tmp_path: Path, fake_command):
             self.wfile.write(body)
 
         def do_POST(self):
+            # Read the body before answering, as a real backend does: a
+            # reply to an unread request makes Windows abort the connection
+            # (WinError 10053) before the client sees the status.
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
             if self.headers.get("X-Runner-Token") != "secret":
                 return self._send(401, b'{"detail":"bad token"}')
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            body = json.loads(raw)
             if self.path == "/api/v1/runner/jobs/claim":
                 seen["claims"] = int(seen["claims"]) + 1  # type: ignore[call-overload]
                 seen["runner"] = body["runner"]

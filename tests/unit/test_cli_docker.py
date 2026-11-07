@@ -956,9 +956,7 @@ def test_run_writes_junit_xml_and_json_report_on_refusal(tmp_path, capsys):
     # PERFORMs into the CALL but never MOCKs it -> UNMOCKED_CALL refusal,
     # raised before ensure_toolchain is ever reached.
     cut.write_text(
-        'TESTSUITE "ORDRPROC"\n\n'
-        'TESTCASE "calls discrate"\n'
-        "    PERFORM PROCESS-ORDER\n"
+        'TESTSUITE "ORDRPROC"\n\nTESTCASE "calls discrate"\n    PERFORM PROCESS-ORDER\n'
     )
     junit_path = tmp_path / "report.xml"
     json_path = tmp_path / "report.json"

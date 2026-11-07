@@ -1223,8 +1223,7 @@ finds it read by a statement other than its own ADD/SUBTRACT update and
 DISPLAY (MOVE, condition, CALL argument, ...). A counter that is only
 incremented and DISPLAYed is a missing assertion first -- seeding alone
 would not kill it -- so it gets no hint and `mockymock report` files it as
-`missing-assertion`; it used to be labelled untestable. xref is new in
-cobol-parser 1.10 (floor 1.7.7): without it, or on any xref error, the
+`missing-assertion`; it used to be labelled untestable. On any xref error, the
 field counts as observed and the hint stays. The statement must also run
 at most once per case (`_may_run_more_than_once`, issue #203): an
 ADD/SUBTRACT in a paragraph a looping PERFORM (UNTIL/VARYING/TIMES)

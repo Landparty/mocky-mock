@@ -283,11 +283,32 @@ def test_runner_timeout_kills_the_compiler_mockymock_started(tmp_path):
     assert step.timed_out
     pid = int(pid_file.read_text())
     for _ in range(50):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _alive(pid):
             break
         time.sleep(0.1)
     else:
         os.kill(pid, 9)
         raise AssertionError("the grandchild outlived the suite timeout")
+
+
+def _alive(pid: int) -> bool:
+    """Whether `pid` is still running. Not `os.kill(pid, 0)` on Windows:
+    there it *terminates* the process (TerminateProcess with exit code 0)
+    and so would make a leaked grandchild look killed."""
+    import os
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return f'"{pid}"' in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True

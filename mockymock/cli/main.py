@@ -1242,7 +1242,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     raw_source = activate_debugging_lines(raw_source)
     result = parse_cobol(raw_source, filename=source_path.name)
     normalize_flow_targets(result.ast)
-    if not result.success:
+    if not result.success or result.ast is None:
         print(f"mockymock generate: {len(result.errors)} parse error(s):")
         for error in result.errors:
             print(f"  {error}")
@@ -1761,8 +1761,7 @@ def _print_cics_eib_synthesis(command: str, plan, applied: bool) -> None:
         listed = ", ".join(names)
         if applied:
             action = (
-                f"synthesized a 01 {block} WORKING-STORAGE group "
-                f"(referenced: {listed})"
+                f"synthesized a 01 {block} WORKING-STORAGE group (referenced: {listed})"
             )
         else:
             action = (
@@ -6541,8 +6540,7 @@ def build_parser() -> argparse.ArgumentParser:
     skills_mode_parser = skills_subparsers.add_parser(
         "mode",
         help=(
-            "Show (or set) how much the AI assistant checks in while it "
-            "builds a suite"
+            "Show (or set) how much the AI assistant checks in while it builds a suite"
         ),
     )
     skills_mode_parser.add_argument(

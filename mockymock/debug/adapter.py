@@ -315,9 +315,7 @@ class DapAdapter:
             self._breakpoint_original_file = ""
         try:
             self._session = self._launch_session(arguments)
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 -- surfaced to the client, not swallowed
+        except Exception as exc:  # noqa: BLE001 -- surfaced to the client, not swallowed
             self._send_response(request, success=False, message=str(exc))
             return
         assert self._session is not None

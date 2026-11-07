@@ -334,7 +334,11 @@ def _stop(proc: subprocess.Popen) -> tuple[str, str]:
     HUGE01's compiler running for 20 minutes, stress test 2026-11-02),
     then SIGKILL to its whole process group."""
     if sys.platform == "win32":
-        proc.kill()
+        # No SIGTERM to forward on Windows, and proc.kill() alone left the
+        # compiler mockymock started running: kill the whole tree.
+        from mockymock.runtime.native_toolchain import kill_tree
+
+        kill_tree(proc)
         return proc.communicate()
     import os
     import signal

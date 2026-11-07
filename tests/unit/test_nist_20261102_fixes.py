@@ -198,9 +198,12 @@ def test_a_performed_main_line_runs_through_when_its_stop_run_can_goback(
     """With the STOP RUN on a line of its own, the planner GOBACKs from it to
     the test (the call frame), so the main line runs THRU the last paragraph
     and every branch case takes its own branch."""
-    source = FALLS_THROUGH + """       RETRY-PARA.
+    source = (
+        FALLS_THROUGH
+        + """       RETRY-PARA.
            PERFORM MAIN-LINE.
 """
+    )
     text, _ = _generate(tmp_path, "FALLS", source, capsys)
     cases = parse_cut(text).test_cases
     assert {(c.perform_target, c.perform_thru) for c in cases} == {

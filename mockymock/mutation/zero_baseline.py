@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, InvalidOperation
+from typing import cast
 
 from mockymock.mutation.operators import Mutant
 
@@ -271,12 +272,12 @@ def _is_observed(
 
 def _read_by_program(names: set[str], ast: object) -> bool:
     """Whether any of `names` is referenced by a statement other than its
-    own update or a DISPLAY. `cobolparser.analysis.xref` is new in
-    cobol-parser 1.10 (the floor is older); without it the ImportError
-    reaches `_is_observed`, which then keeps the hint."""
+    own update or a DISPLAY. Any error reaches `_is_observed`, which then
+    keeps the hint."""
     from cobolparser.analysis.xref import XrefAnalyzer
+    from cobolparser.models.program import CobolProgram
 
-    report = XrefAnalyzer().analyze(ast)
+    report = XrefAnalyzer().analyze(cast(CobolProgram, ast))
     for wanted in names:
         entry = report.entry_for(wanted)
         if entry is None:

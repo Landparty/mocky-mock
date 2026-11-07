@@ -13,12 +13,7 @@ from mockymock.dsl.parser import CutParseError, parse_cut
 
 
 def _cut(expect_line: str) -> str:
-    return (
-        'TESTSUITE "ops"\n'
-        'TESTCASE "case"\n'
-        "    PERFORM MAIN\n"
-        f"    {expect_line}\n"
-    )
+    return f'TESTSUITE "ops"\nTESTCASE "case"\n    PERFORM MAIN\n    {expect_line}\n'
 
 
 PHRASES = [

@@ -430,17 +430,13 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             understand.status = "fail"
             understand.summary = f"Could not parse {program_rel}: {reason}"
         else:
-            from cobolparser import ProgramFlowAnalyzer
-
-            try:
-                from cobolparser.analysis.program_flow import LEADING_SENTENCES_NODE
-            except ImportError:  # cobol-parser < 1.9.0: same node, not exported
-                LEADING_SENTENCES_NODE = "PROCEDURE DIVISION"
+            from cobolparser.analysis.program_flow import LEADING_SENTENCES_NODE
+            from cobolparser.analysis.program_flow.analyzer import ProgramFlowAnalyzer
 
             flow = ProgramFlowAnalyzer().analyze(program.ast).to_dict()
             complexity: dict[str, dict[str, Any]] = {}
             try:
-                from cobolparser import ComplexityAnalyzer
+                from cobolparser.analysis.complexity import ComplexityAnalyzer
 
                 for proc in (
                     ComplexityAnalyzer().analyze(program.ast).to_dict()["procedures"]
@@ -513,48 +509,41 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             rules_step.status = "skipped"
             rules_step.summary = "Skipped: the program did not parse."
         else:
-            try:
-                from cobolparser import BusinessRuleExtractor
-            except ImportError:
-                rules_step.status = "skipped"
-                rules_step.summary = (
-                    "Skipped: this cobol-parser has no BusinessRuleExtractor "
-                    "(upgrade cobol-parser to get rule-cited assertions)."
+            from cobolparser.analysis.business_rules import BusinessRuleExtractor
+
+            rules_available = True
+            extracted = BusinessRuleExtractor().analyze(program.ast).to_dict()
+            for rule in extracted.get("rules") or []:
+                if rule.get("technical") or rule.get("in_dead_code"):
+                    continue
+                branches = rule.get("branches") or []
+                rules.append(
+                    {
+                        "id": rule.get("rule_id"),
+                        "kind": rule.get("kind"),
+                        "procedure": rule.get("procedure"),
+                        "line": _orig(
+                            program, (rule.get("location") or {}).get("line")
+                        ),
+                        "statement": rule.get("statement"),
+                        "condition": rule.get("formula") or rule.get("condition"),
+                        "branches": [
+                            {
+                                "label": b.get("label"),
+                                "condition": b.get("condition"),
+                            }
+                            for b in branches
+                        ],
+                        "outputs": rule.get("outputs") or [],
+                        "citedBy": [],
+                    }
                 )
-            else:
-                rules_available = True
-                extracted = BusinessRuleExtractor().analyze(program.ast).to_dict()
-                for rule in extracted.get("rules") or []:
-                    if rule.get("technical") or rule.get("in_dead_code"):
-                        continue
-                    branches = rule.get("branches") or []
-                    rules.append(
-                        {
-                            "id": rule.get("rule_id"),
-                            "kind": rule.get("kind"),
-                            "procedure": rule.get("procedure"),
-                            "line": _orig(
-                                program, (rule.get("location") or {}).get("line")
-                            ),
-                            "statement": rule.get("statement"),
-                            "condition": rule.get("formula") or rule.get("condition"),
-                            "branches": [
-                                {
-                                    "label": b.get("label"),
-                                    "condition": b.get("condition"),
-                                }
-                                for b in branches
-                            ],
-                            "outputs": rule.get("outputs") or [],
-                            "citedBy": [],
-                        }
-                    )
-                rules_step.summary = f"{len(rules)} business rule(s) found."
-                rules_step.details = {
-                    "technicalExcluded": (extracted.get("summary") or {}).get(
-                        "technical_rules_excluded"
-                    )
-                }
+            rules_step.summary = f"{len(rules)} business rule(s) found."
+            rules_step.details = {
+                "technicalExcluded": (extracted.get("summary") or {}).get(
+                    "technical_rules_excluded"
+                )
+            }
     steps.append(rules_step)
 
     # 3b. Program analysis ------------------------------------------------
@@ -755,7 +744,9 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             scenarios.summary = "Skipped: the program did not parse."
         else:
             try:
-                from cobolparser.generators import ProgramFixtureGenerator
+                from cobolparser.generators.program_fixtures import (
+                    ProgramFixtureGenerator,
+                )
 
                 bundle = ProgramFixtureGenerator().generate_with_scenarios_from_file(
                     str(options.program),
@@ -1142,14 +1133,14 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
             case["level"] = "L1"
             case["levelReason"] = "Passed under GnuCOBOL."
             if case["assertions"]["total"] == 0:
-                case[
-                    "levelReason"
-                ] += " It asserts nothing, so it only proves the paragraph runs."
+                case["levelReason"] += (
+                    " It asserts nothing, so it only proves the paragraph runs."
+                )
                 continue
             if not mutation_ok:
-                case[
-                    "levelReason"
-                ] += " Mutation score below threshold or not measured."
+                case["levelReason"] += (
+                    " Mutation score below threshold or not measured."
+                )
                 continue
             case["level"] = "L2"
             case["levelReason"] = "Passed and the suite kills mutants."

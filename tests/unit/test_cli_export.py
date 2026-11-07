@@ -226,7 +226,7 @@ def test_export_breaks_a_literal_less_overflow_at_whitespace(tmp_path, capsys):
     line is simply broken at a space with the remainder in Area B."""
     cbl, cut = _column_overflow_program(
         tmp_path,
-        "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO " "WS-ANOTHER-RATHER-LONG-FIELD-NAME",
+        "MOVE WS-A-RATHER-LONG-FIELD-NAME-HERE TO WS-ANOTHER-RATHER-LONG-FIELD-NAME",
     )
 
     exit_code = main(["export", str(cbl), "--cut", str(cut)])

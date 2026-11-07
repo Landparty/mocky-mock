@@ -275,7 +275,7 @@ def _run_capped(
             try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                _kill_tree(proc)
+                kill_tree(proc)
                 proc.wait()
                 for reader in readers:
                     reader.join(timeout=5)
@@ -332,7 +332,7 @@ def _run(
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            _kill_tree(proc)
+            kill_tree(proc)
             stdout, stderr = proc.communicate()
             raise subprocess.TimeoutExpired(
                 cmd, timeout, output=stdout, stderr=stderr
@@ -354,7 +354,7 @@ def kill_active_children() -> None:
     """Kill the process tree of every cobc / test binary running now."""
     for proc in list(_ACTIVE):
         if proc.poll() is None:
-            _kill_tree(proc)
+            kill_tree(proc)
 
 
 def install_termination_handler() -> None:
@@ -362,7 +362,7 @@ def install_termination_handler() -> None:
     143: the oracle runner terminates a suite that overran its timeout
     this way. Only for the real command line (`mockymock`, `python -m
     mockymock`), never a library caller's process."""
-    if _WINDOWS:
+    if sys.platform == "win32":
         return
 
     def terminate(signum: int, _frame: object) -> None:
@@ -376,8 +376,11 @@ def install_termination_handler() -> None:
             return
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    if _WINDOWS:
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and every process under it: `taskkill /T` on Windows
+    (where a plain kill leaves grandchildren running), its process group
+    elsewhere (the caller started it with `start_new_session`)."""
+    if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
             capture_output=True,

@@ -13,7 +13,7 @@ mockymock-cobc container: `libcob: error: module 'SUB' not found`).
 
 import pytest
 
-from mockymock._lines import PARSER_SPLITS_ON_RECORD_DELIMITERS, split_source_lines
+from mockymock._lines import split_source_lines
 from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
 
@@ -48,27 +48,9 @@ CUT = (
 NON_RECORD_BREAKS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " "]
 
 
-needs_record_splitting_parser = pytest.mark.skipif(
-    not PARSER_SPLITS_ON_RECORD_DELIMITERS,
-    reason="installed cobolparser numbers lines the str.splitlines() way",
-)
-
-
-@needs_record_splitting_parser
 @pytest.mark.parametrize("sep", NON_RECORD_BREAKS)
 def test_split_source_lines_keeps_non_record_breaks_inside_the_line(sep):
     assert split_source_lines(f"a{sep}b\nc") == [f"a{sep}b", "c"]
-
-
-@pytest.mark.parametrize("sep", NON_RECORD_BREAKS)
-def test_split_source_lines_agrees_with_the_installed_parser(sep):
-    # An older cobolparser (no `cobolparser._lines`) numbers records the
-    # str.splitlines() way itself; mockymock must follow whichever it is.
-    text = f"a{sep}b\nc"
-    expected = (
-        [f"a{sep}b", "c"] if PARSER_SPLITS_ON_RECORD_DELIMITERS else text.splitlines()
-    )
-    assert split_source_lines(text) == expected
 
 
 def test_split_source_lines_mirrors_splitlines_on_real_record_breaks():
@@ -90,7 +72,6 @@ def test_boundary_site_line_indexes_the_mocked_statement(tmp_path, sep):
     assert 'CALL "SUB"' in checked.lines[site.line - 1]
 
 
-@needs_record_splitting_parser
 def test_mutate_list_reports_original_line_numbers(tmp_path, capsys):
     program = tmp_path / "FFPROG.cbl"
     program.write_text(SOURCE.format(sep="\x0c"), encoding="utf-8")

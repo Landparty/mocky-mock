@@ -238,9 +238,7 @@ def test_comment_line_overflow_is_not_reported_as_a_problem():
     is 75 columns wide after restore_fixed_format_columns's 7-space
     prefix, and previously tripped the COLUMN_OVERFLOW refusal even though
     nothing about it can miscompile."""
-    line = (
-        "      *>                    ISRT SEGMENT(PAYMENT-SEG) " "FROM(WS-CLAIM-AMOUNT)"
-    )
+    line = "      *>                    ISRT SEGMENT(PAYMENT-SEG) FROM(WS-CLAIM-AMOUNT)"
     assert len(line) > 72
     result, problems = wrap_long_display_lines([line])
     assert problems == []

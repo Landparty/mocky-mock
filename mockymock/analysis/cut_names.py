@@ -380,8 +380,7 @@ def check_cut_data_names(
                     RefusalReason(
                         code="UNKNOWN_DATA_NAME",
                         message=(
-                            f".cut line {line}: {role} {word} is not a data "
-                            f"item{owner}"
+                            f".cut line {line}: {role} {word} is not a data item{owner}"
                         ),
                     )
                 )

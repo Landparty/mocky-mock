@@ -40,7 +40,6 @@ whole like any other boundary statement).
 
 from __future__ import annotations
 
-import importlib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -57,6 +56,13 @@ from cobolparser.models.program import (
 )
 from cobolparser.models.sql_statements import ExecSQLStatement
 from cobolparser.models.statements.call import CallStatement
+from cobolparser.models.statements.communication import (
+    DisableStatement,
+    EnableStatement,
+    PurgeStatement,
+    ReceiveStatement,
+    SendStatement,
+)
 from cobolparser.models.statements.control import (
     EvaluateStatement,
     SearchStatement,
@@ -73,15 +79,23 @@ from cobolparser.models.statements.io import (
     IOUnlockStatement,
     IOWriteStatement,
 )
+from cobolparser.models.statements.legacy import ChainStatement
 from cobolparser.models.statements.misc import (
     CancelStatement,
     ExitStatement,
+    GenerateStatement,
     GobackStatement,
+    InvokeStatement,
     MergeStatement,
     ReleaseStatement,
     ReturnStatement,
     SelectStatement,
     SortStatement,
+    XmlJsonStatement,
+)
+from cobolparser.models.statements.report_writer import (
+    InitiateStatement,
+    TerminateStatement,
 )
 from cobolparser.parsers.statements.ibm_exec_statements import (
     ExecCicsStatement,
@@ -99,51 +113,21 @@ from mockymock.analysis.sql_whenever import (
 from mockymock.dsl.model import MockCategory
 from mockymock.splicer.io_copy import DataLayout, data_layout
 
-
-def _optional_statement_types(module: str, *names: str) -> tuple[type, ...]:
-    """The named cobolparser AST classes that exist in the installed
-    cobol-parser, as an isinstance-ready tuple (empty when none do).
-
-    mocky-mock pins only a floor on cobol-parser (see pyproject.toml), and
-    the release its CI compat lane installs predates the 2026-09-02
-    verb-coverage work that introduced the Communication Module, Report
-    Writer and legacy-verb nodes. On such a release the verbs behind these
-    classes are still warned-and-discarded by the parser, which the
-    PARSE_WARNING refusal already catches, so resolving them to nothing
-    here is sound -- the fail-closed guarantee holds either way."""
-    try:
-        mod = importlib.import_module(module)
-    except ImportError:
-        return ()
-    return tuple(t for t in (getattr(mod, n, None) for n in names) if t is not None)
-
-
-_INVOKE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "InvokeStatement"
+# Verb-coverage node classes (cobol-parser's 2026-09-02 statement work),
+# as isinstance-ready tuples so the classifier below can match them.
+_INVOKE_TYPES: tuple[type, ...] = (InvokeStatement,)
+_GENERATE_TYPES: tuple[type, ...] = (GenerateStatement,)
+_XML_JSON_TYPES: tuple[type, ...] = (XmlJsonStatement,)
+_CHAIN_TYPES: tuple[type, ...] = (ChainStatement,)
+_COMMUNICATION_TYPES: tuple[type, ...] = (
+    SendStatement,
+    ReceiveStatement,
+    EnableStatement,
+    DisableStatement,
+    PurgeStatement,
 )
-_GENERATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "GenerateStatement"
-)
-_XML_JSON_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.misc", "XmlJsonStatement"
-)
-_CHAIN_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.legacy", "ChainStatement"
-)
-_COMMUNICATION_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.communication",
-    "SendStatement",
-    "ReceiveStatement",
-    "EnableStatement",
-    "DisableStatement",
-    "PurgeStatement",
-)
-_INITIATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.report_writer", "InitiateStatement"
-)
-_TERMINATE_TYPES = _optional_statement_types(
-    "cobolparser.models.statements.report_writer", "TerminateStatement"
-)
+_INITIATE_TYPES: tuple[type, ...] = (InitiateStatement,)
+_TERMINATE_TYPES: tuple[type, ...] = (TerminateStatement,)
 
 # Statement classes verified to touch nothing outside the program (data
 # movement, arithmetic, control flow, console DISPLAY, compiler-directing
@@ -722,9 +706,9 @@ def _nested_statement_lists(statement) -> list[list]:
         # key (verified against cobolparser's control.py), unlike
         # EvaluateStatement's WhenClause nodes. SEARCH's AT END body is
         # already covered by "at_end_clause" in _NESTED_STATEMENT_ATTRS.
-        for when in statement.when_clauses:
-            if when.get("statements"):
-                lists.append(when["statements"])
+        for search_when in statement.when_clauses:
+            if search_when.get("statements"):
+                lists.append(search_when["statements"])
     return lists
 
 

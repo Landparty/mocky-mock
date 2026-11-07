@@ -401,8 +401,7 @@ def wrap_long_display_lines(
         mid_budget = max_col - mid_overhead
         if mid_budget <= 0:
             problems.append(
-                f"line {line_no}: indentation alone leaves no room to "
-                f"wrap: {line!r}"
+                f"line {line_no}: indentation alone leaves no room to wrap: {line!r}"
             )
             new_lines.append(line)
             continue
@@ -579,8 +578,7 @@ def _continue_literal(line: str, max_col: int) -> list[str] | None:
         final_budget = max_col - _width(current_prefix) - 2 - _width(suffix)
         if 0 < sum(_width(unit) for unit in remaining) <= final_budget:
             out.append(
-                f"{current_prefix}{delimiter}{''.join(remaining)}"
-                f"{delimiter}{suffix}"
+                f"{current_prefix}{delimiter}{''.join(remaining)}{delimiter}{suffix}"
             )
             break
 

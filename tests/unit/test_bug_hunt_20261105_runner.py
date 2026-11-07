@@ -84,9 +84,7 @@ def test_capped_stdout_keeps_only_marker_lines_past_the_limit() -> None:
     capped.feed(b"ND\nmore noise\n__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0")
     out = capped.result()
     assert out == (
-        b"0123456789"
-        b"__MOCKYMOCK__ CASE 001 END\n"
-        b"__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0"
+        b"0123456789__MOCKYMOCK__ CASE 001 END\n__MOCKYMOCK__ SUMMARY: RUN=1 FAILURES=0"
     )
     assert capped.dropped == len(b"noise\nmore noise\n")
 

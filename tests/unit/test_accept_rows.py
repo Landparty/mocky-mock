@@ -52,9 +52,7 @@ def test_accept_rows_without_terminal_is_refused() -> None:
     with pytest.raises(CutParseError, match="TERMINAL"):
         parse_cut(
             _cut(
-                "    MOCK ACCEPT WS-IN ROWS\n"
-                '        ( WS-IN = "AAA" )\n'
-                "    END-MOCK\n"
+                '    MOCK ACCEPT WS-IN ROWS\n        ( WS-IN = "AAA" )\n    END-MOCK\n'
             )
         )
 

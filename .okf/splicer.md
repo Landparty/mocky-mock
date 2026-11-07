@@ -25,11 +25,10 @@ cobolparser counts records), never `str.splitlines()` -- that also breaks on
 form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
 comment line shifted every later splice one line early (the mock replaced
 the statement before the CALL and the real CALL ran). The rule is agreement
-with the *installed* cobolparser: releases without `cobolparser._lines`
-(1.8.x and earlier, allowed by the `>=1.7.7` floor) still number records the
-`str.splitlines()` way, so `split_source_lines` falls back to it there
-(`PARSER_SPLITS_ON_RECORD_DELIMITERS`) -- the `cobol-parser-compat` CI job
-runs against the published wheel and caught the mismatch.
+with cobolparser, which (from 1.9 on, and so on every release the >= 3.1.1
+floor allows) numbers records on `
+` / `
+` / `` only.
 
 ```
 MockSurface (boundary sites)  ─┐
@@ -795,8 +794,8 @@ as three quote characters, an unterminated literal. Emitted verbatim it
 produced `MOVE """ TO DFHTRIG`, desynchronizing `cobc`'s tokenizer for
 the rest of the program: the error it eventually reports is a bogus
 `invalid symbol '%'` two lines further on, nowhere near the cause. Fixed
-upstream (`cobolparser._literals.quote_literal`), but this project's floor
-is `cobol-parser>=1.7.7`, so `_elementary_reset` routes every VALUE clause
+upstream (`cobolparser._literals.quote_literal`), but as defence in depth
+`_elementary_reset` routes every VALUE clause
 through `reset.cobol_literal` regardless of which parser produced it. That
 function grows each run of quote characters to the next EVEN length, which
 both repairs the malformed shape and is idempotent against the fixed parser

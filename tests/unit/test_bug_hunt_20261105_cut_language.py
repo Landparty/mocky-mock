@@ -198,8 +198,9 @@ def test_a_qualifier_the_name_is_not_inside_is_refused(tmp_path):
     )
     ambiguous = [p for p in problems if "AMBIGUOUS_DATA_NAME" in p]
     assert len(ambiguous) == 2
-    assert ".cut line 3: MOVE target ONLY-HERE OF CUST-REC names no data item" in (
-        ambiguous[0]
+    assert (
+        ".cut line 3: MOVE target ONLY-HERE OF CUST-REC names no data item"
+        in (ambiguous[0])
     )
     assert "it is declared as ONLY-HERE OF OUTER" in ambiguous[0]
     assert ".cut line 5: EXPECT CUST-ID OF WS-B names no data item" in ambiguous[1]

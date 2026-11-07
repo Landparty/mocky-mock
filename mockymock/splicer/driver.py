@@ -729,7 +729,7 @@ def _build_testcase_paragraph(
             if operator.startswith("NOT "):
                 lines.append(
                     f"           IF ({subject} "
-                    f"{operator[len('NOT '):]} {expectation.expected_value})"
+                    f"{operator[len('NOT ') :]} {expectation.expected_value})"
                 )
             else:
                 lines.append(

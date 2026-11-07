@@ -169,7 +169,7 @@ def reset_lines_for_items(items) -> list[str]:
                     lines.append(f"INITIALIZE {ref}{filler} ALL TO VALUE")
                 else:
                     lines.append(
-                        f"INITIALIZE {ref}{filler}" " ALL TO VALUE THEN TO DEFAULT"
+                        f"INITIALIZE {ref}{filler} ALL TO VALUE THEN TO DEFAULT"
                     )
             else:
                 # INITIALIZE skips FILLERs unless told WITH FILLER, so a
@@ -381,10 +381,8 @@ def cobol_literal(value_clause: str) -> str:
     of the program, surfacing as a bogus `invalid symbol` error lines away
     from the real cause.
 
-    Fixed upstream (cobol-parser, `_literals.quote_literal`), but this
-    project's floor is `cobol-parser>=1.7.7`, so the malformed shape still
-    reaches us from every currently published wheel. Normalizing here is also
-    idempotent against the fixed parser: a run of quotes is only ever grown
+    Fixed upstream (cobol-parser, `_literals.quote_literal`); normalizing
+    here is kept as defence in depth, and is idempotent against the fixed parser: a run of quotes is only ever grown
     to the next even length, so an already-doubled pair is left alone. The
     one shape this cannot recover is a literal whose real content is two
     adjacent quotes coming from an unfixed parser -- indistinguishable from

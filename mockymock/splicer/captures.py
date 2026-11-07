@@ -325,7 +325,7 @@ def plan_captures(
                         f"CAPTURE ARG {arg_index} INTO {target} in MOCK "
                         f"{directive.describe()}: argument {arg_index} "
                         + (
-                            "names no resolvable data item at any matching " "CALL site"
+                            "names no resolvable data item at any matching CALL site"
                             if not arguments
                             else f"names different items at different call "
                             f"sites ({', '.join(sorted(source_names))}), so "
