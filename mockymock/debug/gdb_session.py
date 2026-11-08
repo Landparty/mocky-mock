@@ -613,12 +613,6 @@ class GdbSession:
             f"statements (see Task 10 of the CLI implementation plan)"
         )
 
-    # step_into/step_out: v1 does not step across a mocked CALL boundary
-    # (see design doc Non-goals) so both alias `step` rather than having
-    # distinct semantics.
-    step_into = step
-    step_out = step
-
     def _exec_and_await_stop(self, command: str) -> StopEvent:
         records = self.send(command)
         last = records[-1]
