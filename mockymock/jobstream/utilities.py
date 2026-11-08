@@ -19,7 +19,6 @@ from collections.abc import Callable
 COPY_PROGRAMS = frozenset({"IEBGENER", "ICEGENER"})
 SORT_PROGRAMS = frozenset({"SORT", "ICEMAN", "DFSORT", "SYNCSORT"})
 NOOP_PROGRAMS = frozenset({"IEFBR14"})
-EMULATED = COPY_PROGRAMS | SORT_PROGRAMS | NOOP_PROGRAMS
 
 
 class UtilityGap(Exception):

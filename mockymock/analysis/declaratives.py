@@ -202,21 +202,6 @@ def unsupported_use(program) -> str | None:
     return None
 
 
-def has_declaratives(program) -> bool:
-    """Whether the program has a section cobol-parser marks declarative."""
-    procedure = program.get_division("PROCEDURE")
-    if procedure is None:
-        return False
-    return any(
-        name
-        and (
-            getattr(section, "is_declarative", False)
-            or section.get_metadata("declarative")
-        )
-        for name, section in getattr(procedure, "_sections", {}).items()
-    )
-
-
 def declarative_paragraphs(program) -> set[str]:
     """Every paragraph and section name inside DECLARATIVES."""
     procedure = program.get_division("PROCEDURE")
