@@ -10,9 +10,14 @@ each other for it -- `_plans.py` constructs `RefusalReason`s of its own
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, TypeAlias
 
 from mockymock.dsl.model import MockCategory
+
+if TYPE_CHECKING:
+    from mockymock.analysis.mock_surface import BoundarySite, MockSurface
 
 _UNMOCKED_CODES = {
     MockCategory.CALL: "UNMOCKED_CALL",
@@ -92,6 +97,15 @@ _UNSUPPORTED_SITE_CODES: dict[str, tuple[str, str]] = {
 }
 
 
+#: Renders the `.cut` MOCK block that would answer one boundary site, or
+#: None when there is no mechanical fix: `dsl.generator.directive_snippet`.
+#: Passed into the gates that attach `RefusalReason.suggested_fix`, so
+#: `analysis` never imports `dsl.generator` (tests/unit/test_layering.py).
+FixSuggester: TypeAlias = Callable[
+    ["BoundarySite", "MockSurface", "dict[str, str] | None"], "str | None"
+]
+
+
 @dataclass
 class RefusalReason:
     code: str
@@ -100,7 +114,10 @@ class RefusalReason:
     # for UNMOCKED_* codes (a boundary is reachable but no MOCK directive
     # in the test case matches it), where the fix is entirely mechanical:
     # `dsl.generator.directive_snippet` renders it, the same renderer
-    # `generate`'s own scaffold uses, so the two can never disagree.
+    # `generate`'s own scaffold uses, so the two can never disagree. The
+    # gate does not import the generator (analysis decides WHAT can be
+    # mocked, the generator HOW to write it): the caller hands the
+    # renderer in as `suggest_fix` (see `FixSuggester`).
     # None for every other reason -- an UNSUPPORTED_* refusal, a
     # structural gate like DECLARATIVES/ALTER, AMBIGUOUS_MOCK, or any
     # site directive_snippet itself declines to render (an unparsed CALL

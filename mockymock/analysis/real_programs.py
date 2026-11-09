@@ -47,6 +47,7 @@ from mockymock.analysis.refusal._types import (
     _UNMOCKED_CODES,
     _UNMOCKED_FILE_OP_CODE,
     _UNSUPPORTED_SITE_CODES,
+    FixSuggester,
 )
 from mockymock.dsl.model import (
     MockCategory,
@@ -247,12 +248,13 @@ def active_cases(suite: MockTestSuite, key: str) -> list[tuple[int, MockTestCase
 
 
 def check_real_program(
-    prepared: PreparedReal, suite: MockTestSuite
+    prepared: PreparedReal,
+    suite: MockTestSuite,
+    suggest_fix: FixSuggester | None = None,
 ) -> list[RefusalReason]:
     """Every boundary of the real program must be answered in every case
     that makes it real. See the module docstring for why there is no
-    reachability narrowing."""
-    from mockymock.dsl.generator import directive_snippet
+    reachability narrowing. `suggest_fix`: as for `check_test_case`."""
 
     where = f'real program "{prepared.spec.key}"'
     reasons: list[RefusalReason] = []
@@ -298,8 +300,10 @@ def check_real_program(
                 )
                 continue
             if not matches:
-                snippet = directive_snippet(
-                    site, prepared.surface, prepared.file_status_fields
+                snippet = (
+                    suggest_fix(site, prepared.surface, prepared.file_status_fields)
+                    if suggest_fix is not None
+                    else None
                 )
                 code = _UNMOCKED_CODES.get(site.category, _UNMOCKED_FILE_OP_CODE)
                 reasons.append(

@@ -475,6 +475,7 @@ def _run_static_checks(
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
+    from mockymock.dsl.generator import directive_snippet
     from mockymock.dsl.parser import CutParseError, parse_cut
     from mockymock.project.discovery import copybook_not_found_hint
     from mockymock.splicer.captures import plan_captures
@@ -896,6 +897,7 @@ def _run_static_checks(
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
             direct_matched_out=direct_ids,
+            suggest_fix=directive_snippet,
         )
         for r in case_reasons:
             out.problems.append(f"refused ({r.code}): {r.message}")
@@ -927,6 +929,7 @@ def _run_static_checks(
             warnings_out=fallthrough_warnings,
             traps_out=out.fallthrough_traps,
             direct_matched_out=direct_ids,
+            suggest_fix=directive_snippet,
         ):
             if check.for_case is None:
                 where = check.hook
@@ -1085,6 +1088,7 @@ def _check_real_programs(
         program_only_view,
     )
     from mockymock.analysis.refusal import check_clause_bodies
+    from mockymock.dsl.generator import directive_snippet
     from mockymock.splicer.sqlca import transform_data_division_exec
 
     def refuse(reasons) -> None:
@@ -1106,7 +1110,7 @@ def _check_real_programs(
             continue
         out.real_programs.append(prepared)
         out.warnings.extend(prepared.warnings)
-        refuse(check_real_program(prepared, suite))
+        refuse(check_real_program(prepared, suite, suggest_fix=directive_snippet))
         own = matched_directive_ids(prepared.surface, suite)
         elsewhere |= own
         view = program_only_view(suite, own)

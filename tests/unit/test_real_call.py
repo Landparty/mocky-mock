@@ -171,7 +171,9 @@ class TestPrepareAndGate:
             "    END-MOCK\n"
             "    PERFORM 0000-MAIN\n"
         )
-        reasons = check_real_program(prepared, suite)
+        from mockymock.dsl.generator import directive_snippet
+
+        reasons = check_real_program(prepared, suite, suggest_fix=directive_snippet)
         assert [r.code for r in reasons] == ["UNMOCKED_SQL"]
         assert "'without sql'" in reasons[0].message
         assert reasons[0].suggested_fix.startswith('    MOCK SQL "SELECT"')

@@ -90,32 +90,6 @@ KNOWN_CYCLES: list[frozenset[str]] = [
             "mockymock.analysis.sql_whenever",
         }
     ),
-    # The refusal gate and test generation depend on each other.
-    frozenset(
-        {
-            "mockymock.analysis.flow_mocks",
-            "mockymock.analysis.refusal",
-            "mockymock.analysis.refusal._gates",
-            "mockymock.analysis.refusal._plans",
-            "mockymock.dsl.generator",
-            "mockymock.dsl.generator._context",
-            "mockymock.dsl.generator.bundle",
-            "mockymock.dsl.generator.cics",
-            "mockymock.dsl.generator.counts",
-            "mockymock.dsl.generator.directives",
-            "mockymock.dsl.generator.files",
-            "mockymock.dsl.generator.ims",
-            "mockymock.dsl.generator.keys",
-            "mockymock.dsl.generator.normalize",
-            "mockymock.dsl.generator.rows",
-            "mockymock.dsl.generator.scaffold",
-            "mockymock.dsl.generator.sql",
-            "mockymock.report.record_rewrite",
-            "mockymock.splicer.captures",
-            "mockymock.splicer.driver",
-            "mockymock.splicer.injector",
-        }
-    ),
     # The two toolchains share process helpers.
     frozenset(
         {"mockymock.runtime.docker_toolchain", "mockymock.runtime.native_toolchain"}

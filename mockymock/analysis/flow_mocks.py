@@ -83,10 +83,9 @@ class FlowMockPlan:
 
 
 def _refusal(code: str, message: str):
-    # refusal.py imports this module only inside functions, so a
-    # module-load cycle can't happen -- but keep this one import lazy as
-    # a guard against that ever changing.
-    from mockymock.analysis.refusal import RefusalReason
+    # From the leaf module, not the `refusal` package: the package's gates
+    # import this module, and the layering test forbids the cycle.
+    from mockymock.analysis.refusal._types import RefusalReason
 
     return RefusalReason(code=code, message=message)
 
@@ -194,16 +193,14 @@ def find_flow_mock_plans(
     in the suite, return either a FlowMockPlan or refusal reason(s) --
     never both for the same key. `lines` is the normalized free-form text
     the splicer edits (SourceLocation lines index into it)."""
-    from mockymock.analysis.refusal import (
+    from mockymock.analysis.refusal._reachability import (
         _expand_thru_range,
         _find_sort_merge_statements,
         _find_statements_of_type,
+        _find_xml_parse_statements,
         _go_to_fallthrough_targets,
         _go_to_targets,
         _source_ordered_paragraphs,
-    )
-    from mockymock.analysis.refusal._reachability import (
-        _find_xml_parse_statements,
     )
 
     flow_keys = [

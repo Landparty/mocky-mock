@@ -78,7 +78,6 @@ from mockymock.analysis.mock_surface import (
     normalize_exec_text,
 )
 from mockymock.analysis.sql_whenever import is_sql_declaration, whenever_can_fire
-from mockymock.dsl.generator import directive_snippet
 from mockymock.dsl.model import (
     EXEC_CATEGORIES,
     FLOW_CATEGORIES,
@@ -110,6 +109,7 @@ from ._types import (
     _UNMOCKED_FILE_OP_CODE,
     _UNSUPPORTED_SITE_CODES,
     _UNSUPPORTED_STATEMENT_LABEL,
+    FixSuggester,
     ParagraphScopedRefusal,
     RefusalReason,
 )
@@ -1535,8 +1535,14 @@ def check_test_case(
     warnings_out: list[RefusalReason] | None = None,
     traps_out: set[int] | None = None,
     direct_matched_out: set[int] | None = None,
+    suggest_fix: FixSuggester | None = None,
 ) -> list[RefusalReason]:
-    """`warnings_out` / `traps_out` (issue #351): when given, an unmocked
+    """`suggest_fix` renders the MOCK block an UNMOCKED_* reason suggests
+    (`dsl.generator.directive_snippet`, handed in by the caller so this
+    gate does not depend on test generation); without it those reasons
+    carry no `suggested_fix`.
+
+    `warnings_out` / `traps_out` (issue #351): when given, an unmocked
     boundary this case reaches ONLY by falling off the end of a GO TO
     target (`_reachable_paragraphs`' fall-through closure, a deliberate
     over-approximation) is not refused but reported in `warnings_out`
@@ -1833,8 +1839,10 @@ def check_test_case(
                             "required; if a test case does reach it, that "
                             "case fails with 'unmocked ... reached'"
                         ),
-                        suggested_fix=directive_snippet(
-                            site, surface, file_status_fields
+                        suggested_fix=(
+                            suggest_fix(site, surface, file_status_fields)
+                            if suggest_fix is not None
+                            else None
                         ),
                     )
                 )
@@ -1862,8 +1870,8 @@ def check_test_case(
                         )
                     ),
                     suggested_fix=(
-                        directive_snippet(site, surface, file_status_fields)
-                        if unspliceable is None
+                        suggest_fix(site, surface, file_status_fields)
+                        if unspliceable is None and suggest_fix is not None
                         else None
                     ),
                 )
@@ -2353,7 +2361,7 @@ def check_mock_body_line_length(suite: MockTestSuite) -> list[RefusalReason]:
     suite would pass lint and then fail to compile with syntax errors
     that never mention the truncation. A `MOVE <one long literal> TO ...`
     is split into `&` pieces by the splicer and never refused."""
-    from mockymock.splicer.driver import split_long_move
+    from mockymock.splicer.literals import split_long_move
 
     reasons: list[RefusalReason] = []
     seen: set[int] = set()
