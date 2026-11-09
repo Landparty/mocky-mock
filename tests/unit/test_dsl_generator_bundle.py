@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
-from cobolparser.generators.data.options import DataGeneratorOptions
+from cobolparser.generators.data import DataGeneratorOptions
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import (
@@ -84,7 +84,7 @@ def _surface_and_bundle(source, filename, seed=7, rows=None):
     surface = analyze(result.ast)
 
     from cobolparser.analysis.boundary_inventory import BoundaryInventoryAnalyzer
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex
 
     index = ProgramLayoutIndex.build(result.ast)
     report = BoundaryInventoryAnalyzer().analyze(result.ast, index)

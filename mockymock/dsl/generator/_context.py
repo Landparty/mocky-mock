@@ -50,7 +50,7 @@ _DEFAULT_SUCCESS_CODES = frozenset({"00", "0"})
 
 
 def _data_name_counts(program) -> dict[str, int]:
-    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+    from mockymock._cobol_layout import compute_program_data_items
 
     try:
         items = compute_program_data_items(program).get("items", [])
@@ -65,7 +65,7 @@ def _data_name_counts(program) -> dict[str, int]:
 
 
 def _layout_items(program) -> list[dict]:
-    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+    from mockymock._cobol_layout import compute_program_data_items
 
     try:
         return list(compute_program_data_items(program).get("items", []))

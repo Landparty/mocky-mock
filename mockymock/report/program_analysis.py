@@ -152,7 +152,7 @@ def analyze_program(
     out["signature"] = _signature(signature, orig) if signature else None
 
     def _boundaries(cls: Any) -> Any:
-        from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+        from cobolparser.generators.data import ProgramLayoutIndex
 
         return cls().analyze(ast, ProgramLayoutIndex.build(ast)).to_dict()
 

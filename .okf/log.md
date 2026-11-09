@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-09 -- hunt sweep: #436, #441, #444, #446, #448, #450, #451
+
+[integration](integration.md): layout imports work on cobol-parser 3.x and
+main (`_cobol_layout.py`, #451). [cli](cli.md): `job` COND / IF and SORT
+framing (#436, #441). [dsl](dsl.md): round-trip partner groups (#444).
+[coverage](coverage.md): reused storage drops to static claims; taken
+outcomes never unreachable (#446). [analysis](analysis.md): `GO TO.` into
+a section (#448); GO TO loops (#450). Tests: `test_issue_436_441_jobstream.py`,
+`test_issue_444_round_trip_groups.py`, `test_issue_448_450.py`,
+`test_unreachable.py`.
+
 ## 2026-11-07 -- tech-debt remediation (all four phases)
 
 Acting on docs/2026-11-06-tech-debt-audit.md (its "Remediation" section has

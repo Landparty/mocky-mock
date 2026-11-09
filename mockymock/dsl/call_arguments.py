@@ -168,7 +168,7 @@ def _call_arguments(
     program_path: str, copybook_paths: list[str] | None
 ) -> tuple[Any, dict[tuple[str, str], dict[str, _Argument]]]:
     from cobolparser.analysis.boundary_inventory import BoundaryInventoryAnalyzer
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex
 
     index = ProgramLayoutIndex.from_file(program_path, copybook_paths=copybook_paths)
     if index.ast is None:
@@ -191,8 +191,7 @@ def argument_fields(index: Any, text: str) -> list[Any] | None:
     """The cobol-parser `FieldSpec`s a mock sets for CALL argument `text`,
     with `column` the reference a MOVE writes and `qualified_name` the
     item's full path; None when the argument cannot be laid out exactly."""
-    from cobolparser.generators.data.layout import flatten_record
-    from cobolparser.generators.data.options import DataGeneratorOptions
+    from cobolparser.generators.data import DataGeneratorOptions, flatten_record
 
     reference = text.strip()
     subscript: str | None = None
@@ -287,8 +286,7 @@ def _add_fields(
     fixture for (category, key), creating the fixture where the generator
     made none. False when the fields would collide with ones already laid
     out -- the same item passed twice, or overlapping another argument."""
-    from cobolparser.generators.data.options import DataGeneratorOptions
-    from cobolparser.generators.data.values import ValueFactory
+    from cobolparser.generators.data import DataGeneratorOptions, ValueFactory
 
     scenarios = bundle.get("scenarios") or []
     for scenario in scenarios:

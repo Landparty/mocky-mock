@@ -302,7 +302,7 @@ def _program_supplied_call_keys(program) -> set[tuple[str, str]]:
         return set()
     try:
         from cobolparser.analysis.boundary_inventory import BoundaryInventoryAnalyzer
-        from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+        from cobolparser.generators.data import ProgramLayoutIndex
 
         report = BoundaryInventoryAnalyzer().analyze(
             program, ProgramLayoutIndex.build(program)

@@ -206,7 +206,7 @@ executed_lines)` for the outcomes the run never took and everything behind
 them. `program_report(..., unreachable=)` adds `unreachable` reasons and
 counts and `unreachableScope` (`full`, or `static` with `unreachableNote`
 when a case starts elsewhere than the entry paragraph or mocks a
-paragraph / section: then only code nothing reaches is claimed). Setup
+paragraph / section, or when a run does not start from VALUE-clause storage: a case PERFORMs program paragraphs more than once, or a BEFORE-ALL / AFTER-ALL PERFORMs one (`reused_storage`, #446): then only code nothing reaches is claimed). An outcome the run took is never reported unreachable. Setup
 `MOVE` targets are passed as `extra_inputs`. Tests:
 `tests/unit/test_unreachable.py`.
 

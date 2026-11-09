@@ -194,6 +194,8 @@ class JobRun:
         self.written: dict[str, None] = {}
         self.deleted: set[str] = set()
         self.rcs: dict[str, int | None] = {}
+        #: Steps a condition bypassed: a COND test naming one is ignored.
+        self.bypassed: set[str] = set()
         self.abended = False
         self.gaps: list[str] = []
         self.notes: list[str] = []
@@ -303,7 +305,9 @@ class JobRun:
                 )
                 continue
             try:
-                runs = step_runs(step.condition, self.rcs, self.abended)
+                runs = step_runs(
+                    step.condition, self.rcs, self.abended, bypassed=self.bypassed
+                )
             except ConditionError as exc:
                 self.gaps.append(f"step {name}: condition {step.condition!r}: {exc}")
                 steps.append(
@@ -312,6 +316,7 @@ class JobRun:
                 stopped = True
                 continue
             if not runs:
+                self.bypassed.add(name)
                 steps.append(
                     StepResult(
                         name,

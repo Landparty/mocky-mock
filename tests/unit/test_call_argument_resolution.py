@@ -269,7 +269,7 @@ def _spec(name):
 
 
 def test_filled_call_fixture_gets_a_direction(monkeypatch):
-    import cobolparser.generators.data.values as values
+    import cobolparser.generators.data as values
 
     monkeypatch.setattr(values, "ValueFactory", _Factory)
     bundle = {"scenarios": [{"name": "s", "fixtures": []}]}

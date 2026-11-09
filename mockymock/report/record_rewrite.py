@@ -462,7 +462,7 @@ def field_pictures(program, captures=()) -> dict[str, str]:
     DISPLAY image as the golden (`-0002468` for -24.68), which failed the
     very next run, and the report showed that image instead of the
     value."""
-    from cobolparser.generators.data.layout_offsets import (
+    from mockymock._cobol_layout import (
         compute_program_data_items,
     )
 
@@ -531,7 +531,7 @@ def condition_names(program) -> set[str]:
     """Names (uppercased, unqualified) of every level-88 condition-name in
     `program`, declared once or under several parents alike (none of them
     can be DISPLAYed). Best-effort like `field_pictures`."""
-    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+    from mockymock._cobol_layout import compute_program_data_items
 
     try:
         items = compute_program_data_items(program).get("items", [])

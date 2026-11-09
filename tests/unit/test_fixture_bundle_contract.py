@@ -43,7 +43,7 @@ PARSER_EXPANDS_SQL_INCLUDE = (
 import pytest
 from cobolparser import parse_cobol
 from cobolparser.analysis.boundary_inventory import BoundaryInventoryAnalyzer
-from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+from cobolparser.generators.data import ProgramLayoutIndex
 from cobolparser.generators.program_fixtures import ProgramFixtureGenerator
 from cobolparser.preprocess import (
     expand_copybooks,

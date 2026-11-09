@@ -140,7 +140,8 @@ def _record_key(fields: list[tuple[int, int, str, str]]) -> Callable[[bytes], tu
     def key(record: bytes) -> tuple:
         parts: list[object] = []
         for position, length, form, order in fields:
-            raw = record[position - 1 : position - 1 + length]
+            # A key past the end of a short (blank-stripped) line reads blanks.
+            raw = record[position - 1 : position - 1 + length].ljust(length, b" ")
             value: object
             if form == "ZD":
                 value = _zoned(raw)
@@ -154,19 +155,44 @@ def _record_key(fields: list[tuple[int, int, str, str]]) -> Callable[[bytes], tu
     return key
 
 
+def _line_framed(data: bytes, record_length: int | None) -> bool:
+    """Whether *data* is LINE SEQUENTIAL: newline-terminated records, none
+    longer than the LRECL when one is known (GnuCOBOL strips trailing
+    blanks, so lines may be shorter, #441)."""
+    if not data.endswith(b"\n"):
+        return False
+    if record_length is None:
+        return True
+    return all(len(line) <= record_length for line in data[:-1].split(b"\n"))
+
+
 def split_records(data: bytes, record_length: int | None) -> list[bytes]:
+    """The records of *data*: newline-framed lines (each keeping its newline)
+    when the data is LINE SEQUENTIAL, else LRECL-sized chunks. Framing that
+    cannot be told for certain is a gap, never a guess."""
+    if not data:
+        return []
+    if _line_framed(data, record_length):
+        return [line + b"\n" for line in data[:-1].split(b"\n")]
     if record_length:
         if len(data) % record_length:
             raise UtilityGap(
                 f"{len(data)} bytes is not a whole number of {record_length}-byte records"
             )
         return [data[i : i + record_length] for i in range(0, len(data), record_length)]
-    if b"\n" in data or not data:
-        lines = data.split(b"\n")
-        if lines and lines[-1] == b"":
-            lines.pop()
-        return [line + b"\n" for line in lines]
+    if b"\n" in data:
+        raise UtilityGap("records are neither newline-terminated nor of a known LRECL")
     raise UtilityGap("record length unknown (no LRECL on the DD) for a sort")
+
+
+def _without_newline(key: Callable[[bytes], tuple]) -> Callable[[bytes], tuple]:
+    """*key* over a line record, its newline dropped (a key reaching past a
+    short line reads blanks: see :func:`_record_key`)."""
+
+    def stripped(record: bytes) -> tuple:
+        return key(record[:-1] if record.endswith(b"\n") else record)
+
+    return stripped
 
 
 def sort_data(
@@ -176,5 +202,7 @@ def sort_data(
     if key is None:
         return data
     records = split_records(data, record_length)
+    if records and _line_framed(data, record_length):
+        key = _without_newline(key)
     # A stable sort, as DFSORT's EQUALS: equal keys keep their input order.
     return b"".join(sorted(records, key=key))  # type: ignore[arg-type]
