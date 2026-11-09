@@ -40,7 +40,9 @@ def test_go_to_dot_resets_to_the_following_section():
 
 
 def test_go_to_dot_before_a_paragraph_still_resets_to_it():
-    source = ALTER_SRC.replace("       NEXT-SEC SECTION.\n           MOVE \"FALL\" TO WS-MSG.\n", "")
+    source = ALTER_SRC.replace(
+        '       NEXT-SEC SECTION.\n           MOVE "FALL" TO WS-MSG.\n', ""
+    )
     ast = parse_cobol(source).ast
     assert alter_reset_lines(ast) == ["ALTER SW-PARA TO PROCEED TO A-PARA"]
 
