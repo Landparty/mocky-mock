@@ -1364,7 +1364,7 @@ INPUT PROCEDURE and after it for an OUTPUT PROCEDURE
 (`orchestrator.site_replacement`): the mock stands for the file side and
 the procedure runs as the SORT would run it, with its RELEASE/RETURN
 mocked. Tests: `tests/unit/test_sort_merge_mocking.py`,
-`tests/integration/test_sort_procedures_20261103.py`.
+`tests/integration/test_sort_procedures.py`.
 
 **Terminators that GOBACK to the test (2026-11-03, `TerminatorPlan.exit_kind`
 "RETURN").** The last resort when neither the chain rules nor the main-line
@@ -1396,7 +1396,7 @@ PARSE procedure can reach (the parser would be left inside the statement;
 (shares its line); and one a hook PERFORM step reaches, since hooks run
 outside the frame. A SORT/MERGE procedure may be left: GnuCOBOL ends the
 active sort when the CALL returns and the next case's SORT starts afresh
-(`tests/integration/test_sort_procedures_20261103.py`). Tests: `tests/unit/test_call_frame.py`,
+(`tests/integration/test_sort_procedures.py`). Tests: `tests/unit/test_call_frame.py`,
 `tests/unit/test_terminators.py`,
 `tests/integration/test_call_frame_terminator.py` (fixture
 `tests/fixtures/terminators/DEEP.cbl`).

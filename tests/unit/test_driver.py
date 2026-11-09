@@ -533,7 +533,7 @@ def test_a_short_literal_is_emitted_unchanged():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 
 
 def _one_case_suite():
@@ -565,7 +565,7 @@ def test_140_each_case_and_the_final_stop_run_reset_return_code() -> None:
 
 # Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
 # (executed counterpart:
-# tests/integration/test_bug_hunt_20261105_cut_language.py). A TESTSUITE /
+# tests/integration/test_cut_suite_language.py). A TESTSUITE /
 # TESTCASE name (or a MOCK SQL key in a VERIFY failure message) of a few
 # hundred characters was written into one DISPLAY literal: past cobc -free's
 # 512 bytes the line was truncated and the instrumented program failed to

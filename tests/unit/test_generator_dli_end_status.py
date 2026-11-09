@@ -64,7 +64,7 @@ def test_a_loop_on_gb_keeps_gb(tmp_path) -> None:
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 import pytest
 
 SCAN_CBL = """\
@@ -135,7 +135,7 @@ def test_315_primed_get_next_loop_reports_end_of_segments(tmp_path, mode) -> Non
 # are now dispatched on the calling paragraph (`UT-CALLING-PARAGRAPH`), the
 # status is pinned only at the call in the branch's own paragraph, and the
 # end-of-data reply counts each site's own calls (`UT-SITE-TALLY`). Executed
-# counterpart: tests/integration/test_bug_hunt_20261105_generation_round2.py.
+# counterpart: tests/integration/test_generated_dli_loop_cases.py.
 from tests.unit.test_issue_156_loop_end_reply import _mock
 
 PRIMED = """\

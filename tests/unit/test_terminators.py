@@ -1576,7 +1576,7 @@ def test_go_to_fallthrough_section_stop_is_dropped_for_a_member_entry():
 
 # Regression: bug hunt of 2026-10-27, after the SECTION-member terminator
 # support (PR #367); each program was reproduced on GnuCOBOL 3.2. Executed
-# counterpart: tests/integration/test_bug_hunt_20261027.py.
+# counterpart: tests/integration/test_section_fallthrough.py.
 from mockymock.analysis.refusal._gates import union_executed_paragraphs
 from mockymock.analysis.refusal._reachability import (
     _go_to_targets,

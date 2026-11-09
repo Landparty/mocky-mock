@@ -2,13 +2,13 @@
 INTO item, and which FD record is copied and reset.
 
 Regression: nightly bug hunt of 2026-10-09. Executed counterparts:
-tests/integration/test_nightly_20261009_read_into.py."""
+tests/integration/test_read_into.py."""
 
 from cobolparser import parse_cobol
 
 from mockymock.splicer.io_copy import data_layout, into_move
 from mockymock.splicer.reset import reset_move_lines
-from tests.integration.test_nightly_20261009_read_into import (
+from tests.integration.test_read_into import (
     FDR_CBL,
     MR_CBL,
     RINTO_CBL,

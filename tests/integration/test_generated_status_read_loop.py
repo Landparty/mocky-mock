@@ -1,13 +1,13 @@
 """Executed regression for the 2026-10-13 nightly bug hunt (run 8b). The
 unit-level counterpart lives in
-tests/unit/test_nightly_20261013b_status_read_eof.py."""
+the unit feature files (each block marked `# Regression:`)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from tests.integration._docker import requires_docker
-from tests.integration.test_bug_hunt_m1_fixes import _generate_and_run
+from tests.integration.test_issues_139_to_150 import _generate_and_run
 
 
 @requires_docker

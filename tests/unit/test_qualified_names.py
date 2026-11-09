@@ -131,7 +131,7 @@ def test_combined_condition_with_a_text_operand_stays_textual() -> None:
 
 # Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
 # (executed counterpart:
-# tests/integration/test_bug_hunt_20261105_cut_language.py). An EXPECT / MOVE
+# tests/integration/test_cut_suite_language.py). An EXPECT / MOVE
 # name declared in two groups (one copybook COPYed twice with REPLACING) and
 # not qualified, or qualified by a group it is not in, passed lint; cobc then
 # rejected the driver ("ambiguous; needs qualification") and mockymock blamed

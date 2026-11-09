@@ -3,7 +3,7 @@ success (2026-11-05 resource-mock bug hunt): RETURN-CODE 0 for a CALL,
 SQLCODE 0 for EXEC SQL, a blank DIBSTAT for EXEC DLI. A keyed READ whose
 ROWS run out reports 23 (INVALID KEY), not 10. A dynamic CALL's real-call
 route tests the identifier as the CALL writes it (subscript, qualifier).
-Executed counterparts: tests/integration/test_resource_mock_defaults_20261105.py."""
+Executed counterparts: tests/integration/test_resource_mock_defaults.py."""
 
 from cobolparser import parse_cobol
 

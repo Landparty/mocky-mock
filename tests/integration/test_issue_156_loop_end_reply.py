@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.integration._docker import requires_docker
-from tests.integration.test_bug_hunt_m1_fixes import _generate_and_run
+from tests.integration.test_issues_139_to_150 import _generate_and_run
 
 
 @requires_docker

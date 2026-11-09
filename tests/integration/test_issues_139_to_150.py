@@ -1,7 +1,7 @@
 """Executed regressions for the 2026-10-05 bug hunt (mocky-mock issues
 #139-#150): each one compiles and runs a small program with real
 GnuCOBOL, the way the issue was found. Unit-level counterparts live in
-tests/unit/test_bug_hunt_m1_fixes.py."""
+the unit feature files (each block marked `# Regression:`)."""
 
 from __future__ import annotations
 

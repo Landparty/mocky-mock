@@ -87,7 +87,7 @@ def test_mutate_list_reports_original_line_numbers(tmp_path, capsys):
 
 # Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
 # (executed counterpart:
-# tests/integration/test_bug_hunt_20261105_cut_language.py). `.cut` text was
+# tests/integration/test_cut_suite_language.py). `.cut` text was
 # split with `str.splitlines()`: a form feed (or VT, NEL, U+2028) inside a `*>`
 # comment cut the comment in two, and every later line number was one off in
 # lint, stub scanning and the --record-expectations rewrite.
