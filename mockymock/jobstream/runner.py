@@ -32,6 +32,7 @@ import json
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -131,6 +132,11 @@ class JobOptions:
     work_dir: Path | None = None
     keep: bool = False
     timeout: int = 60
+    #: The `mockymock` command line, run in-process for each COBOL step
+    #: (`generate`, then `run`): a job step IS a `mockymock run`. The CLI
+    #: passes its own `main`; passing it in keeps this package from
+    #: importing the CLI above it (tests/unit/test_layering.py).
+    command: Callable[[list[str]], int] | None = None
 
 
 def ddname_of_assign(assign: str | None) -> str | None:
@@ -519,7 +525,9 @@ class JobRun:
         step: Any,
         bindings: dict[str, list[Any]],
     ) -> StepResult:
-        from mockymock.cli.main import main as mockymock
+        mockymock = self.options.command
+        if mockymock is None:
+            raise ValueError("JobOptions.command is required to run a COBOL step")
 
         step_dir = self.steps_dir / name
         step_dir.mkdir(parents=True, exist_ok=True)

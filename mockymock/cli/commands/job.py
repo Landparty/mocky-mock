@@ -13,6 +13,9 @@ def _cmd_job(args: argparse.Namespace) -> int:
     """`mockymock job`: 0 passed / recorded, 1 failed, 3 incomplete (a gap)."""
     import json
 
+    # Each COBOL step runs the CLI itself in-process (a job step is a
+    # `mockymock run`), so the job runner is handed this entry point.
+    from mockymock.cli.main import main as cli_main
     from mockymock.jobstream.runner import (
         JobOptions,
         format_job_console,
@@ -55,6 +58,7 @@ def _cmd_job(args: argparse.Namespace) -> int:
         work_dir=Path(args.work_dir) if args.work_dir else None,
         keep=args.keep,
         timeout=args.timeout,
+        command=cli_main,
     )
     report = run_job_stream(options)
     print(format_job_console(report))
