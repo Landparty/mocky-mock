@@ -24,7 +24,7 @@ for one.
 import pytest
 from cobolparser import parse_cobol
 from cobolparser.generators import ProgramFixtureGenerator
-from cobolparser.generators.data.options import DataGeneratorOptions
+from cobolparser.generators.data import DataGeneratorOptions
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.dsl.fixture_bundle import load_fixture_bundle
@@ -88,7 +88,7 @@ def _scaffold(source: str, name: str, rows: int = 3, with_source: bool = True) -
     surface = analyze(result.ast)
     annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
     from cobolparser.analysis.boundary_inventory import BoundaryInventoryAnalyzer
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex
 
     index = ProgramLayoutIndex.build(result.ast)
     report = BoundaryInventoryAnalyzer().analyze(result.ast, index)

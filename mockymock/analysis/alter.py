@@ -13,7 +13,7 @@ each altered paragraph back to the target it is written with
 (`alter_reset_lines`), as a fresh run of the program starts. A `GO TO.`
 naming no target is a no-op until ALTERed on GnuCOBOL (control falls into
 the next paragraph), so its own target is the next paragraph in source
-order. A paragraph that is not one plain GO TO, or a `GO TO.` with no
+order, or the next section when its header comes first. A paragraph that is not one plain GO TO, or a `GO TO.` with no
 paragraph after it, has no state to restore: `alter_problem` refuses.
 """
 
@@ -34,12 +34,12 @@ def _procedure_paragraphs(program) -> list:
 
 def _own_targets(program) -> dict[str, str]:
     """Altered paragraph -> the target its GO TO has before any ALTER: the
-    one written, or for `GO TO.` the next paragraph (GnuCOBOL falls
-    through an unaltered one)."""
+    one written, or for `GO TO.` the next paragraph or section (GnuCOBOL
+    falls through an unaltered one)."""
     changes = alterations(program)
     ordered = _procedure_paragraphs(program)
     result: dict[str, str] = {}
-    for position, paragraph in enumerate(ordered):
+    for paragraph in ordered:
         name = paragraph.paragraph_name.upper()
         go = _altered_go(paragraph) if name in changes else None
         if go is None:
@@ -52,9 +52,30 @@ def _own_targets(program) -> dict[str, str]:
         written = _original_target(go)
         if written is not None:
             result[name] = written
-        elif not go.target_paragraphs and position + 1 < len(ordered):
-            result[name] = ordered[position + 1].paragraph_name.upper()
+        elif not go.target_paragraphs:
+            following = _next_procedure_name(program, paragraph)
+            if following is not None:
+                result[name] = following
     return result
+
+
+def _next_procedure_name(program, paragraph) -> str | None:
+    """The procedure an unaltered `GO TO.` in *paragraph* falls into: the
+    next paragraph, or a section header coming first (its opening sentences
+    run before its first named paragraph, #448)."""
+    line = paragraph.location.line
+    procedure = program.get_division("PROCEDURE")
+    candidates: list[tuple[int, str]] = [
+        (p.location.line, p.paragraph_name.upper())
+        for p in _procedure_paragraphs(program)
+        if p.location.line > line
+    ]
+    for section in getattr(procedure, "_sections", {}).values():
+        name = str(getattr(section, "section_name", "") or "").strip(".")
+        location = getattr(section, "location", None)
+        if name and location is not None and location.line > line:
+            candidates.append((location.line, name.upper()))
+    return min(candidates)[1] if candidates else None
 
 
 def alterations(program) -> dict[str, list[str]]:

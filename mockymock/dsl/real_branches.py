@@ -44,7 +44,7 @@ class KeyMatch:
 def key_matches(prepared: PreparedReal) -> list[KeyMatch]:
     """Every IF in `prepared` comparing a field of a record it READs with
     one of its LINKAGE items, once per (file, field, item)."""
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex
 
     index = ProgramLayoutIndex.build(prepared.ast)
     read_files = {
@@ -118,10 +118,12 @@ def found_record_mock(
 ) -> list[str]:
     """`MOCK READ <file>` returning the matching record once, then the
     placeholder's own end-of-file body."""
-    from cobolparser.generators.data import DataGeneratorOptions
-    from cobolparser.generators.data.layout import flatten_record
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
-    from cobolparser.generators.data.values import ValueFactory
+    from cobolparser.generators.data import (
+        DataGeneratorOptions,
+        ProgramLayoutIndex,
+        ValueFactory,
+        flatten_record,
+    )
 
     from mockymock.dsl.generator import _bundle_rendered_value
 

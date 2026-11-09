@@ -23,7 +23,7 @@ from typing import Any
 def fixture_generator(rows: int | None) -> Any:
     """A `ProgramFixtureGenerator` that generates the entry parameters
     itself when the installed cobol-parser knows the keyword."""
-    from cobolparser.generators.data.options import DataGeneratorOptions
+    from cobolparser.generators.data import DataGeneratorOptions
     from cobolparser.generators.program_fixtures import ProgramFixtureGenerator
 
     options = DataGeneratorOptions(rows=rows) if rows is not None else None
@@ -52,8 +52,7 @@ def add_entry_parameters(
     if parameters is None:
         return bundle
     program, line, fields, outputs = parameters
-    from cobolparser.generators.data.options import DataGeneratorOptions
-    from cobolparser.generators.data.values import ValueFactory
+    from cobolparser.generators.data import DataGeneratorOptions, ValueFactory
 
     seed = int(bundle.get("seed") or 0)
     for scenario in bundle.get("scenarios") or []:
@@ -107,9 +106,11 @@ def _entry_parameter_layout(
     fields, the qualified names of those the program writes), or None when
     the program takes no parameters."""
     from cobolparser.analysis.xref import XrefAnalyzer
-    from cobolparser.generators.data.layout import flatten_record
-    from cobolparser.generators.data.options import DataGeneratorOptions
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import (
+        DataGeneratorOptions,
+        ProgramLayoutIndex,
+        flatten_record,
+    )
 
     index = ProgramLayoutIndex.from_file(program_path, copybook_paths=copybook_paths)
     ast = index.ast

@@ -92,9 +92,11 @@ def plan_real_files(
     mocked). With `self_built`, indexed and relative files count too: they
     can be real only with no data staged or compared (the round-trip
     case)."""
-    from cobolparser.generators.data.layout import flatten_record
-    from cobolparser.generators.data.options import DataGeneratorOptions
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import (
+        DataGeneratorOptions,
+        ProgramLayoutIndex,
+        flatten_record,
+    )
 
     index = ProgramLayoutIndex.build(ast)
     options = DataGeneratorOptions().for_record_image()
@@ -217,13 +219,13 @@ def encode_rows(plan: RealFilePlan, rows: list[dict[str, str]], seed: int) -> by
     from their PICTUREs (seeded), so the file is the same on every run."""
     import random
 
-    from cobolparser.generators.data.encoding import (
+    from cobolparser.generators.data import (
         Charset,
+        DataGeneratorOptions,
         EncodingOptions,
+        ValueFactory,
         encode_record,
     )
-    from cobolparser.generators.data.options import DataGeneratorOptions
-    from cobolparser.generators.data.values import ValueFactory
 
     options = EncodingOptions(charset=Charset.ASCII)
     factory = ValueFactory(
@@ -360,25 +362,39 @@ def make_real_file_suite(
 
 def _round_trip_files(plans: list[RealFilePlan]) -> list[RealFilePlan]:
     """The files the round-trip case makes real: the round-trip ones, plus
-    any output-only file a statement names with one (it needs no data);
-    a round-trip file sharing a statement with a file that cannot be real
-    without data (an indexed file, an input) stays mocked."""
+    any output-only file a statement names with one (it needs no data).
+
+    Files that share statements must be real together, so they are taken as
+    groups: the partners of a round-trip file, closed transitively. A group
+    is real only when every member is a round-trip or an output-only file;
+    one holding a file that cannot be real without data (an indexed file,
+    an input) stays mocked whole. Built this way the answer cannot flip back
+    and forth (#444)."""
     by_file = {plan.file: plan for plan in plans}
-    real = {plan.file for plan in plans if plan.round_trip}
-    changed = True
-    while changed:
-        changed = False
-        for file in sorted(real):
-            for partner in by_file[file].partners:
-                if partner in real:
-                    continue
-                other = by_file.get(partner)
-                if other is not None and other.writes and not other.reads:
-                    real.add(partner)
-                else:
-                    real.discard(file)
-                changed = True
-                break
+
+    def allowed(file: str) -> bool:
+        plan = by_file.get(file)
+        return plan is not None and (
+            plan.round_trip or (plan.writes and not plan.reads)
+        )
+
+    real: set[str] = set()
+    seen: set[str] = set()
+    for start in sorted(p.file for p in plans if p.round_trip):
+        if start in seen:
+            continue
+        group = {start}
+        pending = [start]
+        while pending:
+            file = pending.pop()
+            plan = by_file.get(file)
+            for partner in sorted(plan.partners) if plan is not None else ():
+                if partner not in group:
+                    group.add(partner)
+                    pending.append(partner)
+        seen |= group
+        if all(allowed(file) for file in group):
+            real |= group
     return [by_file[file] for file in sorted(real)]
 
 

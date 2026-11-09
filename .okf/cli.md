@@ -1945,7 +1945,7 @@ the job's steps run in order over one set of datasets. COBOL steps are
 generated, reduced to one case with every DD-bound sequential file real
 (`step_suite`), and run in process; IEFBR14 / IEBGENER / SORT are emulated
 (`jobstream/utilities.py`); `COND=` / `IF` are evaluated on the real return
-codes (`jobstream/conditions.py`). Exit 0 passed / recorded, 1 failed, 3
+codes (`jobstream/conditions.py`: `((4,LT,S1),EVEN)` / `(EVEN,(...))` lists, a test on a step a condition bypassed is ignored as on z/OS (the runner keeps `bypassed`), `|` is OR and a lone `¬` NOT in IF, #436). SORT splits newline-terminated data on newlines whatever the DCB LRECL says (GnuCOBOL LINE SEQUENTIAL; a key past a short line reads blanks), uses LRECL chunks only for data with no newline framing, and refuses data that is neither (#441). Exit 0 passed / recorded, 1 failed, 3
 incomplete (a gap). Needs `cobolparser.jcl` (the `jcl` extra), which the
 runner image installs.
 

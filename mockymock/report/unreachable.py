@@ -13,7 +13,10 @@ a validation program, or a paragraph nothing PERFORMs.
 That argument only holds for runs that start at the program's entry point,
 so the outcome-level claims are made only when every case (and every
 BEFORE/AFTER hook) PERFORMs the entry paragraph and no case mocks a
-paragraph or section. Otherwise only code no PERFORM, GO TO or fall-through
+paragraph or section. The analysis also assumes each run starts from the
+VALUE-clause state, so a case that calls the program more than once, or a
+BEFORE-ALL / AFTER-ALL that runs program code, drops to the static claims
+too. An outcome a run took is never reported. Otherwise only code no PERFORM, GO TO or fall-through
 reaches at all is reported, which holds whatever the cases do.
 
 Exact by construction, or absent: an older cobol-parser, an analysis that
@@ -79,6 +82,32 @@ def suite_entries(suite: Any) -> tuple[set[str], set[str], bool]:
     return performs, moves, flow
 
 
+def reused_storage(suite: Any) -> str | None:
+    """Why some run does not start from the program's VALUE-clause state, or
+    None. The analysis assumes every run does (#446): a case that PERFORMs
+    program paragraphs more than once starts its later calls from what the
+    earlier ones left, and a BEFORE-ALL / AFTER-ALL that PERFORMs one leaves
+    or sees state the cases share."""
+    for hook in ("before_all_steps", "after_all_steps"):
+        if any(
+            step.kind == "PERFORM" and step.target for step in getattr(suite, hook, [])
+        ):
+            return "BEFORE-ALL / AFTER-ALL runs program code"
+    per_case = [
+        *getattr(suite, "before_each_steps", []),
+        *getattr(suite, "after_each_steps", []),
+    ]
+    for case in getattr(suite, "test_cases", []):
+        calls = sum(
+            1
+            for step in [*per_case, *case.steps]
+            if step.kind == "PERFORM" and step.target
+        ) + (1 if case.perform_target else 0)
+        if calls > 1:
+            return "a case calls the program more than once"
+    return None
+
+
 def classify(ast: Any, points: ProgramPoints, suite: Any) -> Unreachable | None:
     """The unreachable points of the program `points` measured, or None when
     cobol-parser cannot tell (too old, or the analysis gave up)."""
@@ -95,8 +124,11 @@ def classify(ast: Any, points: ProgramPoints, suite: Any) -> Unreachable | None:
         return None
     entry = set(report.entry_names)
     scope, note = SCOPE_FULL, None
+    reused = reused_storage(suite)
     if flow:
         scope, note = SCOPE_STATIC, "a case mocks a paragraph or section"
+    elif reused is not None:
+        scope, note = SCOPE_STATIC, reused
     elif not performs or not performs <= entry:
         others = sorted(performs - entry)
         scope = SCOPE_STATIC
@@ -115,9 +147,14 @@ def classify(ast: Any, points: ProgramPoints, suite: Any) -> Unreachable | None:
     found = report.unreachable(
         taken, points.executed_lines if scope == SCOPE_FULL else None
     )
+    # An outcome a run took is reachable, whatever the analysis says.
+    outcomes = {
+        k: {i: why for i, why in v.items() if i not in taken.get(k, set())}
+        for k, v in found.outcomes.items()
+    }
     return Unreachable(
         paragraphs=dict(found.paragraphs),
-        outcomes={k: dict(v) for k, v in found.outcomes.items()},
+        outcomes={k: v for k, v in outcomes.items() if v},
         statements=dict(found.statements),
         scope=scope,
         note=note,

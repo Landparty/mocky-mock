@@ -12,6 +12,7 @@ since guessing would run (or skip) steps the real job would not.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection, Iterable
 
 #: Return code standing for an abended step.
 ABEND = None
@@ -19,6 +20,10 @@ ABEND = None
 
 class ConditionError(Exception):
     """The condition cannot be evaluated exactly."""
+
+
+class _StepBypassed(ConditionError):
+    """The step a test names was bypassed: it has no return code."""
 
 
 _COND_TEST_RE = re.compile(
@@ -45,20 +50,28 @@ _OPS = {
 
 def is_cond_parameter(condition: str) -> bool:
     text = condition.strip().upper()
-    return text in ("EVEN", "ONLY") or bool(re.match(r"^\(*\s*\d", text))
+    return text in ("EVEN", "ONLY") or bool(
+        re.match(r"^\(*\s*(?:\d|(?:EVEN|ONLY)\s*,)", text)
+    )
 
 
-def _step_rc(rcs: dict[str, int | None], step: str) -> int | None:
+def _matches(names: Iterable[str], name: str) -> list[str]:
+    return [
+        key for key in names if key.endswith("." + name) or key.split(".")[-1] == name
+    ]
+
+
+def _step_rc(
+    rcs: dict[str, int | None], step: str, bypassed: Collection[str] = ()
+) -> int | None:
     name = step.upper()
     if name in rcs:
         return rcs[name]
-    matches = [
-        rc
-        for key, rc in rcs.items()
-        if key.endswith("." + name) or key.split(".")[-1] == name
-    ]
+    matches = _matches(rcs, name)
     if len(matches) == 1:
-        return matches[0]
+        return rcs[matches[0]]
+    if name in bypassed or len(_matches(bypassed, name)) == 1:
+        raise _StepBypassed(f"step {step} was bypassed")
     raise ConditionError(f"no earlier step named {step} ran")
 
 
@@ -73,17 +86,39 @@ def _split_tests(text: str) -> list[str]:
     return [inner]
 
 
-def cond_bypasses(condition: str, rcs: dict[str, int | None], abended: bool) -> bool:
+_FLAG_LAST_RE = re.compile(r"^\((?P<tests>.*\))\s*,\s*(?P<flag>EVEN|ONLY)\s*\)$")
+_FLAG_FIRST_RE = re.compile(r"^\(\s*(?P<flag>EVEN|ONLY)\s*,\s*(?P<tests>\(.*)\)$")
+
+
+def _tests_and_flag(text: str) -> tuple[str, str | None]:
+    """Split `COND=` into its test list and its EVEN / ONLY flag.
+
+    `((4,LT,S1),EVEN)` and `(EVEN,(4,LT,S1))` hold the tests inside the
+    outer parentheses (#436); a list of several tests keeps its own."""
+    if text in ("EVEN", "ONLY"):
+        return "", text
+    for pattern in (_FLAG_LAST_RE, _FLAG_FIRST_RE):
+        match = pattern.match(text)
+        if match:
+            tests = match.group("tests").strip()
+            if re.search(r"\)\s*,\s*\(", tests):
+                tests = f"({tests})"
+            return tests, match.group("flag")
+    return text, None
+
+
+def cond_bypasses(
+    condition: str,
+    rcs: dict[str, int | None],
+    abended: bool,
+    bypassed: Collection[str] = (),
+) -> bool:
     """Whether `COND=` bypasses the step: any test `(code,op[,step])` with
     `code op RC` true bypasses it. `EVEN` runs it even after an abend,
     `ONLY` only after one; without either an abend bypasses every later
-    step."""
+    step. A test on a step that was bypassed is ignored, as on z/OS."""
     text = condition.strip().upper()
-    parts = [p.strip() for p in re.split(r",(?=\s*(?:EVEN|ONLY)\b)", text)]
-    tests_text = parts[0]
-    flag = parts[1] if len(parts) > 1 else None
-    if tests_text in ("EVEN", "ONLY"):
-        flag, tests_text = tests_text, ""
+    tests_text, flag = _tests_and_flag(text)
     if flag == "ONLY" and not abended:
         return True
     if abended and flag is None:
@@ -98,7 +133,10 @@ def cond_bypasses(condition: str, rcs: dict[str, int | None], abended: bool) -> 
         code = int(match.group("code"))
         op = _OPS[match.group("op").upper()]
         if match.group("step"):
-            rc = _step_rc(rcs, match.group("step"))
+            try:
+                rc = _step_rc(rcs, match.group("step"), bypassed)
+            except _StepBypassed:
+                continue
             if rc is not None and op(code, rc):
                 return True
         else:
@@ -110,7 +148,7 @@ def cond_bypasses(condition: str, rcs: dict[str, int | None], abended: bool) -> 
 
 _TOKEN_RE = re.compile(
     r"\s*(?:(?P<lp>\()|(?P<rp>\))|(?P<op>>=|<=|¬=|\^=|=|>|<|\bGT\b|\bGE\b|\bEQ\b|\bLT\b|\bLE\b|\bNE\b)"
-    r"|(?P<word>[A-Z0-9@#$.]+|&))",
+    r"|(?P<bool>\||¬)|(?P<word>[A-Z0-9@#$.]+|&))",
     re.IGNORECASE,
 )
 
@@ -216,7 +254,13 @@ def if_true(condition: str, rcs: dict[str, int | None], abended: bool) -> bool:
     return _IfParser(_tokens(condition), rcs, abended).parse()
 
 
-def step_runs(condition: str | None, rcs: dict[str, int | None], abended: bool) -> bool:
+def step_runs(
+    condition: str | None,
+    rcs: dict[str, int | None],
+    abended: bool,
+    *,
+    bypassed: Collection[str] = (),
+) -> bool:
     """Whether a step with `condition` runs, given `rcs` (step name -> RC,
     None for an abend) of the steps that ran before it.
 
@@ -226,7 +270,7 @@ def step_runs(condition: str | None, rcs: dict[str, int | None], abended: bool) 
     if not condition or not condition.strip():
         return not abended
     if is_cond_parameter(condition):
-        return not cond_bypasses(condition, rcs, abended)
+        return not cond_bypasses(condition, rcs, abended, bypassed)
     if abended and "ABEND" not in condition.upper():
         return False
     return if_true(condition, rcs, abended)

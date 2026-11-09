@@ -1130,7 +1130,7 @@ def expand_real_files(
     relative file, a site a MOCK also answers, and a multi-file OPEN/CLOSE
     mixing a real file with a mocked one (the statement runs once, so it
     cannot be half real)."""
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex
 
     from mockymock.analysis.refusal._gates import matching_directives
     from mockymock.dsl.model import FILE_OP_CATEGORIES, MockDirective
@@ -1258,9 +1258,11 @@ def expand_real_files(
 def file_record_length(index: Any, file: str, declared: int | None) -> int | None:
     """A fixed-length file's record length: its largest 01 (byte-complete,
     FILLER in), or its RECORD CONTAINS when larger. None when unknown."""
-    from cobolparser.generators.data.encoding import record_length
-    from cobolparser.generators.data.layout import flatten_record
-    from cobolparser.generators.data.options import DataGeneratorOptions
+    from cobolparser.generators.data import (
+        DataGeneratorOptions,
+        flatten_record,
+        record_length,
+    )
 
     options = DataGeneratorOptions().for_record_image()
     lengths = [declared or 0]
