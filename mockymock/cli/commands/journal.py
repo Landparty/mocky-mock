@@ -19,7 +19,7 @@ def _journal_suite(args: argparse.Namespace) -> Path | None:
     `generate` would create it; a `.cut` that does not exist yet beside a
     program whose suites `generate` puts elsewhere is redirected there,
     and said so."""
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         COBOL_SOURCE_EXTENSIONS,
         DiscoveryError,
         default_suite_path,

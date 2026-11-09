@@ -14,7 +14,7 @@ not assume.
 
 `docker_toolchain` is imported locally inside `_run_suite_once`/
 `run_mutation`, not at this module's top level (runner.py has no
-docker-free constraint like cli/checks.py, but the deferred-import habit
+docker-free constraint like engine/checks.py, but the deferred-import habit
 carries over) -- `from X import Y` still binds to the one shared module
 object in `sys.modules`, so patching the attribute on the real
 `mockymock.runtime.docker_toolchain` module (not on `runner`, which never

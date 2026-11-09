@@ -7,12 +7,12 @@ import argparse
 from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.cli._common import (
     _apply_config_to_args,
-    _insert_driver,
     _print_cics_eib_synthesis,
     _print_linkage_neutralization,
     _resolve_program_and_cut,
 )
 from mockymock.report.record_rewrite import numeric_edited_fields
+from mockymock.splicer.insertion import insert_driver
 
 
 def _cmd_debug(args: argparse.Namespace) -> int:
@@ -32,11 +32,6 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         needs_call_frame,
         program_end_thru,
     )
-    from mockymock.cli.checks import (
-        extra_reset_lines_for,
-        extra_working_storage,
-        run_static_checks,
-    )
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
@@ -46,6 +41,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         declared_data_names,
         parse_local_header,
         unavailable_names,
+    )
+    from mockymock.engine.checks import (
+        extra_reset_lines_for,
+        extra_working_storage,
+        run_static_checks,
     )
     from mockymock.report.coverage import build_original_line_map
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
@@ -91,7 +91,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         source_path, cut_path, args.copybook_path, case_names=args.case
     )
     if checked.real_programs:
-        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+        from mockymock.engine.checks import REAL_CALL_UNSUPPORTED
 
         print(f"mockymock debug: {REAL_CALL_UNSUPPORTED}")
         return 1
@@ -174,7 +174,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         program_end=program_end_thru(result.ast, terminator_plans),
         call_frame=needs_call_frame(terminator_plans),
     )
-    instrumented = _insert_driver(lines, artifact)
+    instrumented = insert_driver(lines, artifact)
 
     original_lines = split_source_lines(read_utf8_source(source_path))
 

@@ -139,8 +139,8 @@ def test_combined_condition_with_a_text_operand_stays_textual() -> None:
 from pathlib import Path
 
 from mockymock.analysis.cut_names import check_cut_data_names, data_item_paths
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 
 # --- 3. ambiguous / wrongly qualified names ---------------------------------
 

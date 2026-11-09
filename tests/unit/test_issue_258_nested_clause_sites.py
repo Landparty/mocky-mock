@@ -11,7 +11,7 @@ from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock._lines import split_source_lines
 from mockymock.analysis.mock_surface import analyze
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
 PROGRAM = """\

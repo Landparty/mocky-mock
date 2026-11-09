@@ -14,8 +14,8 @@ mockymock-cobc container: `libcob: error: module 'SUB' not found`).
 import pytest
 
 from mockymock._lines import split_source_lines
-from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
+from mockymock.engine.checks import run_static_checks
 
 SOURCE = (
     "       IDENTIFICATION DIVISION.\n"
@@ -92,8 +92,8 @@ def test_mutate_list_reports_original_line_numbers(tmp_path, capsys):
 # comment cut the comment in two, and every later line number was one off in
 # lint, stub scanning and the --record-expectations rewrite.
 from mockymock.analysis.stub_expectations import scan_stub_expectations
-from mockymock.cli.discovery import read_program_line
 from mockymock.dsl.parser import parse_cut
+from mockymock.project.discovery import read_program_line
 
 # --- 2. form feed inside .cut text ------------------------------------------
 

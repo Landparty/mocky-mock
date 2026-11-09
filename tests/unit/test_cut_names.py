@@ -5,9 +5,9 @@ line of a deleted sandbox copy."""
 import json
 
 from mockymock.analysis.cut_names import check_cut_data_names
-from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.

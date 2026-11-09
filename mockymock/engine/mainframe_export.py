@@ -52,7 +52,7 @@ def restore_fixed_format_columns(lines: list[str]) -> list[str]:
     the 7 blank columns it stripped, so every original-source-derived
     line's content lands at its true column again -- matching the
     convention splicer-generated lines (driver.py, injector.py,
-    _insert_driver) already assume (index 0 = column 1). Call this on
+    insert_driver) already assume (index 0 = column 1). Call this on
     `run_static_checks`'s returned `lines`, BEFORE collect_boundaries/
     splice_program -- both are line-granular, never column-position-
     sensitive (verified during design), so this uniform prefix is
@@ -141,7 +141,7 @@ def insert_provenance_header(lines: list[str], header: list[str]) -> list[str]:
     """Insert `header` immediately before the IDENTIFICATION DIVISION
     line (or its IBM abbreviation `ID DIVISION`), so any preserved
     PROCESS/CBL directive (which must precede it) stays first -- matching
-    _insert_driver's own "find the header line, splice relative to it"
+    insert_driver's own "find the header line, splice relative to it"
     convention. With neither found, the header still goes after the
     leading PROCESS/CBL cards rather than ahead of them: IBM requires
     those before any comment line."""
@@ -808,7 +808,7 @@ class SourceAttribution:
     """Maps an instrumented-source line back to the file it came from.
 
     Built from the three things `export` already has in hand: the set of
-    line indices `_insert_driver_with_origins` inserted, the `.cut` text,
+    line indices `insert_driver_with_origins` inserted, the `.cut` text,
     and the original `.cbl` text. Matching is on exact stripped content --
     the splicer re-indents a MOCK body but never rewrites it -- so an
     attribution is a statement of fact ("this text is on line 12 of

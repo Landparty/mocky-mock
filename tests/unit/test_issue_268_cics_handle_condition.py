@@ -8,8 +8,8 @@ from cobolparser import parse_cobol
 
 from mockymock.analysis.cics_handle import resolve_condition
 from mockymock.analysis.mock_surface import analyze
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import CutParseError, parse_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.injector import build_site_dispatch
 from mockymock.splicer.naming import TallyRegistry
 

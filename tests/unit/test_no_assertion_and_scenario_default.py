@@ -218,7 +218,7 @@ def test_lint_warns_on_a_label_that_covers_no_assertion(tmp_path, capsys):
 # cases that only hold `*> STUB EXPECT` comments.
 import shutil
 
-from mockymock.cli.checks import (
+from mockymock.engine.checks import (
     cases_asserting_nothing,
     no_assertion_warnings,
     stub_case_lines,

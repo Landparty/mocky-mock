@@ -19,7 +19,7 @@ it will not start with `UT-CAP-`.
 Fails closed: an argument whose layout cannot be mirrored exactly (a table,
 a PICTURE-less COMP-1/POINTER item, a group holding non-DISPLAY data whose
 bytes an alphanumeric copy would render unreadable) is reported as an
-unresolved reason, and `cli.checks` turns that into an
+unresolved reason, and `engine.checks` turns that into an
 `UNRESOLVED_CAPTURE_TARGET` refusal rather than emitting a declaration that
 would not compile or would compare against raw binary.
 """

@@ -1547,14 +1547,14 @@ def check_test_case(
     `direct_matched_out` collects the ids of the directives this case
     matches somewhere it reaches other than through that fall-through
     closure -- a shared mock matched only through it is no longer needed,
-    since the boundary would be trapped instead (see cli.checks).
+    since the boundary would be trapped instead (see engine.checks).
 
     `shared` holds the ids of BEFORE-ALL/BEFORE-EACH directives (aliased
     into every case by the parser): one of them that this case never
     reaches is NOT refused here, because a shared mock is a default -- it
     is refused only when no test case and no hook step reaches it, which
     the caller decides from the ids collected in `matched_out` (see
-    cli.checks, docs/2026-10-10-suite-hooks-design.md).
+    engine.checks, docs/2026-10-10-suite-hooks-design.md).
 
     `neutralized_goto` must be `neutralized_goto_targets(...)` computed
     over the same (program, scope_map, lines) the splicer will use --

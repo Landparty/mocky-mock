@@ -1,7 +1,7 @@
 """Codegen and harness side of `USE REAL FILE` / `EXPECT FILE` / `SAVE FILE`.
 
 Integration tests level 2 (docs/2026-11-06-real-files-and-job-runs-design.md):
-a real file's statements run as written (`cli.checks.expand_real_files`
+a real file's statements run as written (`engine.checks.expand_real_files`
 answers each of its sites with a pass-through directive), so the program
 really opens, reads and writes it. What this module adds:
 

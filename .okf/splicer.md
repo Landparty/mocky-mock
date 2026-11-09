@@ -28,7 +28,8 @@ the statement before the CALL and the real CALL ran). The rule is agreement
 with cobolparser, which (from 1.9 on, and so on every release the >= 3.1.1
 floor allows) numbers records on `
 ` / `
-` / `` only.
+` / `
+` only.
 
 ```
 MockSurface (boundary sites)  ─┐
@@ -308,7 +309,7 @@ and compared with cobolparser's spaced-out name (`WS-ENT ( WS-I )`) with
 whitespace and commas dropped (`_operand_key`); the scan used to give up
 on any parenthesis, which put a literal next to a subscripted operand back
 on the name fallback (#291). Only an unbalanced group still falls back. `plan_captures` (given `lines` by
-`cli.checks`) applies the same recognition via `_site_argument`, so a
+`engine.checks`) applies the same recognition via `_site_argument`, so a
 `UT-CAP-` target for a literal is declared from the literal itself
 (`_literal_declaration`: `PIC X(len)` for a quoted literal, `PIC [S]9(i)[V9(d)]`
 for a numeric one, refused for X/N/G-prefixed) -- before 2026-09-28 it
@@ -327,7 +328,7 @@ matching CALL site's own `using_parameters` — the identical resolution
 mirrors the item the generated `MOVE` will read — and returns
 `CapturePlan`s plus a reason per target it could not mirror.
 `capture_working_storage_lines` / `capture_reset_lines` then feed
-`driver.build_driver` through `cli.checks.extra_working_storage` /
+`driver.build_driver` through `engine.checks.extra_working_storage` /
 `extra_reset_lines_for`, the same route `cics_eib` and `UT-ADDR-SINK`
 take, so all four splice-and-compile pipelines (`run`, `debug`, `export`,
 `mutate`) declare and reset them identically. The reset half is
@@ -551,7 +552,7 @@ and a terminated `COMPUTE ... ON SIZE ERROR ... END-COMPUTE` is lifted.
 
 Since #319 that is **refused**, not silently dropped:
 `clause_lift_problem(statement, lines)` says why, and
-`refusal.check_clause_bodies` (run in `cli.checks` step 8, whole-program
+`refusal.check_clause_bodies` (run in `engine.checks` step 8, whole-program
 like the splicer's own matching, skipping nested sites with no span)
 emits `UNLIFTABLE_CLAUSE_BODY` for every mocked site that has one. Before,
 every body of the statement -- the liftable ones too -- was deleted with
@@ -728,13 +729,13 @@ LOCAL-STORAGE, each FD's longest record, neutralized LINKAGE items; no
 top-level REDEFINES or elementary FILLER, and a top-level FILLER group's
 named children in its place -- see #247 below) and returns `UT-SNAP-nnn` declarations
 plus `UT-SAVE-STATE` / `UT-RESTORE-STATE` bodies, and one problem per
-item it can't copy exactly (`cli.checks` step 10 turns them into
+item it can't copy exactly (`engine.checks` step 10 turns them into
 `UNSAVABLE_BEFORE_ALL_STATE`). The driver runs reset, BEFORE-ALL steps,
 save once; each case runs reset then restore -- the reset still handles
 harness fields and captures. The blocks mockymock synthesizes after
 parsing -- `DFHEIBLK`, `DLIDIB` (`cics_eib`) and the generated `SQLCA`
 (`sqlca`) -- are snapshotted too, as group byte copies sized from
-`SYNTHESIZED_GROUP_BYTES` (`cli.checks._synthesized_groups` decides which
+`SYNTHESIZED_GROUP_BYTES` (`engine.checks._synthesized_groups` decides which
 the program gets): the reset clears them before every case, so a
 BEFORE-ALL that set `EIBCALEN` or `SQLCODE` was wiped before the first
 case (issue #225).
@@ -909,7 +910,7 @@ every `INDEXED BY` name in the DATA DIVISION, `index_working_storage_lines`
 declares `UT-IDX-SAVED` plus one `UT-IDX-SAVE-NNN USAGE INDEX` per name,
 and `index_reset_lines` makes the first reset (which runs before any
 program code) save each index and every reset restore it. Both are wired
-through `cli/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
+through `engine/checks.py`'s `extra_working_storage` / `extra_reset_lines_for`,
 so all four splice pipelines get them. `index_names` returns one reference
 per *declaration*: a name declared by two tables (one copybook under two
 01s) is qualified through the table's named ancestors, FILLERs skipped
@@ -1051,7 +1052,7 @@ PROCEDURE DIVISION only ever writes with `SET <ptr> TO ADDRESS OF ...`
 declaration line (widening that one DATA DIVISION line; no line moves),
 records a `Rebinding` on `LinkagePlan.rebindings`, and the item gets
 `UT-LKB-nnn PIC X(n)` backing storage (n from `snapshot._max_bytes`,
-declared through `cli.checks.extra_working_storage`).
+declared through `engine.checks.extra_working_storage`).
 `extra_reset_lines` points it back at that storage *before* the folded
 items' own resets, so a previous case's alias is never written through;
 the BEFORE-ALL snapshot saves and restores its address (`SET`) ahead of
@@ -1065,7 +1066,7 @@ items were kept as real rebinds.
 - **Column- and line-preserving**, like `neutralize` above and unlike
   `cics_eib`'s insertion: nothing any `SourceLocation` indexes into moves,
   so this is safe at the point in the pipeline where it runs (step 5 of
-  `cli.checks.run_static_checks`, right after `neutralize`).
+  `engine.checks.run_static_checks`, right after `neutralize`).
 - **The `SET` keeps executing** -- the rebind is discarded, control flow and
   sentence structure are unchanged, and (unlike commenting the statement
   out) a sibling statement sharing the line is untouched.
@@ -1073,7 +1074,7 @@ items were kept as real rebinds.
   (`extra_working_storage_lines`), reaching the source through
   `driver.build_driver`'s `extra_working_storage_lines` -- the same route
   `cics_eib`'s synthesized block takes, merged with it by
-  `cli.checks.extra_working_storage` so all four splice-and-compile
+  `engine.checks.extra_working_storage` so all four splice-and-compile
   pipelines stay in step. It needs no reset line: nothing ever reads it.
 - **Value-side occurrences are deliberately left alone.**
   `SET <ptr> TO ADDRESS OF <folded item>` is legal COBOL and stays correct
@@ -1229,7 +1230,7 @@ of `cics_eib_plan`, additive to `check_linkage_layout`, not exclusive-or.
 `UNSUPPORTED_CICS_MACRO` is reachability-scoped for `run`/`lint`/`export`/
 `debug` (`check_cics_eib_layout_scoped`; `generate`/`fixtures` keep the
 unscoped entry point). When a macro call is confined to a paragraph no
-selected test case can execute, `cli.checks.run_static_checks` waives the
+selected test case can execute, `engine.checks.run_static_checks` waives the
 refusal and rewrites the call's own columns to `-1` with
 `stub_writer.replace_columns` -- space-padded to the identical width, so
 unlike `cics_eib`'s insertion below this edit moves neither a line nor a
@@ -1246,7 +1247,7 @@ full PICTURE clauses). Every `SourceLocation`-driven step downstream of
 `normalize_fixed_format` would misalign if this ran early like `linkage.py`
 does, so it never edits `lines` directly. Instead its output is merged into
 `driver.DriverArtifact.working_storage_lines` via `build_driver`'s new
-`extra_working_storage_lines` parameter, reaching `cli._common._insert_driver`
+`extra_working_storage_lines` parameter, reaching `splicer.insertion.insert_driver`
 the same way the driver's own bookkeeping fields (`UT-CURRENT-CASE` etc.)
 already do -- the one insertion point already proven safe, no second splice
 mechanism needed. `splicer.cics_eib.reset_lines(plan)` is a single
@@ -1724,7 +1725,7 @@ is whatever precedes the last ` TO ` and must be one whole literal, so a
 ` TO ` inside a literal never splits it). A body line that still exceeds
 512 bytes once spliced at its 19-column indent is refused
 `MOCK_LINE_TOO_LONG` (`refusal.check_mock_body_line_length`, run in
-`cli.checks` step 8) instead of reaching cobc as a silent truncation.
+`engine.checks` step 8) instead of reaching cobc as a silent truncation.
 
 **`suite.name` escaping (2026-07-07 fix, audit finding 2.8):** the
 `__MOCKYMOCK__ TESTSUITE: <name>` `DISPLAY` line interpolated `suite.name`

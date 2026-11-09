@@ -120,7 +120,7 @@ class ParagraphScopedRefusal:
     transparency line printed instead when none can. `blank_span` is only
     set for an unresolved COPY statement: the 1-based inclusive
     normalized-line span, verified to own its lines outright, that
-    cli.checks.run_static_checks comments out of the spliced source when
+    engine.checks.run_static_checks comments out of the spliced source when
     the refusal is waived (the raw COPY text would otherwise still reach
     cobc, which cannot compile an unresolvable COPY).
 

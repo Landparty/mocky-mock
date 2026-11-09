@@ -37,7 +37,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
-    from mockymock.cli.discovery import copybook_not_found_hint
+    from mockymock.project.discovery import copybook_not_found_hint
 
     source_path = Path(args.program)
     if not source_path.is_file():

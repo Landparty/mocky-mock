@@ -475,8 +475,8 @@ def _run_static_checks(
         resolve_scoped_refusals,
         union_executed_paragraphs,
     )
-    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.parser import CutParseError, parse_cut
+    from mockymock.project.discovery import copybook_not_found_hint
     from mockymock.splicer.captures import plan_captures
     from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.linkage import (

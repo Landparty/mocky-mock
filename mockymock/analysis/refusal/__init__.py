@@ -47,7 +47,7 @@ Flow-edge model (fail closed):
   for a fall-through cascade the compiled test can never execute -- the
   "GO TO <own-exit-label>" idiom used to pull in every paragraph from the
   exit label to the end of the program this way. check_test_case takes
-  the neutralized set from its caller (cli.checks.run_static_checks
+  the neutralized set from its caller (engine.checks.run_static_checks
   computes it once per run); the same set already narrowed
   find_terminator_plans' hazard sets.
 
@@ -177,7 +177,7 @@ that channel are deliberately NOT refused (see the marker constant).
 Both PARSE_WARNING and UNRESOLVED_COPYBOOK were originally unconditional
 whole-program refusals. They are now the last two with a narrower, scoped
 variant (check_whole_program_scoped / check_unresolved_copybooks_scoped,
-used by cli.checks.run_static_checks): a warning or unresolved COPY whose
+used by engine.checks.run_static_checks): a warning or unresolved COPY whose
 evidence is provably confined to ONE PROCEDURE DIVISION paragraph's own
 body (_paragraph_owning_line -- strictly between that paragraph's header
 line and the next paragraph/section header, never on a header line, never

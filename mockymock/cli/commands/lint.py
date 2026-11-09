@@ -24,7 +24,7 @@ def _lint_directory(
     reusing _cmd_lint's own single-pair path unchanged."""
     import copy
 
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         DiscoveryError,
         discover_cut_files,
         read_program_line,
@@ -133,7 +133,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     structural guarantee (not just documentation) is what makes `lint`
     usable in editors, pre-commit hooks, and CI lanes with no daemon."""
     from mockymock.analysis.assertion_labels import orphan_label_warnings
-    from mockymock.cli.checks import no_assertion_warnings, run_static_checks
+    from mockymock.engine.checks import no_assertion_warnings, run_static_checks
 
     if args.program is None and args.cut is None:
         return _lint_directory(args)

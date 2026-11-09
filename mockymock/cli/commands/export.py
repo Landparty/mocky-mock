@@ -7,7 +7,6 @@ from pathlib import Path
 
 from mockymock.cli._common import (
     _apply_config_to_args,
-    _insert_driver_with_origins,
     _print_cics_eib_synthesis,
     _print_linkage_neutralization,
     _report_unsupported_boundaries,
@@ -15,6 +14,7 @@ from mockymock.cli._common import (
     _write_report_file,
 )
 from mockymock.report.record_rewrite import numeric_edited_fields
+from mockymock.splicer.insertion import insert_driver_with_origins
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
@@ -30,12 +30,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
         needs_call_frame,
         program_end_thru,
     )
-    from mockymock.cli.checks import (
+    from mockymock.engine.checks import (
         extra_reset_lines_for,
         extra_working_storage,
         run_static_checks,
     )
-    from mockymock.cli.mainframe_export import (
+    from mockymock.engine.mainframe_export import (
         SEQUENCE_AREA_WIDTH,
         SourceAttribution,
         build_provenance_header,
@@ -68,7 +68,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         model_rebinds=False,
     )
     if checked.real_programs:
-        from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+        from mockymock.engine.checks import REAL_CALL_UNSUPPORTED
 
         print(f"mockymock export: {REAL_CALL_UNSUPPORTED}")
         return 1
@@ -163,7 +163,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         program_end=program_end_thru(result.ast, terminator_plans),
         call_frame=needs_call_frame(terminator_plans),
     )
-    instrumented, driver_line_indices = _insert_driver_with_origins(lines, artifact)
+    instrumented, driver_line_indices = insert_driver_with_origins(lines, artifact)
 
     instrumented, overflow_problems = fit_within_columns(
         instrumented,

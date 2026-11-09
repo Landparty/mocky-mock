@@ -14,7 +14,6 @@ from types import ModuleType
 from mockymock._lines import read_utf8_source, split_source_lines
 from mockymock.cli._common import (
     _apply_config_to_args,
-    _insert_driver,
     _layout,
     _print_cics_eib_synthesis,
     _print_linkage_neutralization,
@@ -26,6 +25,7 @@ from mockymock.cli._common import (
 )
 from mockymock.report.artifacts import fingerprint
 from mockymock.report.record_rewrite import numeric_edited_fields
+from mockymock.splicer.insertion import insert_driver
 
 
 def _write_failure_reports(
@@ -188,7 +188,7 @@ def _run_directory(
     See docs/2026-09-15-cli-ergonomics-design.md."""
     import copy
 
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         DiscoveryError,
         discover_cut_files,
         read_program_line,
@@ -619,12 +619,12 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         program_end_thru,
     )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
-    from mockymock.cli.checks import (
+    from mockymock.dsl.model import MockCategory
+    from mockymock.engine.checks import (
         extra_reset_lines_for,
         extra_working_storage,
         run_static_checks,
     )
-    from mockymock.dsl.model import MockCategory
     from mockymock.report.coverage import (
         build_copybook_line_map,
         build_original_line_map,
@@ -949,7 +949,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
 
         real_sources.append((f"{HEXDUMP_PROGRAM.lower()}.cbl", hexdump_program()))
 
-    instrumented = _insert_driver(lines, artifact)
+    instrumented = insert_driver(lines, artifact)
     if checked.real_file_selects:
         from mockymock.splicer.real_files import insert_case_staging
 

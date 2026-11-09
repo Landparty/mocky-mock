@@ -2,8 +2,11 @@
 copybook search directories and the actionable did-you-mean hint on a
 CopybookNotFoundError."""
 
-from mockymock.cli.discovery import copybook_not_found_hint, effective_copybook_paths
 from mockymock.cli.main import main
+from mockymock.project.discovery import (
+    copybook_not_found_hint,
+    effective_copybook_paths,
+)
 
 
 def test_effective_copybook_paths_appends_copybooks_subdirectory(tmp_path):
@@ -177,7 +180,7 @@ def test_system_copybooks_follow_the_users_own_paths(tmp_path):
     """CICS's DFHAID / DFHBMSCA ship with mockymock: an application export
     never holds them, so ORDINQ's `COPY DFHAID` refused the whole suite
     (stress test 2026-11-02). They come last, so the user's copy wins."""
-    from mockymock.cli.discovery import SYSTEM_COPYBOOK_DIR, with_system_copybooks
+    from mockymock.project.discovery import SYSTEM_COPYBOOK_DIR, with_system_copybooks
 
     own = str(tmp_path)
     assert with_system_copybooks([own]) == [own, str(SYSTEM_COPYBOOK_DIR)]

@@ -3,7 +3,6 @@ from GOBACKs to the test out of a CALL of the driver's own entry."""
 
 from cobolparser import parse_cobol
 
-from mockymock.cli.main import mark_recursive
 from mockymock.dsl.model import MockTestCase, MockTestSuite
 from mockymock.splicer.driver import (
     CALL_FRAME_ENTRY,
@@ -11,6 +10,7 @@ from mockymock.splicer.driver import (
     call_frame_lines,
 )
 from mockymock.splicer.injector import build_terminator_neutralization
+from mockymock.splicer.insertion import mark_recursive
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.reset import reset_move_lines
 
@@ -114,7 +114,7 @@ def test_mark_recursive_finds_a_name_on_the_line_after_program_id():
 
 
 def test_the_end_of_program_trap_goes_before_a_nested_program():
-    from mockymock.cli.main import _insert_end_of_program_trap
+    from mockymock.splicer.insertion import _insert_end_of_program_trap
 
     lines = [
         "       IDENTIFICATION DIVISION.",

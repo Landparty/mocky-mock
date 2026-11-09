@@ -37,9 +37,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mockymock.cli.ai_mode import _UNIVERSAL_SECTION as UNIVERSAL_SECTION
-from mockymock.cli.ai_mode import CONFIG_KEY as _AI_MODE_KEY
-from mockymock.cli.ai_mode import MODES as _AI_MODES
+from mockymock.project.ai_mode import _UNIVERSAL_SECTION as UNIVERSAL_SECTION
+from mockymock.project.ai_mode import CONFIG_KEY as _AI_MODE_KEY
+from mockymock.project.ai_mode import MODES as _AI_MODES
 
 # A config file could in principle sit at the root of a deeply nested
 # monorepo checkout; this bounds the walk so a detached or networked
@@ -56,7 +56,7 @@ UNIVERSAL_FILE_NAMES = ("cobol.yml", "cobol.yaml")
 _STRING_LIST_KEY = "copybook_path"
 _INT_KEYS = ("seed",)
 _STRING_KEYS = ("test_root", "source_root", _AI_MODE_KEY)
-# Member-name aliasing (cli/copybook_aliases.py): a table of member name ->
+# Member-name aliasing (project/copybook_aliases.py): a table of member name ->
 # file, and the extensions a differently-cased file may carry.
 _ALIASES_KEY = "copybook_aliases"
 _EXTENSIONS_KEY = "copybook_extensions"
@@ -90,7 +90,7 @@ class MockymockConfig:
     copybook_path: tuple[str, ...] = field(default_factory=tuple)
     seed: int | None = None
     # How much the packaged AI assistant checks in while it builds a
-    # suite (mockymock/cli/ai_mode.py). None means "no ai_mode key
+    # suite (mockymock/project/ai_mode.py). None means "no ai_mode key
     # anywhere", which is distinct from the default mode being written
     # out explicitly -- `mockymock skills mode` reports the provenance,
     # so the two must stay distinguishable.
@@ -99,7 +99,7 @@ class MockymockConfig:
     # so `mockymock run` from a subdirectory still finds the same suites
     # as from the project root. "." with no config file means cwd.
     test_root: str = "."
-    # Where the programs live, for mirroring tests/ (cli/discovery.py).
+    # Where the programs live, for mirroring tests/ (project/discovery.py).
     # Absolute once read, like test_root; None means the project root.
     source_root: str | None = None
     # Every file that contributed, base (universal) first. `source` alone

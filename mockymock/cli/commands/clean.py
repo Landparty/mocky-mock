@@ -17,7 +17,7 @@ def _clean_candidates(target: Path, include_journal: bool) -> list[Path]:
     """Every artifact `clean` would remove under `target` (a `.cut`, a
     program, or a directory): `.mockymock/` contents, plus files the
     pre-#353 layout left next to a program or suite."""
-    from mockymock.cli.discovery import COBOL_SOURCE_EXTENSIONS
+    from mockymock.project.discovery import COBOL_SOURCE_EXTENSIONS
     from mockymock.report.artifacts import (
         ARTIFACT_DIR,
         KINDS,
@@ -110,11 +110,11 @@ def _cmd_clean(args: argparse.Namespace) -> int:
 
 
 def _clean_staged_aliases(target: Path, config) -> list[Path]:
-    """The copybook-alias staging directories (cli/copybook_aliases.py)
+    """The copybook-alias staging directories (project/copybook_aliases.py)
     built from files under `target` (a program or `.cut`: its folder), or
     under the config's copybook_path and copybook_aliases: copies of
     renamed copybooks in the system temp folder that outlive every run."""
-    from mockymock.cli.copybook_aliases import staged_directories_for
+    from mockymock.project.copybook_aliases import staged_directories_for
 
     roots = [target if target.is_dir() else target.parent]
     if config is not None:
@@ -125,7 +125,7 @@ def _clean_staged_aliases(target: Path, config) -> list[Path]:
 
 def _remove_staged_aliases(staged: list[Path], dry_run: bool) -> int:
     """Remove each staging directory and its manifest; the failure count."""
-    from mockymock.cli.copybook_aliases import manifest_path
+    from mockymock.project.copybook_aliases import manifest_path
 
     failed = 0
     for directory in staged:

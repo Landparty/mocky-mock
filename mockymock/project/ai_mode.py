@@ -22,7 +22,7 @@ again. `mockymock skills mode` reads it back (and `--set` writes it);
 `mockymock doctor` reports it alongside the config file it came from.
 
 This module is stdlib-only and imports nothing from the rest of
-mockymock at runtime -- `cli/config.py` imports `MODES`/`DEFAULT_MODE`
+mockymock at runtime -- `project/config.py` imports `MODES`/`DEFAULT_MODE`
 from here to validate the key, so the dependency may not point the other
 way.
 """
@@ -35,12 +35,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, see module docstring
-    from mockymock.cli.config import MockymockConfig
+    from mockymock.project.config import MockymockConfig
 
 CONFIG_KEY = "ai_mode"
 
 # The section of the universal `cobol.yml` that carries this tool's keys.
-# Declared here rather than in cli/config.py because that module already
+# Declared here rather than in project/config.py because that module already
 # imports from this one -- see the module docstring on the import direction.
 _UNIVERSAL_SECTION = "mockymock"
 

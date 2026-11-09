@@ -1,10 +1,10 @@
-"""mockymock/cli/discovery.py: sibling .cut/.cbl inference and
+"""mockymock/project/discovery.py: sibling .cut/.cbl inference and
 directory-wide .cut discovery. See
 docs/2026-09-15-cli-ergonomics-design.md."""
 
 import pytest
 
-from mockymock.cli.discovery import (
+from mockymock.project.discovery import (
     DiscoveryError,
     discover_cut_files,
     resolve_cut_path,

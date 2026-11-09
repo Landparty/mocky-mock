@@ -1,5 +1,5 @@
 """Docker-gated regression guard for the empirical finding behind
-mockymock.cli.mainframe_export.wrap_long_literal_lines: a literal split
+mockymock.engine.mainframe_export.wrap_long_literal_lines: a literal split
 across fixed-format continuation lines must hold exactly the value the
 unsplit literal held.
 
@@ -22,7 +22,7 @@ test."""
 
 import subprocess
 
-from mockymock.cli.mainframe_export import wrap_long_literal_lines
+from mockymock.engine.mainframe_export import wrap_long_literal_lines
 from mockymock.runtime import docker_toolchain, native_toolchain
 from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
 from mockymock.runtime.toolchain import active

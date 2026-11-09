@@ -1,18 +1,18 @@
-"""cli/copybook_aliases.py: copybooks exported under a name the search
+"""project/copybook_aliases.py: copybooks exported under a name the search
 cannot match as written (`gttlbi0a.copy` for COPY GTTLBI0A) are staged as
 `MEMBER.cpy`, automatically by case and extension or explicitly through
 `copybook_aliases`."""
 
 import pytest
 
-from mockymock.cli import copybook_aliases
-from mockymock.cli.config import ConfigError, load_config
-from mockymock.cli.copybook_aliases import (
+from mockymock.cli.main import main
+from mockymock.project import copybook_aliases
+from mockymock.project.config import ConfigError, load_config
+from mockymock.project.copybook_aliases import (
     DEFAULT_COPYBOOK_EXTENSIONS,
     automatic_aliases,
     stage_copybook_aliases,
 )
-from mockymock.cli.main import main
 
 
 def _write(path, text=""):

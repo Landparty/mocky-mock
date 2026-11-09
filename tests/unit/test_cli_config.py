@@ -1,10 +1,10 @@
-"""mockymock/cli/config.py: mockymock.toml / pyproject.toml
+"""mockymock/project/config.py: mockymock.toml / pyproject.toml
 [tool.mockymock] project configuration. See
 docs/2026-09-15-cli-ergonomics-design.md."""
 
 import pytest
 
-from mockymock.cli.config import (
+from mockymock.project.config import (
     ConfigError,
     MockymockConfig,
     load_config,

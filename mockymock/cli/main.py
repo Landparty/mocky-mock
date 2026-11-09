@@ -16,19 +16,8 @@ import sys
 
 from mockymock import __version__
 from mockymock.cli._common import _apply_config_to_args as _apply_config_to_args
-from mockymock.cli._common import _insert_driver as _insert_driver
-from mockymock.cli._common import (
-    _insert_driver_with_origins as _insert_driver_with_origins,
-)
-from mockymock.cli._common import (
-    _insert_end_of_program_trap as _insert_end_of_program_trap,
-)
 from mockymock.cli._common import _resolve_program_and_cut as _resolve_program_and_cut
 from mockymock.cli._common import _write_report_file as _write_report_file
-from mockymock.cli._common import (
-    comment_out_comment_entries as comment_out_comment_entries,
-)
-from mockymock.cli._common import mark_recursive as mark_recursive
 from mockymock.cli.commands.analyze import _cmd_analyze
 from mockymock.cli.commands.clean import _cmd_clean
 from mockymock.cli.commands.collect import (
@@ -1543,7 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--set",
         metavar="MODE",
         default=None,
-        # Not `choices=MODES`: that would need mockymock.cli.ai_mode
+        # Not `choices=MODES`: that would need mockymock.project.ai_mode
         # imported at parser-build time, and build_parser() runs on every
         # invocation including --help/--version. The valid set is spelled
         # out here instead and validated in _cmd_skills_mode;
@@ -1646,7 +1635,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    from mockymock.cli.config import ConfigError, load_config
+    from mockymock.project.config import ConfigError, load_config
 
     try:
         args._config = load_config()

@@ -103,7 +103,7 @@ def _cmd_skills_mode(args: argparse.Namespace) -> int:
     malformed config (it defines neither `copybook_path` nor `seed`), and
     this is the one `skills` leaf that actually reads it, so it reports
     the parse error itself the same way `doctor` does."""
-    from mockymock.cli.ai_mode import (
+    from mockymock.project.ai_mode import (
         ModeError,
         format_mode_json,
         format_mode_report,
@@ -111,7 +111,7 @@ def _cmd_skills_mode(args: argparse.Namespace) -> int:
         validate,
         write_mode,
     )
-    from mockymock.cli.config import ConfigError, load_config
+    from mockymock.project.config import ConfigError, load_config
 
     try:
         config = load_config()

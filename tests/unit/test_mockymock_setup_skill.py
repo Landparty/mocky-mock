@@ -8,8 +8,8 @@ skill's maintainer note says to check those by hand.)"""
 import re
 from pathlib import Path
 
-from mockymock.cli import ai_mode, config
 from mockymock.cli.skills_cmd import SKILL_NAMES, SKILLS_ROOT
+from mockymock.project import ai_mode, config
 
 SKILL = SKILLS_ROOT / "mockymock-setup"
 SETTINGS = (SKILL / "reference" / "settings.md").read_text(encoding="utf-8")

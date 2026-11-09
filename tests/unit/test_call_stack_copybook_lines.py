@@ -6,8 +6,8 @@ right in a program with a WORKING-STORAGE COPY."""
 from __future__ import annotations
 
 from mockymock._lines import read_utf8_source, split_source_lines
-from mockymock.cli.checks import run_static_checks
 from mockymock.debug.call_stack import ParagraphIndex
+from mockymock.engine.checks import run_static_checks
 from mockymock.report.coverage import build_original_line_map
 
 COPYBOOK = "".join(

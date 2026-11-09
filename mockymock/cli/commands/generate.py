@@ -52,13 +52,13 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     its `unmocked_reasons`, docs/2026-09-15-actionable-refusals-and-fill-design.md)
     rather than re-running reachability analysis independently, so
     `--fill` and `lint` can never disagree about what's missing."""
-    from mockymock.cli.checks import run_static_checks
     from mockymock.dsl.parser import (
         _END_MOCK_RE,
         _MOCK_BARE_RE,
         _MOCK_QUOTED_RE,
         _PERFORM_RE,
     )
+    from mockymock.engine.checks import run_static_checks
 
     if not _check_input_files("mockymock generate", cut_path):
         return 1
@@ -273,7 +273,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
-    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.fixture_bundle import (
         FixtureBundle,
         UnsupportedBundleVersionError,
@@ -281,6 +280,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle_file,
     )
     from mockymock.dsl.generator import ProgramContext, scaffold_cut
+    from mockymock.project.discovery import copybook_not_found_hint
     from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
@@ -502,7 +502,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    # See mockymock/cli/checks.py::run_static_checks for why PROCESS/CBL
+    # See mockymock/engine/checks.py::run_static_checks for why PROCESS/CBL
     # precompiler directives must be stripped before normalizing here too.
     lines = split_source_lines(
         normalize_fixed_format(
@@ -847,8 +847,8 @@ def _note_pending_stubs(command: str, cut_text: str) -> None:
     comments: `generate` leaves them out of its "asserts nothing" warning,
     while `lint` reports them as NO_ASSERTION until the stubs are recorded,
     so without this line the two counts disagree with no explanation."""
-    from mockymock.cli.checks import stub_case_lines
     from mockymock.dsl.parser import CutParseError, parse_cut
+    from mockymock.engine.checks import stub_case_lines
 
     try:
         suite = parse_cut(cut_text)
@@ -879,7 +879,7 @@ def _refused_cases(source_path: Path, cut_path: Path, cut_text: str, args) -> in
     """How many of `cut_text`'s test cases `lint` refuses (all of them on a
     whole-program refusal), checked through a scratch copy at `cut_path`'s
     location."""
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
 
     scratch = cut_path.with_name(f".{cut_path.name}.main-line-check")
     try:
@@ -925,7 +925,7 @@ def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
     unsafe STOP RUN (UNSUPPORTED_TERMINATOR_LAYOUT) is known to be unusable
     here, not only at the next `lint`/`run`. Mirrors `--fill`'s own closing
     check; UNMOCKED_* refusals are left to `generate --fill`."""
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
 
     checked = run_static_checks(source_path, cut_path, args.copybook_path)
     per_case = {

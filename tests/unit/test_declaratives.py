@@ -83,14 +83,14 @@ def test_a_use_naming_no_select_is_unsupported():
 def test_the_driver_goes_after_end_declaratives():
     from types import SimpleNamespace
 
-    from mockymock.cli.main import _insert_driver
+    from mockymock.splicer.insertion import insert_driver
 
     artifact = SimpleNamespace(
         working_storage_lines=["01  UT-X PIC X."],
         procedure_lines=["       UT-DRIVER.", "           STOP RUN."],
         program_end=False,
     )
-    lines = _insert_driver(DECL.splitlines(), artifact)
+    lines = insert_driver(DECL.splitlines(), artifact)
     end = next(i for i, line in enumerate(lines) if "END DECLARATIVES" in line)
     driver = lines.index("       UT-DRIVER.")
     assert driver > end

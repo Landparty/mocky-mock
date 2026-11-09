@@ -1,10 +1,10 @@
-"""mockymock/cli/ai_mode.py: the AI assistant modes the packaged skill
+"""mockymock/project/ai_mode.py: the AI assistant modes the packaged skill
 operates under. See docs/2026-09-16-ai-assistant-modes-design.md."""
 
 import pytest
 
-from mockymock.cli import ai_mode
-from mockymock.cli.config import ConfigError, load_config
+from mockymock.project import ai_mode
+from mockymock.project.config import ConfigError, load_config
 
 
 def test_every_mode_has_a_full_contract():
@@ -172,8 +172,8 @@ def test_write_mode_never_clobbers_a_config_file_it_did_not_load(tmp_path):
 
 
 # Regression: bug hunt round 12.
-from mockymock.cli.ai_mode import resolve_mode
-from mockymock.cli.config import MockymockConfig
+from mockymock.project.ai_mode import resolve_mode
+from mockymock.project.config import MockymockConfig
 
 # --- ai_mode provenance ---------------------------------------------------
 
@@ -194,7 +194,7 @@ def test_ai_mode_origin_is_the_file_that_set_it(tmp_path):
 
 def test_load_config_records_where_ai_mode_came_from(tmp_path):
     pytest.importorskip("cobolparser.config")
-    from mockymock.cli.config import load_config
+    from mockymock.project.config import load_config
 
     (tmp_path / "cobol.yml").write_text("mockymock:\n  ai_mode: hands-off\n")
     (tmp_path / "mockymock.toml").write_text("seed = 3\n")

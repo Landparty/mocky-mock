@@ -15,10 +15,10 @@ from mockymock.analysis.real_programs import (
     matched_directive_ids,
     prepare_real_program,
 )
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.module_suite import RealLink, link_real_programs
 from mockymock.dsl.parser import CutParseError, parse_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.driver import DriverArtifact
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.real_programs import (

@@ -16,7 +16,7 @@ nothing -- ordinary `run` output is unaffected.
 (`splicer.cics_eib.working_storage_lines`, see
 docs/2026-08-27-cics-eib-linkage-support-design.md): appended verbatim to
 this function's own bookkeeping fields, so it reaches the same
-`DriverArtifact.working_storage_lines` -> `cli._common._insert_driver`
+`DriverArtifact.working_storage_lines` -> `splicer.insertion.insert_driver`
 insertion point with no separate splice mechanism needed.
 """
 
@@ -199,7 +199,7 @@ VALUE_END_MARKER = "__MOCKYMOCK__ VALUE-END"
 _VALUE_END_DISPLAY = f'               DISPLAY "{VALUE_END_MARKER}"'
 
 
-#: The SECTION `cli._common._insert_driver` appends after the program's last
+#: The SECTION `splicer.insertion.insert_driver` appends after the program's last
 #: paragraph. Nothing PERFORMs it and the driver STOP RUNs before reaching
 #: it, so control only arrives by running past the end of the program's
 #: own code: a GO TO that left the PERFORMed range (a bare `PERFORM X`
@@ -237,13 +237,13 @@ def end_of_program_lines_for(program_end: bool) -> list[str]:
 class DriverArtifact:
     working_storage_lines: list[str]
     procedure_lines: list[str]
-    # `build_driver(program_end=...)`: `cli._common._insert_driver` appends
+    # `build_driver(program_end=...)`: `splicer.insertion.insert_driver` appends
     # the `UT-PROGRAM-END` paragraph after the program's last one.
     program_end: bool = False
     # `build_driver(call_frame=True)`: each case's PERFORM runs inside a
     # CALL of the program's own `CALL_FRAME_ENTRY`, so a terminator planned
     # with exit_kind "RETURN" can GOBACK to the case from any PERFORM depth;
-    # `cli._common._insert_driver` marks the PROGRAM-ID RECURSIVE.
+    # `splicer.insertion.insert_driver` marks the PROGRAM-ID RECURSIVE.
     call_frame: bool = False
 
 

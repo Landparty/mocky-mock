@@ -72,7 +72,7 @@ def _check_cobol_parser() -> Check:
 
 
 def _check_config_file() -> Check:
-    from mockymock.cli.config import ConfigError, load_config
+    from mockymock.project.config import ConfigError, load_config
 
     try:
         config = load_config()
@@ -107,7 +107,7 @@ def _check_config_file() -> Check:
 
 def _check_ai_mode() -> Check:
     """Which AI assistant mode the packaged skill is operating under here
-    (`mockymock/cli/ai_mode.py`). Always `OK` -- every mode is a valid
+    (`mockymock/project/ai_mode.py`). Always `OK` -- every mode is a valid
     way to work, so this reports, it doesn't judge, and `ready` is never
     affected by it. It earns its line because `doctor` is the first
     command the skill runs against a new program: the mode is a property
@@ -119,8 +119,8 @@ def _check_ai_mode() -> Check:
     by its own tests, and a one-shot command re-reading one small TOML
     file is cheaper than the coupling.
     """
-    from mockymock.cli.ai_mode import DEFAULT_MODE, resolve_mode
-    from mockymock.cli.config import ConfigError, load_config
+    from mockymock.project.ai_mode import DEFAULT_MODE, resolve_mode
+    from mockymock.project.config import ConfigError, load_config
 
     try:
         config = load_config()

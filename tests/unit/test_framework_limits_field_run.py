@@ -13,11 +13,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest import mock
 
-from mockymock.cli.discovery import effective_copybook_paths
-from mockymock.cli.main import _insert_driver_with_origins, main
+from mockymock.cli.main import main
 from mockymock.dsl.parser import parse_cut
+from mockymock.project.discovery import effective_copybook_paths
 from mockymock.runtime.docker_toolchain import run_binary
 from mockymock.splicer.driver import END_OF_PROGRAM_TRAP
+from mockymock.splicer.insertion import insert_driver_with_origins
 from tests.unit.test_docker_toolchain import _completed, _work
 
 _THRU_PROGRAM = """\
@@ -90,7 +91,7 @@ def test_end_of_program_trap_follows_the_last_paragraph():
         "           DISPLAY 'A'.",
         "       END PROGRAM P.",
     ]
-    result, inserted = _insert_driver_with_origins(lines, _artifact())
+    result, inserted = insert_driver_with_origins(lines, _artifact())
     header = result.index(f"       {END_OF_PROGRAM_TRAP} SECTION.")
     assert result.index("           DISPLAY 'A'.") < header
     assert result[-1] == "       END PROGRAM P."
@@ -110,7 +111,7 @@ def test_end_of_program_trap_closes_an_unterminated_last_sentence():
         "           DISPLAY 'A'",
         "      *    a trailing comment line",
     ]
-    result, _ = _insert_driver_with_origins(lines, _artifact())
+    result, _ = insert_driver_with_origins(lines, _artifact())
     header = result.index(f"       {END_OF_PROGRAM_TRAP} SECTION.")
     assert "           ." in result[:header]
 

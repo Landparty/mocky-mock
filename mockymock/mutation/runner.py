@@ -129,8 +129,7 @@ def _run_suite_once(
         needs_call_frame,
         program_end_thru,
     )
-    from mockymock.cli._common import _insert_driver
-    from mockymock.cli.checks import (
+    from mockymock.engine.checks import (
         REAL_CALL_UNSUPPORTED,
         extra_reset_lines_for,
         extra_working_storage,
@@ -143,6 +142,7 @@ def _run_suite_once(
     from mockymock.runtime.toolchain import active as active_toolchain
     from mockymock.splicer import cics_eib
     from mockymock.splicer.driver import build_driver
+    from mockymock.splicer.insertion import insert_driver
     from mockymock.splicer.linkage import extra_reset_lines
     from mockymock.splicer.naming import TallyRegistry
     from mockymock.splicer.orchestrator import splice_program
@@ -223,7 +223,7 @@ def _run_suite_once(
             program_end=program_end_thru(result.ast, terminator_plans),
             call_frame=needs_call_frame(terminator_plans),
         )
-        instrumented = _insert_driver(lines, artifact)
+        instrumented = insert_driver(lines, artifact)
 
         instrumented_path = tmp / f"instrumented_{source_name}"
         instrumented_path.write_text(
@@ -584,7 +584,7 @@ def run_mutation(
             None,
             all_notes,
         )
-    from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+    from mockymock.engine.checks import REAL_CALL_UNSUPPORTED
 
     if baseline.phase == "checks" and baseline.detail == REAL_CALL_UNSUPPORTED:
         # Not a red suite: mutate cannot link USE REAL CALL programs yet.
@@ -720,7 +720,7 @@ def _equivalent_mutants(
     ]
     if not candidates:
         return {}
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
     from mockymock.mutation.equivalence import equivalence_reason
 
     try:
@@ -785,7 +785,7 @@ def _attach_zero_baseline_hints(
     candidates = [r for r in survivors if r.mutant.operator == "arith-verb-swap"]
     if not candidates:
         return
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
     from mockymock.mutation.zero_baseline import zero_baseline_hint
 
     try:

@@ -1,14 +1,14 @@
-"""Unit tests for the shared static-check pipeline (`mockymock.cli.checks`)
+"""Unit tests for the shared static-check pipeline (`mockymock.engine.checks`)
 extracted per docs/2026-07-18-cut-lint-command-design.md."""
 
 from pathlib import Path
 
-from mockymock.cli.checks import (
+from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import (
     extra_working_storage,
     filter_suite_cases,
     run_static_checks,
 )
-from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.linkage import DISCARD_POINTER
 from mockymock.splicer.reset import reset_move_lines
 

@@ -1,11 +1,11 @@
 """Docker-gated regression guard for the empirical finding behind
-mockymock.cli.mainframe_export.wrap_long_display_lines (see
+mockymock.engine.mainframe_export.wrap_long_display_lines (see
 docs/2026-08-03-mainframe-export-command-design.md, Adjustment 2b):
 splitting a long generated DISPLAY into `WITH NO ADVANCING` fragments
 must not change what actually prints, or the __MOCKYMOCK__ stdout
 protocol silently breaks."""
 
-from mockymock.cli.mainframe_export import wrap_long_display_lines
+from mockymock.engine.mainframe_export import wrap_long_display_lines
 from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
 from mockymock.runtime.toolchain import active
 from tests.integration._docker import requires_docker

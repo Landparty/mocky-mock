@@ -23,19 +23,19 @@ mockymock setup     -> runtime.docker_toolchain only (build image, start contain
 mockymock init      -> _cmd_generate(--with-data) then _cmd_run(--record-expectations), reentrant  (records iff the Docker daemon is up; run builds a missing toolchain image -- vscode#103)
 mockymock generate  -> parse -> analysis.mock_surface -> dsl.generator  (no Docker)
 mockymock fixtures  -> parse -> cobolparser.ProgramFixtureGenerator -> JSON on stdout  (no Docker, no mockymock analysis at all)
-mockymock run       -> cli.checks (static) -> splicer -> runtime -> report
-mockymock debug     -> cli.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
-mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: cli.checks -> splicer -> runtime) -> mutation.report
-mockymock lint      -> cli.checks only  (no Docker, structural guarantee)
+mockymock run       -> engine.checks (static) -> splicer -> runtime -> report
+mockymock debug     -> engine.checks (static) -> splicer -> runtime (debug=True) -> debug.adapter (DAP over stdio)
+mockymock mutate    -> mutation.operators (no Docker with --list) -> mutation.runner (per-mutant: engine.checks -> splicer -> runtime) -> mutation.report
+mockymock lint      -> engine.checks only  (no Docker, structural guarantee)
 mockymock collect   -> dsl.parser only  (no Docker, no .cbl needed; --boundaries also parses program via analysis.mock_surface)
 mockymock explain   -> analysis.refusal.REFUSAL_EXPLANATIONS only  (no Docker, no parsing at all)
 mockymock dashboard -> web.server (loopback HTTP) -> runtime.status.probe()  (read-only Docker)
 mockymock doctor    -> cli.doctor -> runtime.status.probe() + cobol-parser/config/ai_mode checks  (no Docker mutation, no HTTP)
 mockymock analyze   -> sys.argv monkeypatch -> cobolparser.cli.parse.main() (no Docker, pure pass-through)
-mockymock export    -> cli.checks (static) -> splicer -> cli.mainframe_export (no Docker)
+mockymock export    -> engine.checks (static) -> splicer -> engine.mainframe_export (no Docker)
 mockymock skills    -> skills_cmd (install: no Docker, no parsing -- a copytree)
-                       cli.ai_mode (mode: reads/writes the config file's ai_mode key)
-mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + cli.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
+                       project.ai_mode (mode: reads/writes the config file's ai_mode key)
+mockymock report    -> report.test_report.build_report (parse + cobolparser analyzers + engine.checks; --execute/--mutate re-invoke run/mutate as subprocesses) -> report.html_report
 mockymock journal   -> report.journal.append_entry only  (no Docker, no parsing)
 mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved results)
 mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integration-test jobs, runs `run --record-baseline/--baseline` or `--record-expectations` + `--json-report` per suite as child processes)
@@ -57,7 +57,7 @@ mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integrati
   `_report_broken_claims`, the console notes (`_print_linkage_neutralization`,
   `_print_cics_eib_synthesis`, `_report_unsupported_boundaries`,
   `_warn_asserting_nothing`, `_distinct_case_count`) and the whole
-  driver-insertion splice (`_insert_driver`, `_insert_driver_with_origins`,
+  driver-insertion splice (`insert_driver`, `insert_driver_with_origins`,
   `mark_recursive`, `comment_out_comment_entries`,
   `_insert_end_of_program_trap`, ...), which `mutation/runner.py` also uses.
 * `cli/commands/<name>.py` -- one module per subcommand or family:
@@ -151,7 +151,7 @@ decision to make for the user.
 ## Argument resolution (2026-09-15)
 
 Before dispatch, `main()` loads the project config file
-(`mockymock/cli/config.py`'s `load_config()`: the `cobol.yml` and
+(`mockymock/project/config.py`'s `load_config()`: the `cobol.yml` and
 `mockymock.toml` / `[tool.mockymock]` layers above, searched from cwd upward)
 and stashes it on `args._config`; a malformed file is `ConfigError`, caught in
 `main()`. Only a subcommand that would read the config (one whose
@@ -172,7 +172,7 @@ suites as from the project root.
 `run`/`debug`/`lint`/`mutate`/`export` no longer require both `program` and
 `--cut`: `_resolve_program_and_cut()` (`cli/_common.py`) fills in whichever one
 is missing from its same-stem sibling file via
-`mockymock/cli/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
+`mockymock/project/discovery.py`'s `resolve_program_path`/`resolve_cut_path`
 (mirrors mocky-mock-vscode's `resolveCblPath`/`resolveCutPath`). A `.cut`
 passed as the program positional is taken as `--cut` (2026-10-26; `run`
 alone did this from b96e91a). `run`/`lint`
@@ -289,7 +289,7 @@ exists trivially and would turn every COPY-bearing program into an
 implicit copybook search even with nothing configured — see the
 docstring on `effective_copybook_paths` for the regression this would
 cause). A `CopybookNotFoundError` raised by `expand_copybooks` (in
-`cli/checks.py`'s shared `run_static_checks`, and in `_cmd_generate`/
+`engine/checks.py`'s shared `run_static_checks`, and in `_cmd_generate`/
 `_cmd_fixtures`'s own separate `expand_copybooks` calls) gets one
 appended continuation line from `discovery.copybook_not_found_hint()`
 naming both remedies (`--copybook-path`, the config file). See
@@ -645,7 +645,7 @@ A baseline file that cannot be read exits 2 before anything compiles.
 
 Since the lint extraction (docs/2026-07-18-cut-lint-command-design.md), every
 pre-toolchain check (steps 2-10 below) lives in
-`mockymock/cli/checks.py::run_static_checks` and runs **before**
+`mockymock/engine/checks.py::run_static_checks` and runs **before**
 `ensure_toolchain()` — a bad `.cut`/`.cbl` fails fast with the real problem
 even when Docker is down. `run` and `lint` share this function so they can
 never disagree about what refuses.
@@ -876,7 +876,7 @@ Flow (`_cmd_run`), in strict order (each step's ordering is load-bearing):
     here -- omitted (`{}`) entirely when the flag isn't set, so ordinary
     `run` is unaffected. See [analysis](analysis.md), [splicer](splicer.md),
     and docs/2026-08-04-record-expectations-design.md.
-13. `_insert_driver(lines, artifact)` splices the driver in: WORKING-STORAGE
+13. `insert_driver(lines, artifact)` splices the driver in: WORKING-STORAGE
     additions go immediately after the `WORKING-STORAGE SECTION` header line;
     procedure lines go after the `PROCEDURE DIVISION` header's period
     (the header's first line, or the later line a wrapped header ends on:
@@ -1624,7 +1624,7 @@ exempt in every pass: columns 73+ are the identification field and are never com
 hint asserting the line "typically comes from a `.cut` file's MOCK body text" — true for one of the
 three real sources, and actively misleading for the other two, since the same overflow arises from
 mockymock's OWN generated driver/reset code, which exists in neither input file and which no `.cut`
-edit can shorten. `SourceAttribution` is built from `_insert_driver_with_origins`' inserted-line
+edit can shorten. `SourceAttribution` is built from `insert_driver_with_origins`' inserted-line
 indices plus exact stripped-text lookups in the `.cut` and `.cbl`, so an attribution is a fact ("this
 text is on line 12 of PROG.cut"), never an inference — and text in neither file is reported as
 mockymock-generated instrumentation rather than blamed on either.
@@ -1720,7 +1720,7 @@ program, `.cut`, copybook directories (name/size/mtime of each file) and
 mockymock version (issue #352); the step summary says it reused them.
 `--rerun` (`ReportOptions.reuse=False`) always runs. A reused run with no
 saved coverage leaves the coverage step `skipped` with that reason. Without any of them the report is
-static: lint (`cli.checks.run_static_checks`), flow, rules, scenarios,
+static: lint (`engine.checks.run_static_checks`), flow, rules, scenarios,
 dialect risks, and a verification level no higher than L0.
 
 `--cut` defaults to `<program stem>.cut`; `--journal` to
@@ -1810,14 +1810,14 @@ skill checks in with the developer while it builds a suite. Three modes
 on one axis, most-supervised first: `hands-on` (propose, wait for a yes
 before each change), `guided` (the default — narrate every step, stop at
 the checkpoints), `hands-off` (run the loop end to end, report once).
-`mockymock/cli/ai_mode.py` owns the vocabulary (`MODES`, `DEFAULT_MODE`,
+`mockymock/project/ai_mode.py` owns the vocabulary (`MODES`, `DEFAULT_MODE`,
 a `ModeContract` per mode, `ALWAYS_ASK`), the `ResolvedMode`
 value+provenance pair, both formatters, and the config-file write. Full
 rationale in
 [docs/2026-09-16-ai-assistant-modes-design.md](../docs/2026-09-16-ai-assistant-modes-design.md).
 
 The mode lives in the project config file as `ai_mode` (validated in
-`cli/config.py`, which imports `MODES`/`CONFIG_KEY` from `ai_mode` — the
+`project/config.py`, which imports `MODES`/`CONFIG_KEY` from `ai_mode` — the
 dependency may not point the other way, and `ai_mode` is stdlib-only for
 that reason). `MockymockConfig.ai_mode is None` means *no key anywhere*,
 deliberately distinct from a file spelling out the default: `skills mode`
@@ -1854,7 +1854,7 @@ single command. `mockymock dashboard` regressed this once by importing
 now pins it in a subprocess.
 
 **`mockymock skills mode --set` deliberately doesn't use `choices=MODES`.**
-`argparse`'s `choices` would need `mockymock.cli.ai_mode` imported inside
+`argparse`'s `choices` would need `mockymock.project.ai_mode` imported inside
 `build_parser()`, which the rule above forbids. The valid set is spelled
 out in the flag's help text and validated inside `_cmd_skills_mode`
 instead; `tests/unit/test_cli_skills.py` pins the help text against
@@ -1870,7 +1870,7 @@ restores `choices=` also restores the import.
 
 **`annotate_nested_sites` ordering is load-bearing in both `generate` and `run`.** It must run before anything inspects `surface.boundary_sites` for nested spliceability (`_report_unsupported_boundaries` in `generate`; every refusal check and `splice_program` in `run`). An unannotated nested site is indistinguishable from an unspliceable one, so calling this late produces false-positive refusals.
 
-**`_insert_driver` finds section/division headers with `splicer/headers.py`** (`is_procedure_division`, `is_data_division`, `is_working_storage`: the two words on one line with any whitespace between them (#305), or the first word alone on its line and the second opening the next code line). The driver goes after the line holding the header's period, so NIST NC113M's `PROCEDURE` / `DIVISION` / `.` (three lines) gets it; before 2026-11-02 that header was missed, no driver was inserted, and the program ran its own main line outside every case (a real CLOSE failed with status 42). `splicer/real_programs.py` and `splicer/sqlca.py` use the same helpers.
+**`insert_driver` finds section/division headers with `splicer/headers.py`** (`is_procedure_division`, `is_data_division`, `is_working_storage`: the two words on one line with any whitespace between them (#305), or the first word alone on its line and the second opening the next code line). The driver goes after the line holding the header's period, so NIST NC113M's `PROCEDURE` / `DIVISION` / `.` (three lines) gets it; before 2026-11-02 that header was missed, no driver was inserted, and the program ran its own main line outside every case (a real CLOSE failed with status 42). `splicer/real_programs.py` and `splicer/sqlca.py` use the same helpers.
 
 # See Also
 

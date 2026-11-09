@@ -4,8 +4,8 @@ copybook-expanded source."""
 
 from __future__ import annotations
 
-from mockymock.cli.checks import source_line_relabeler
 from mockymock.cli.main import main
+from mockymock.engine.checks import source_line_relabeler
 
 COPYBOOK = "".join(
     f"           05 CUST-F{n}            PIC X(2).\n" for n in range(1, 7)

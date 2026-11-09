@@ -13,10 +13,10 @@ def _cmd_suites(args: argparse.Namespace) -> int:
     every suite tests (and by which lookup rule), or with PROGRAM, that
     program's suites plus where a new one would go. Docker-free and
     parse-free; the VS Code extension pairs files with this rather than
-    its own copy of the rules. See cli/discovery.py."""
+    its own copy of the rules. See project/discovery.py."""
     import json
 
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         DiscoveryError,
         default_suite_path,
         find_suites,

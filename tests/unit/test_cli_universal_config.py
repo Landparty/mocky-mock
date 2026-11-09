@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import pytest
 
-from mockymock.cli.ai_mode import ModeError, resolve_mode, write_mode
-from mockymock.cli.config import (
+from mockymock.project.ai_mode import ModeError, resolve_mode, write_mode
+from mockymock.project.config import (
     ConfigError,
     MockymockConfig,
     find_universal_config,

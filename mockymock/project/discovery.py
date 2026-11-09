@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mockymock.cli.config import MockymockConfig
+    from mockymock.project.config import MockymockConfig
 
 # Order matters: .cbl is tried before .cob when both would exist (they
 # never should for the same stem, but the order is deterministic either

@@ -26,8 +26,8 @@ from mockymock.analysis.refusal import (
     check_whole_program_scoped,
     union_executed_paragraphs,
 )
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 
 # RECOVER has no registered statement parser (it is one of the three
 # verb-shaped reserved words left in cobolparser's UNSUPPORTED_VERBS after
