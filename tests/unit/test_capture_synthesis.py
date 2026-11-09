@@ -214,10 +214,12 @@ def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
     inflating the score.
 
     This is a source-shape guard rather than a behavioural one because the
-    four pipelines each assemble their own `reset_lines` before a compile
-    that needs Docker -- and the way this broke once already was exactly
-    that: a merge restored one of the four call sites from a revision that
-    predated the capture resets, and nothing failed."""
+    resets feed a compile that needs Docker -- and the way this broke once
+    already was exactly that: a merge restored one of the four pipelines'
+    own copies of the reset assembly from a revision that predated the
+    capture resets, and nothing failed. The assembly now lives once, in
+    `engine.build`; the guard checks that it still resets the captures and
+    that every pipeline builds through it rather than a copy of its own."""
     import ast as _ast
     from pathlib import Path
 
@@ -231,6 +233,14 @@ def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
         )
 
     root = Path(__file__).resolve().parents[2] / "mockymock"
+    engine = _ast.parse((root / "engine" / "build.py").read_text(encoding="utf-8"))
+    builds = _calls(engine, "reset_move_lines")
+    assert builds == 1, "engine.build should assemble reset_lines exactly once"
+    assert _calls(engine, "extra_reset_lines_for") == builds, (
+        "engine.build assembles reset_lines without the synthesized CAPTURE "
+        "target resets"
+    )
+
     commands = root / "cli" / "commands"
     for path in (
         commands / "run.py",
@@ -239,12 +249,11 @@ def test_every_pipeline_that_builds_reset_lines_resets_the_captures():
         root / "mutation" / "runner.py",
     ):
         tree = _ast.parse(path.read_text(encoding="utf-8"))
-        builds = _calls(tree, "reset_move_lines")
-        resets = _calls(tree, "extra_reset_lines_for")
-        assert builds > 0, f"{path} no longer assembles reset_lines at all"
-        assert builds == resets, (
-            f"{path} assembles reset_lines {builds} time(s) but appends the "
-            f"synthesized CAPTURE target resets {resets} time(s)"
+        assert _calls(tree, "build_instrumented") > 0, (
+            f"{path} no longer builds through engine.build_instrumented"
+        )
+        assert _calls(tree, "reset_move_lines") == 0, (
+            f"{path} assembles its own reset_lines again; use engine.build"
         )
 
 

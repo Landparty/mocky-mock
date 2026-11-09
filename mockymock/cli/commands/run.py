@@ -23,9 +23,8 @@ from mockymock.cli._common import (
     _several_suites,
     _write_report_file,
 )
+from mockymock.engine.build import BuildOptions, build_instrumented
 from mockymock.report.artifacts import fingerprint
-from mockymock.report.record_rewrite import numeric_edited_fields
-from mockymock.splicer.insertion import insert_driver
 
 
 def _write_failure_reports(
@@ -611,18 +610,9 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     import json
 
     from mockymock._decimal import decimal_point_is_comma
-    from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import (
-        find_goto_exit_plans,
-        find_terminator_plans,
-        needs_call_frame,
-        program_end_thru,
-    )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
     from mockymock.dsl.model import MockCategory
     from mockymock.engine.checks import (
-        extra_reset_lines_for,
-        extra_working_storage,
         run_static_checks,
     )
     from mockymock.report.coverage import (
@@ -652,7 +642,6 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         address_fields,
         build_recording_report,
         clock_value_fields,
-        condition_names,
         field_pictures,
         rewrite_cut_text,
     )
@@ -666,14 +655,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.runtime.toolchain import active as active_toolchain
-    from mockymock.splicer import cics_eib
-    from mockymock.splicer.driver import build_driver
-    from mockymock.splicer.linkage import extra_reset_lines
-    from mockymock.splicer.naming import TallyRegistry
-    from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import index_names, reset_move_lines
-    from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+    from mockymock.splicer.reset import index_names
 
     toolchain = active_toolchain()
 
@@ -789,8 +771,6 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     surface = checked.surface
     lines = checked.lines
     scope_map = checked.scope_map
-    linkage = checked.linkage
-    cics_eib_plan_ = checked.cics_eib
     assert (
         result is not None
         and suite is not None
@@ -844,50 +824,6 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
             print(f"mockymock run: --baseline: {exc}")
             return 2
 
-    boundaries = collect_boundaries(result.ast)
-    registry = TallyRegistry(suite)
-    terminator_plans, _ = find_terminator_plans(
-        surface, result.ast, suite, scope_map, lines
-    )
-    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
-    flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
-    lines = splice_program(
-        lines,
-        boundaries,
-        surface,
-        suite,
-        registry,
-        terminator_plans,
-        flow_plans,
-        checked.file_status_fields,
-        goto_exit_plans=goto_exit_plans,
-        trace=args.trace,
-        fallthrough_traps=checked.fallthrough_traps,
-        behaviour=behaviour,
-    )
-    lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
-
-    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
-    if linkage is not None:
-        # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
-        # the LINKAGE section in `result.ast` still (the transform edited
-        # text, not the AST), so `reset_move_lines`'s WORKING-STORAGE walk
-        # never sees them -- add their reset lines explicitly.
-        reset_lines = reset_lines + extra_reset_lines(linkage)
-    if cics_eib_plan_ is not None:
-        reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
-    reset_lines = reset_lines + extra_reset_lines_for(checked)
-    real_programs = checked.real_programs
-    if real_programs:
-        from mockymock.splicer.real_programs import (
-            cancel_lines,
-            instrument_real_program,
-            share_driver_state,
-        )
-
-        # Every real program starts each case from its VALUE clauses.
-        reset_lines = reset_lines + cancel_lines([p.spec for p in real_programs])
-
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
     # the POST-filter `suite` (--case/--tag already applied by
@@ -906,50 +842,20 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         for stub in stub_scan.stubs:
             record_targets.setdefault(stub.case_index, []).append(stub.data_name)
 
-    record_conditions = condition_names(result.ast) if record_targets else set()
-    from mockymock.splicer.behaviour import returned_items
-
-    artifact = build_driver(
-        suite,
-        reset_lines,
-        registry,
-        record_targets=record_targets,
-        extra_working_storage_lines=extra_working_storage(checked),
-        snapshot=checked.snapshot,
-        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
-        program_end=program_end_thru(result.ast, terminator_plans),
-        call_frame=needs_call_frame(terminator_plans),
-        condition_names=record_conditions,
-        behaviour=behaviour,
-        returned=returned_items(result.ast) if behaviour else (),
+    built = build_instrumented(
+        checked,
+        BuildOptions(
+            copybook_paths=args.copybook_path,
+            trace=args.trace,
+            behaviour=behaviour,
+            record_targets=record_targets,
+        ),
+        lines=lines,
     )
-
-    real_sources: list[tuple[str, list[str]]] = []
-    if real_programs:
-        # USE REAL CALL: the programs share the driver's bookkeeping
-        # (EXTERNAL items) and are compiled into the same binary.
-        artifact, shared_ws = share_driver_state(artifact, registry)
-        for prepared in real_programs:
-            real_sources.append(
-                (
-                    f"real_{prepared.program_id.upper()}.cbl",
-                    instrument_real_program(
-                        prepared,
-                        suite,
-                        registry,
-                        shared_ws,
-                        args.copybook_path,
-                        trace=args.trace,
-                        behaviour=behaviour,
-                    ),
-                )
-            )
-    if behaviour:
-        from mockymock.splicer.behaviour import HEXDUMP_PROGRAM, hexdump_program
-
-        real_sources.append((f"{HEXDUMP_PROGRAM.lower()}.cbl", hexdump_program()))
-
-    instrumented = insert_driver(lines, artifact)
+    record_conditions = built.condition_names
+    real_programs = checked.real_programs
+    real_sources = built.extra_sources
+    instrumented = built.source()
     if checked.real_file_selects:
         from mockymock.splicer.real_files import insert_case_staging
 

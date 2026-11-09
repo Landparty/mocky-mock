@@ -11,8 +11,7 @@ from mockymock.cli._common import (
     _print_linkage_neutralization,
     _resolve_program_and_cut,
 )
-from mockymock.report.record_rewrite import numeric_edited_fields
-from mockymock.splicer.insertion import insert_driver
+from mockymock.engine.build import BuildOptions, build_instrumented
 
 
 def _cmd_debug(args: argparse.Namespace) -> int:
@@ -25,13 +24,6 @@ def _cmd_debug(args: argparse.Namespace) -> int:
 
     import sys
 
-    from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import (
-        find_goto_exit_plans,
-        find_terminator_plans,
-        needs_call_frame,
-        program_end_thru,
-    )
     from mockymock.debug.adapter import DapAdapter, DebugSession
     from mockymock.debug.call_stack import ParagraphIndex, build_generated_c_line_map
     from mockymock.debug.gdb_session import GdbSession
@@ -43,21 +35,11 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         unavailable_names,
     )
     from mockymock.engine.checks import (
-        extra_reset_lines_for,
-        extra_working_storage,
         run_static_checks,
     )
     from mockymock.report.coverage import build_original_line_map
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.runtime.toolchain import active as active_toolchain
-    from mockymock.splicer import cics_eib
-    from mockymock.splicer.driver import build_driver
-    from mockymock.splicer.linkage import extra_reset_lines
-    from mockymock.splicer.naming import TallyRegistry
-    from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import reset_move_lines
-    from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     toolchain = active_toolchain()
 
@@ -125,8 +107,6 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     surface = checked.surface
     lines = checked.lines
     scope_map = checked.scope_map
-    linkage = checked.linkage
-    cics_eib_plan_ = checked.cics_eib
     assert (
         result is not None
         and suite is not None
@@ -136,45 +116,9 @@ def _cmd_debug(args: argparse.Namespace) -> int:
     )  # implied by checked.problems being empty
     normalized_lines = list(lines)
 
-    boundaries = collect_boundaries(result.ast)
-    registry = TallyRegistry(suite)
-    terminator_plans, _ = find_terminator_plans(
-        surface, result.ast, suite, scope_map, lines
-    )
-    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
-    flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
-    lines = splice_program(
-        lines,
-        boundaries,
-        surface,
-        suite,
-        registry,
-        terminator_plans,
-        flow_plans,
-        checked.file_status_fields,
-        goto_exit_plans=goto_exit_plans,
-        trace=False,
-        fallthrough_traps=checked.fallthrough_traps,
-    )
-    lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
-
-    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
-    if linkage is not None:
-        reset_lines = reset_lines + extra_reset_lines(linkage)
-    if cics_eib_plan_ is not None:
-        reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
-    reset_lines = reset_lines + extra_reset_lines_for(checked)
-    artifact = build_driver(
-        suite,
-        reset_lines,
-        registry,
-        extra_working_storage_lines=extra_working_storage(checked),
-        snapshot=checked.snapshot,
-        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
-        program_end=program_end_thru(result.ast, terminator_plans),
-        call_frame=needs_call_frame(terminator_plans),
-    )
-    instrumented = insert_driver(lines, artifact)
+    instrumented = build_instrumented(
+        checked, BuildOptions(copybook_paths=args.copybook_path)
+    ).source()
 
     original_lines = split_source_lines(read_utf8_source(source_path))
 
