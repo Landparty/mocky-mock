@@ -90,10 +90,6 @@ KNOWN_CYCLES: list[frozenset[str]] = [
             "mockymock.analysis.sql_whenever",
         }
     ),
-    # The two toolchains share process helpers.
-    frozenset(
-        {"mockymock.runtime.docker_toolchain", "mockymock.runtime.native_toolchain"}
-    ),
 ]
 
 

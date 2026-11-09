@@ -25,7 +25,7 @@ RUNNER = PACKAGE / "runner"
 ALLOWED_IMPORTERS = {"mockymock.cli.main", "mockymock.cli.commands.runner"}
 
 #: mockymock modules (outside the runner) the runner may import.
-ALLOWED_DEPENDENCIES = {"mockymock", "mockymock.runtime.native_toolchain"}
+ALLOWED_DEPENDENCIES = {"mockymock", "mockymock.runtime._proc"}
 
 
 def _module_name(path: Path) -> str:

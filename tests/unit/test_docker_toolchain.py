@@ -1053,13 +1053,13 @@ def test_start_gdb_session_execs_mi_interpreter_against_container_binary(tmp_pat
 def test_docker_exec_output_is_read_in_bounded_memory(monkeypatch) -> None:
     """The Docker backend's run_binary held all of a test binary's stdout
     (400 MB of DISPLAY output peaked at 1.2 GB): it now goes through the
-    native backend's capped reader, keeping the driver's marker lines."""
+    shared capped reader (`runtime._proc`), keeping the driver's marker lines."""
     import sys
 
-    from mockymock.runtime import native_toolchain
+    from mockymock.runtime import _proc
     from mockymock.runtime.docker_toolchain import _exec_binary
 
-    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 1000)
+    monkeypatch.setattr(_proc, "STDOUT_CAPTURE_BYTES", 1000)
     # Bytes, not text: a text-mode stdout writes CRLF on Windows, and the
     # real test binary (Linux, in the container) writes LF.
     script = (

@@ -538,7 +538,7 @@ def _exec_binary(argv: list[str], *, timeout: float) -> subprocess.CompletedProc
     `subprocess.run`."""
     import os
 
-    from mockymock.runtime.native_toolchain import _not_kept_note, _run_capped
+    from mockymock.runtime._proc import _not_kept_note, _run_capped
 
     returncode, stdout, stderr, dropped = _run_capped(
         argv, cwd=Path.cwd(), env=dict(os.environ), timeout=timeout
@@ -609,7 +609,7 @@ def run_binary(
             timeout=timeout_seconds + 15,
         )
     except subprocess.TimeoutExpired as exc:
-        from mockymock.runtime.native_toolchain import _not_kept_note
+        from mockymock.runtime._proc import _not_kept_note
 
         return ExecutionResult(
             exit_code=TIMEOUT_EXIT_CODE,
