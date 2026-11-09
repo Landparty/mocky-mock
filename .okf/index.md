@@ -7,9 +7,28 @@ okf_version: "0.1"
 Knowledge bundle for **mockymock** — mocks a COBOL program's external boundaries
 (subprogram `CALL`s including MQ, file I/O, `EXEC SQL`/`CICS`/`DLI`, console
 `ACCEPT`), compiles the instrumented copy with GnuCOBOL inside Docker, runs it,
-and reports pass/fail. Version 0.8.0 (`mockymock/__init__.py`, kept in step with
-`pyproject.toml` by release-please's `extra-files`). Distributed on PyPI as
+and reports pass/fail. The version lives in `mockymock/__init__.py`, kept in
+step with `pyproject.toml` by release-please's `extra-files`. Distributed on PyPI as
 `mocky-mock`. Author: Samuel Dion.
+
+## Layering
+
+Imports only point down; `tests/unit/test_layering.py` fails on one that
+points up, and on any import cycle beyond the CLI's own (its
+`KNOWN_CYCLES` may only shrink).
+
+| Layer | Packages | Holds |
+|---|---|---|
+| interface | `cli`, `web`, `debug` | flags, console output, the DAP and HTTP protocols |
+| features | `mutation`, `jobstream`, `report.test_report`, `report.html_report` | tools built on the engine |
+| engine | `engine`, `project`, `api` | `engine.checks` (the static checks every command starts with), `engine.build` (one instrumented program from a checked suite: run, debug, export and mutate all build through it), `project` (config, discovery, assistant mode), `api` (the public Python API) |
+| core | `dsl`, `analysis`, `splicer`, the rest of `report` | the pipeline's transforms |
+| infra | `runtime`, `runner` | GnuCOBOL toolchains, child processes (`runtime._proc`), the oracle worker |
+
+Two rules keep the core acyclic: `analysis` never imports
+`dsl.generator` (the refusal gate receives the fix renderer as
+`suggest_fix`), and shared walking helpers live in leaf modules
+(`analysis/_program_walk.py`, `splicer/literals.py`, `runtime/_proc.py`).
 
 ## The `.cut` DSL and Codegen Pipeline
 

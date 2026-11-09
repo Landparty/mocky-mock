@@ -41,42 +41,58 @@ mockymock clean     -> report.artifacts (removes .mockymock/ reports and saved r
 mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integration-test jobs, runs `run --record-baseline/--baseline` or `--record-expectations` + `--json-report` per suite as child processes)
 ```
 
-## Module layout (2026-11-07)
+## Module layout (2026-11-09)
 
 `cli/main.py` used to hold every subcommand (6,800 lines). It now keeps only
-`main()`, `build_parser()` and its help helpers (`_TopLevelParser`,
-`_polish_help`, `_tidy_metavar`, `_COMMAND_GROUPS_EPILOG` /
-`_GROUPED_COMMANDS`, `_subcommand_names`, `_reject_unknown_command`,
-`_parse_command_line`) plus the argparse `type=` helpers only the parser uses
-(`_timeout_seconds`, `_percent`, `_positive_seconds`, `_suite_name`).
+`main()` and its helpers (`_subcommand_names`, `_reject_unknown_command`,
+`_parse_command_line`), plus re-exports tests import from
+`mockymock.cli.main`.
 
+* `cli/parser.py` -- `build_parser()` and the help polish
+  (`_TopLevelParser`, `_polish_help`, `_tidy_metavar`,
+  `_COMMAND_GROUPS_EPILOG` / `_GROUPED_COMMANDS`, `_COMMAND_EXAMPLES`). It
+  creates the top-level parser and calls each command's
+  `register_<name>(subparsers)` in help order.
+* `cli/_args.py` -- the argparse `type=` helpers the commands share
+  (`_timeout_seconds`, `_percent`, `_positive_seconds`, `_suite_name`).
 * `cli/_common.py` -- helpers more than one subcommand calls:
   `_resolve_program_and_cut`, `_apply_config_to_args` / `_with_copybook_aliases`,
   `_check_input_files`, `_layout`, `_check_rows_non_negative`,
   `_write_report_file`, `_save_result`, `_default_output`, `_several_suites`,
-  `_report_broken_claims`, the console notes (`_print_linkage_neutralization`,
+  `_report_broken_claims`, and the console notes (`_print_linkage_neutralization`,
   `_print_cics_eib_synthesis`, `_report_unsupported_boundaries`,
-  `_warn_asserting_nothing`, `_distinct_case_count`) and the whole
-  driver-insertion splice (`insert_driver`, `insert_driver_with_origins`,
-  `mark_recursive`, `comment_out_comment_entries`,
-  `_insert_end_of_program_trap`, ...), which `mutation/runner.py` also uses.
-* `cli/commands/<name>.py` -- one module per subcommand or family:
-  `environment` (setup, doctor, dashboard), `init`, `generate` (with
-  `_fill_cut_file`, `_main_line_or_bare`, `_refuse_unusable_scaffold`),
-  `fixtures`, `suites`, `run` (`_cmd_run`, `_cmd_run_suite`, `_run_directory`,
+  `_warn_asserting_nothing`, `_distinct_case_count`).
+* `cli/commands/<name>.py` -- one module per subcommand or family, each
+  with its `_cmd_*` handler and, beside it, the `register_<name>` that adds
+  its subparser and flags: `environment` (setup, doctor, dashboard),
+  `init`, `generate` (with `_fill_cut_file`, `_main_line_or_bare`,
+  `_refuse_unusable_scaffold`), `fixtures`, `suites`, `run` (`_cmd_run`,
+  `_cmd_run_suite` and its stages `_imply_run_flags`, `_report_checks`,
+  `_stage_real_files`, `_report_coverage`, `_print_trace`; `_run_directory`,
   the crash-isolation reruns, baseline, branch coverage,
   `_compile_failure_diagnosis`), `debug`, `lint`, `mutate`, `export`,
   `collect` (collect, explain, and `_print_command_error`, which compares
   `args.func` against `_cmd_collect` / `_cmd_fixtures`), `skills`, `report`,
   `journal`, `clean`, `runner`, `analyze`, `job`.
 
-Commands modules import from `_common` and each other, never from `main` at
-import time; the one exception is `_cmd_init`, which imports `build_parser`
-at call time to re-parse its generate/run argv. `main.py` imports every
-`_cmd_*` (so `set_defaults(func=...)` and `args.func is _cmd_doctor` resolve
-through its globals) and re-exports the helpers tests import from
-`mockymock.cli.main`. A test that monkeypatches a function a command calls
-patches the command's module (`mockymock.cli.commands.init._cmd_run`,
+What used to live under `cli/` but is not CLI code moved down a layer
+(see [index](index.md#layering)): the static checks to `engine/checks.py`,
+the export's column rewrites to `engine/mainframe_export.py`, config,
+discovery, copybook aliases and the assistant mode to `project/`, and the
+driver insertion (`insert_driver`, `insert_driver_with_origins`,
+`mark_recursive`, `comment_out_comment_entries`,
+`_insert_end_of_program_trap`) to `splicer/insertion.py`. The old `cli.*`
+module paths forward to the new ones with a `DeprecationWarning` for one
+minor release. `run`, `debug`, `export` and `mutate` no longer assemble the
+instrumented program themselves: they call `engine.build.build_instrumented`
+with a `BuildOptions` (trace, behaviour, column offset, record targets).
+
+Commands modules import from `_common`, `_args` and each other, never from
+`main` or `parser` at import time; the exceptions are `_cmd_init`, which
+imports `build_parser` at call time to re-parse its generate/run argv, and
+`_cmd_job`, which hands `cli.main.main` to the job runner. A test that
+monkeypatches a function a command calls patches the command's module
+(`mockymock.cli.commands.init._cmd_run`,
 `mockymock.cli.commands.run._cmd_run_suite`), not `main`.
 
 If no argument at all is given, `main()` prints help and returns 2 (a usage

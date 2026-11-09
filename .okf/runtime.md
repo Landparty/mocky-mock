@@ -454,7 +454,9 @@ reported as `128 + signal` (so the SIGKILL check in `mutate` still reads 137).
 `container_identity()` is always None (no restarts to detect).
 
 **Bounded output capture (2026-11-05).** `run_binary` reads the binary's
-pipes through `_run_capped`, not `communicate`: stdout is kept as printed
+pipes through `_run_capped` (`runtime/_proc.py`, shared by both toolchains
+since 2026-11-09, with the child registry, `kill_tree` and the termination
+handler), not `communicate`: stdout is kept as printed
 up to `STDOUT_CAPTURE_BYTES` (64 MiB), then only its `__MOCKYMOCK__` marker
 lines, up to `MARKER_CAPTURE_BYTES` (16 MiB) more (`_CappedStdout`); stderr
 up to `STDERR_CAPTURE_BYTES` (4 MiB). The bytes not kept are reported on
