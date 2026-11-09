@@ -67,6 +67,21 @@ which was already there and simply never ran in CI (see
 distribution or the import package must re-check that `extra-files` path
 in the same commit.
 
+# Python API
+
+The supported Python surface is `mockymock.api` (its `__all__`, pinned by
+`tests/unit/test_public_api.py`), plus `mockymock.__version__` and the
+`mockymock` command line. Every other module is internal: `py.typed`
+makes them type-check downstream, but they may move or change in any
+release. Removing or renaming a name in `mockymock.api` is a breaking
+change and goes through a deprecation first.
+
+Modules that moved out of `cli/` in the engine refactor (`cli.checks`,
+`cli.mainframe_export` → `engine/`; `cli.config`, `cli.discovery`,
+`cli.copybook_aliases`, `cli.ai_mode` → `project/`) keep a forwarding
+alias at the old path that warns with `DeprecationWarning`; drop the
+aliases in the next minor release after the one that ships the move.
+
 # Gotchas
 
 - **`--onefile-tempdir-spec` trades a re-extraction hazard for a
