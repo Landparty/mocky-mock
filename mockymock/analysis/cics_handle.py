@@ -84,7 +84,7 @@ def parse_handle(statement) -> tuple[dict[str, str | None], str | None]:
 def _procedure_cics_statements(program) -> list:
     """Every EXEC CICS statement in the PROCEDURE DIVISION, nested bodies
     included, in physical source order."""
-    from mockymock.analysis.mock_surface import (
+    from mockymock.analysis._program_walk import (
         _all_paragraphs,
         _nested_statement_lists,
     )

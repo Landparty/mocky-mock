@@ -81,15 +81,6 @@ KNOWN_CYCLES: list[frozenset[str]] = [
             "mockymock.cli.commands.job",
         }
     ),
-    # `mock_surface` and the three scanners that need its site types.
-    frozenset(
-        {
-            "mockymock.analysis.mock_surface",
-            "mockymock.analysis.cics_handle",
-            "mockymock.analysis.declaratives",
-            "mockymock.analysis.sql_whenever",
-        }
-    ),
 ]
 
 
