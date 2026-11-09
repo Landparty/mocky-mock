@@ -141,3 +141,33 @@ def _remove_staged_aliases(staged: list[Path], dry_run: bool) -> int:
             continue
         print(f"removed {directory}")
     return failed
+
+
+def register_clean(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock clean` to the top-level parser."""
+    clean_parser = subparsers.add_parser(
+        "clean",
+        help=(
+            "Remove the reports and saved run/mutation results mockymock "
+            "wrote (the .mockymock/ folders); journals are kept unless --all"
+        ),
+    )
+    clean_parser.add_argument(
+        "target",
+        nargs="?",
+        help=(
+            "A .cut (that suite), a program (all its suites) or a directory "
+            "(everything under it); default: the current directory"
+        ),
+    )
+    clean_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also remove the assistant journals",
+    )
+    clean_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List what would be removed without removing it",
+    )
+    clean_parser.set_defaults(func=_cmd_clean)

@@ -147,3 +147,52 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     _report_unsupported_boundaries(surface, "export", checked.source_location_map)
     return 0
+
+
+def register_export(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock export` to the top-level parser."""
+    export_parser = subparsers.add_parser(
+        "export",
+        help=(
+            "Write the instrumented COBOL source to a file, adjusted for "
+            "a real fixed-format COBOL compile (e.g. z/OS) instead of "
+            "GnuCOBOL-only"
+        ),
+    )
+    export_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    export_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    export_parser.add_argument("-o", "--output")
+    export_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    export_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    export_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Include only the TESTCASE with this exact name (repeatable; "
+            "combines with --tag as a union)"
+        ),
+    )
+    export_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Include only TESTCASEs carrying this tag (repeatable; "
+            "combines with --case as a union)"
+        ),
+    )
+    export_parser.set_defaults(func=_cmd_export)

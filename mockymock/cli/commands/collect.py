@@ -266,3 +266,77 @@ def _print_command_error(args: argparse.Namespace, message: str) -> None:
         print(f"mockymock fixtures: {message}", file=sys.stderr)
     else:
         print(f"mockymock {args.command}: {message}")
+
+
+def register_collect(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock collect` to the top-level parser."""
+    collect_parser = subparsers.add_parser(
+        "collect",
+        help=(
+            "List a .cut file's suite and test cases (names, line numbers, "
+            "tags) without running anything"
+        ),
+    )
+    collect_parser.add_argument(
+        "program",
+        nargs="?",
+        help="Required only with --boundaries",
+    )
+    collect_parser.add_argument(
+        "--cut",
+        help="The .cut file to list (required, except with --boundaries)",
+    )
+    collect_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human listing",
+    )
+    collect_parser.add_argument(
+        "--boundaries",
+        action="store_true",
+        help=(
+            "Also report every mockable boundary site in program "
+            "(category, key, paragraph, line) -- for editor completion. "
+            "Requires --json and program. See "
+            "docs/2026-09-15-cut-editor-intelligence-design.md"
+        ),
+    )
+    collect_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable; --boundaries only)",
+    )
+    collect_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    collect_parser.set_defaults(func=_cmd_collect)
+
+
+def register_explain(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock explain` to the top-level parser."""
+    explain_parser = subparsers.add_parser(
+        "explain",
+        help="Print the catalogued explanation for a refusal code",
+        description=(
+            "One shared source of truth for what a refusal code means, "
+            "backing both this CLI and the mocky-mock-vscode extension's "
+            "hover. See docs/2026-09-15-cut-editor-intelligence-design.md."
+        ),
+    )
+    explain_parser.add_argument(
+        "code", nargs="?", help="A refusal code, e.g. UNSUPPORTED_DECLARATIVES"
+    )
+    explain_parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List every catalogued code instead of explaining one",
+    )
+    explain_parser.add_argument(
+        "--json", action="store_true", help="Machine-readable output"
+    )
+    explain_parser.set_defaults(func=_cmd_explain)

@@ -138,3 +138,44 @@ def _cmd_journal(args: argparse.Namespace) -> int:
         return 1
     print(f"mockymock journal: appended to {path}")
     return 0
+
+
+def register_journal(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock journal` to the top-level parser."""
+    journal_parser = subparsers.add_parser(
+        "journal",
+        help="Append one assistant step to a suite's journal for 'mockymock report'",
+    )
+    journal_parser.add_argument(
+        "--cut",
+        help=(
+            "The suite (or its program); the journal is "
+            ".mockymock/<cut stem>.journal.jsonl next to the .cut"
+        ),
+    )
+    journal_parser.add_argument("--file", help="Explicit journal path instead")
+    journal_parser.add_argument("--step", help="Step name, e.g. plan")
+    journal_parser.add_argument("--summary", help="What was done and what came of it")
+    journal_parser.add_argument(
+        "--from",
+        dest="from_file",
+        metavar="FILE",
+        help=(
+            "Append several entries at once from FILE ('-' for stdin): a JSON "
+            "array of objects, or one object per line, each with step and "
+            "summary and optionally status, command and decision"
+        ),
+    )
+    journal_parser.add_argument(
+        "--status",
+        default=None,
+        help="ok, warn, fail, skipped, or info (default: ok); with --from, "
+        "the status of every entry that has none of its own",
+    )
+    journal_parser.add_argument(
+        "--command",
+        dest="command_text",
+        help="The command that was run, if any",
+    )
+    journal_parser.add_argument("--decision", help="A decision taken, and why")
+    journal_parser.set_defaults(func=_cmd_journal)

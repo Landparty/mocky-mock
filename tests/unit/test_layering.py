@@ -70,11 +70,13 @@ _RANK = {name: len(LAYERS) - i for i, (name, _) in enumerate(LAYERS)}
 #: Import cycles still in the code, each as its full set of modules. Only
 #: ever shrink this.
 KNOWN_CYCLES: list[frozenset[str]] = [
-    # The CLI's own: `init` reuses `build_parser`, and `job` hands
-    # `cli.main.main` to the job runner (a job step IS a `mockymock run`).
+    # The CLI's own: the parser imports each command to register it,
+    # `init` reuses `build_parser`, and `job` hands `cli.main.main` to the
+    # job runner (a job step IS a `mockymock run`). Both call-time imports.
     frozenset(
         {
             "mockymock.cli.main",
+            "mockymock.cli.parser",
             "mockymock.cli.commands.init",
             "mockymock.cli.commands.job",
         }

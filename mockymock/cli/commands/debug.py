@@ -170,3 +170,44 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         adapter.run()
 
     return 0
+
+
+def register_debug(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock debug` to the top-level parser."""
+    debug_parser = subparsers.add_parser(
+        "debug",
+        help=(
+            "Start an interactive Debug Adapter Protocol session for a "
+            "single test case (breakpoints, stepping, variable inspection)"
+        ),
+    )
+    debug_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    debug_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    debug_parser.add_argument(
+        "--case",
+        action="append",
+        help="The single TESTCASE to debug (required, repeatable flag but exactly one value)",
+    )
+    debug_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    debug_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    debug_parser.add_argument(
+        "--dap-stdio",
+        action="store_true",
+        help="Run the DAP adapter on stdio (the mode the VS Code extension spawns)",
+    )
+    debug_parser.set_defaults(func=_cmd_debug)

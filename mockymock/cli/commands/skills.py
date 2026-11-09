@@ -148,3 +148,112 @@ def _cmd_skills_mode(args: argparse.Namespace) -> int:
     else:
         print(format_mode_report(resolved))
     return 0
+
+
+def register_skills(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock skills` to the top-level parser."""
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Manage the packaged agent skills (Claude Code, GitHub Copilot)",
+    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command")
+
+    # Bare `mockymock skills` (no subcommand) must print THIS parser's
+    # usage, not fall through to main()'s top-level-help fallback -- the
+    # user typed a valid subcommand and needs its own options, not all
+    # twelve commands (2026-08-12 audit Finding 14).
+    def _cmd_skills_help(args: argparse.Namespace) -> int:
+        skills_parser.print_help()
+        return 1
+
+    skills_parser.set_defaults(func=_cmd_skills_help)
+    skills_install_parser = skills_subparsers.add_parser(
+        "install",
+        help=(
+            "Install the packaged agent skills (mockymock, cobol-analysis, "
+            "cobol-test, mockymock-setup) so a Claude Code or GitHub Copilot session can use them"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--project",
+        action="store_true",
+        help=(
+            "Install into the current directory (./.claude/skills/<name>, "
+            "or ./.github/skills/<name> for copilot) instead of the home "
+            "directory"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--target",
+        default="claude",
+        # Literal rather than skills_cmd.TARGETS: see the deferred-import
+        # rule; test_cli_skills.py pins the two together.
+        choices=["claude", "copilot", "all"],
+        help=(
+            "Which assistant to install for: claude (~/.claude/skills, the "
+            "default), copilot (GitHub Copilot: ~/.copilot/skills) or all"
+        ),
+    )
+    skills_install_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing install at the target path",
+    )
+    skills_install_parser.add_argument(
+        "--skill",
+        action="append",
+        help=(
+            "Install only this skill (repeatable): mockymock, cobol-analysis, "
+            "cobol-test or mockymock-setup. Default: all four"
+        ),
+    )
+    skills_install_parser.set_defaults(func=_cmd_skills_install)
+
+    skills_plugin_parser = skills_subparsers.add_parser(
+        "plugin",
+        help=(
+            "Write the cobol-testing Claude Code plugin as a local "
+            "marketplace, for `/plugin marketplace add <dir>` without GitHub"
+        ),
+    )
+    skills_plugin_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="Where to write it (default: ~/.mockymock/claude-plugin)",
+    )
+    skills_plugin_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an earlier export in that directory",
+    )
+    skills_plugin_parser.set_defaults(func=_cmd_skills_plugin)
+
+    skills_mode_parser = skills_subparsers.add_parser(
+        "mode",
+        help=(
+            "Show (or set) how much the AI assistant checks in while it builds a suite"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--set",
+        metavar="MODE",
+        default=None,
+        # Not `choices=MODES`: that would need mockymock.project.ai_mode
+        # imported at parser-build time, and build_parser() runs on every
+        # invocation including --help/--version. The valid set is spelled
+        # out here instead and validated in _cmd_skills_mode;
+        # tests/unit/test_cli_skills.py pins this text against MODES so the
+        # two can't drift.
+        help=(
+            "Persist the mode to mockymock.toml: hands-on (propose first, "
+            "wait for a yes), guided (narrate every step, stop at the "
+            "checkpoints; the default), hands-off (run the whole workflow, "
+            "report once at the end)"
+        ),
+    )
+    skills_mode_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the active mode and every mode's contract as JSON",
+    )
+    skills_mode_parser.set_defaults(func=_cmd_skills_mode)

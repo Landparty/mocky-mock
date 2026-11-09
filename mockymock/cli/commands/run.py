@@ -12,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.cli._args import _percent, _timeout_seconds
 from mockymock.cli._common import (
     _apply_config_to_args,
     _layout,
@@ -1478,3 +1479,194 @@ def _compile_failure_diagnosis(
 def _holds_exec(lines: list[str]) -> bool:
     """Whether `lines` hold an EXEC block, which plain cobc cannot compile."""
     return any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in lines)
+
+
+def register_run(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock run` to the top-level parser."""
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Splice, compile, run, and assert a COBOL program against a .cut file",
+    )
+    run_parser.add_argument(
+        "program",
+        nargs="?",
+        help=(
+            "COBOL source file. Omit to infer it from --cut's sibling "
+            "file (same directory, same stem); omit both program and "
+            "--cut to discover and run every .cut file under the "
+            "current directory (or the config file's test_root)"
+        ),
+    )
+    run_parser.add_argument(
+        "--cut",
+        help="Test file. Omit to infer it from program's sibling .cut file",
+    )
+    run_parser.add_argument(
+        "--junit-xml",
+        help="Write a JUnit XML report (one testcase per TESTCASE) to this file, "
+        "for CI test dashboards",
+    )
+    run_parser.add_argument(
+        "--json-report",
+        help=(
+            "Write a machine-readable run report (per-case status, .cut "
+            "line numbers, expected/actual per failure, tags) to this file"
+        ),
+    )
+    run_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Run only the TESTCASE with this exact name (repeatable; "
+            "combines with --tag as a union). The suite still runs as one "
+            "compile + binary, just with only the selected cases spliced in"
+        ),
+    )
+    run_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Run only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
+    )
+    run_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    run_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    run_parser.add_argument(
+        "--keep-sandbox",
+        action="store_true",
+        help="Do not delete the sandbox; print its path for inspection",
+    )
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="On compile failure, print the path to the instrumented source",
+    )
+    run_parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "Compile with GnuCOBOL's --coverage flag and report per-line "
+            "coverage after the run (gcov-based). The headline figure is "
+            "the ORIGINAL .cbl's own coverage; the instrumented sandbox "
+            "copy's higher number is reported below it for reference -- "
+            "see docs/2026-07-17-coverage-reporting-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--coverage-out",
+        help="Write the full coverage report (percentage + uncovered lines) to this file",
+    )
+    run_parser.add_argument(
+        "--coverage-fail-under",
+        type=_percent,
+        metavar="PERCENT",
+        help=(
+            "Exit nonzero when the ORIGINAL .cbl's line coverage is below "
+            "this percentage -- the `run` counterpart of `mutate "
+            "--fail-under`, so coverage can be CI-gated the same way. "
+            "Implies --coverage"
+        ),
+    )
+    run_parser.add_argument(
+        "--coverage-json",
+        help=(
+            "Write machine-readable coverage to this file, remapped onto "
+            "the ORIGINAL .cbl's line numbers (splicer-inserted lines "
+            "excluded). Implies --coverage"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Trace the executed path through the program for a single test "
+            "case and print it after the run, together with the mocks that "
+            "fired in order. Requires exactly one --case"
+        ),
+    )
+    run_parser.add_argument(
+        "--branch-coverage",
+        metavar="FILE",
+        help=(
+            "Write paragraph, branch (IF true/false, each EVALUATE WHEN) and "
+            "statement coverage of every case, for the program and every "
+            "USE REAL CALL program, to this JSON file, and print a summary. "
+            "Read from GnuCOBOL's statement trace, so it works on any "
+            "GnuCOBOL 3.x (see docs/2026-11-06-branch-coverage-design.md)"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace-json",
+        help=(
+            "Write the machine-readable execution trace (executed path "
+            "remapped onto the ORIGINAL .cbl's line numbers, plus the "
+            "ordered mock timeline) to this file. Implies --trace"
+        ),
+    )
+    run_parser.add_argument(
+        "--timeout",
+        type=_timeout_seconds,
+        default=30,
+        help=(
+            "Binary execution timeout in seconds (default 30); a mocked "
+            "CALL that removes a loop's terminating condition can "
+            "otherwise hang until this limit kills it -- give a "
+            'retrieve-and-loop CALL a sequence instead, MOCK CALL "X" '
+            "ROWS ( ... ) TERMINAL ( ... ), so later calls end the loop "
+            "(mirrors mutate's own --timeout)"
+        ),
+    )
+    run_parser.add_argument(
+        "--record-expectations",
+        action="store_true",
+        help=(
+            "Golden/characterization mode: run the suite, capture the real "
+            "runtime value behind every '*> STUB EXPECT <name>' comment in "
+            "the .cut file, and rewrite the file in place with those stubs "
+            "turned into real EXPECT lines. Best-effort and cumulative -- "
+            "recorded/skipped counts are printed, with a reason for every "
+            "skip. Never touches a line that isn't a stub comment (so a "
+            "hand-written or previously-recorded EXPECT is never "
+            "overwritten), and never rewrites the file at all if nothing "
+            "was recorded. Does not change the run's exit code. See "
+            "docs/2026-08-04-record-expectations-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--record-baseline",
+        metavar="FILE",
+        help=(
+            "Record what every case sends out of the program (each mocked "
+            "boundary in order, the bytes of every value passed to it, the "
+            "program's DISPLAY output and RETURN-CODE) to FILE, as the "
+            "baseline later runs are compared with. See "
+            "docs/2026-11-01-baseline-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline",
+        metavar="FILE",
+        help=(
+            "Compare this run's behaviour with a baseline recorded by "
+            "--record-baseline, case by case (by name). Exits 1 when any "
+            "case's behaviour differs, even if every EXPECT passed"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline-json",
+        metavar="FILE",
+        help="Write the --baseline comparison as JSON to FILE",
+    )
+    run_parser.set_defaults(func=_cmd_run)
