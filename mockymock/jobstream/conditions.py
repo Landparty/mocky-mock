@@ -193,15 +193,21 @@ class _IfParser:
         rcs: dict[str, int | None],
         abended: bool,
         step: str | None = None,
+        bypassed: Collection[str] = (),
     ):
         self.tokens = tokens
         self.index = 0
         self.rcs = rcs
         self.abended = abended
         self.step = step
+        self.bypassed = bypassed
 
     def rc_of(self, name: str) -> int | None:
-        return _step_rc(self.rcs, name, current=self.step)
+        # `bypassed` stops the lookup at a bypassed step of the procedure's
+        # own invocation (`_StepBypassed`, a ConditionError): without it an
+        # unqualified name falls through to a job-level step or another call
+        # of the procedure that happens to share the name.
+        return _step_rc(self.rcs, name, self.bypassed, current=self.step)
 
     def peek(self) -> str | None:
         return self.tokens[self.index] if self.index < len(self.tokens) else None
@@ -284,8 +290,9 @@ def if_true(
     rcs: dict[str, int | None],
     abended: bool,
     step: str | None = None,
+    bypassed: Collection[str] = (),
 ) -> bool:
-    return _IfParser(_tokens(condition), rcs, abended, step).parse()
+    return _IfParser(_tokens(condition), rcs, abended, step, bypassed).parse()
 
 
 def step_runs(
@@ -310,4 +317,4 @@ def step_runs(
         return not cond_bypasses(condition, rcs, abended, bypassed, step)
     if abended and "ABEND" not in condition.upper():
         return False
-    return if_true(condition, rcs, abended, step)
+    return if_true(condition, rcs, abended, step, bypassed)
