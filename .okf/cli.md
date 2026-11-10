@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean, runner) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-10-26T00:00:00Z
+timestamp: 2026-11-10T00:00:00Z
 ---
 
 # Overview
@@ -1945,7 +1945,7 @@ the job's steps run in order over one set of datasets. COBOL steps are
 generated, reduced to one case with every DD-bound sequential file real
 (`step_suite`), and run in process; IEFBR14 / IEBGENER / SORT are emulated
 (`jobstream/utilities.py`); `COND=` / `IF` are evaluated on the real return
-codes (`jobstream/conditions.py`: `((4,LT,S1),EVEN)` / `(EVEN,(...))` lists, a test on a step a condition bypassed is ignored as on z/OS (the runner keeps `bypassed`), `|` is OR and a lone `¬` NOT in IF, #436). SORT splits newline-terminated data on newlines whatever the DCB LRECL says (GnuCOBOL LINE SEQUENTIAL; a key past a short line reads blanks), uses LRECL chunks only for data with no newline framing, and refuses data that is neither (#441). Exit 0 passed / recorded, 1 failed, 3
+codes (`jobstream/conditions.py`: `((4,LT,S1),EVEN)` / `(EVEN,(...))` lists, a test on a step a condition bypassed is ignored as on z/OS (the runner keeps `bypassed`), `|` is OR and a lone `¬` NOT in IF, #436). SORT splits newline-terminated data on newlines whatever the DCB LRECL says (GnuCOBOL LINE SEQUENTIAL; a key past a short line reads blanks), uses LRECL chunks only for data with no newline framing, and refuses data that is neither (#441). Inside a PROC an unqualified step name in `COND=` / `IF` means the step of the same invocation (`B.PS2`'s `PS1` is `B.PS1`, not a job-level `PS1` or `A.PS1`; `step_runs(..., step=)`); a name matching several steps is a gap that says it is ambiguous. A file the program opens EXTEND or I-O (`RealFilePlan.opens_existing`) is staged with the dataset's current records whatever its DISP, and DISP=MOD then does not prepend them again (`_write_output(holds_existing=)`). An omitted normal disposition is DELETE for NEW and KEEP for OLD/SHR/MOD, KEEP on a `&&` temporary being PASS, so a passed temporary survives a bare `DISP=SHR` reader. Exit 0 passed / recorded, 1 failed, 3
 incomplete (a gap). Needs `cobolparser.jcl` (the `jcl` extra), which the
 runner image installs.
 

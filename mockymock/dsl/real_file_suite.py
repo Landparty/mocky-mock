@@ -69,6 +69,10 @@ class RealFilePlan:
     #: Other files a statement naming this one names too (OPEN A B): a
     #: statement runs once, so they are real together or not at all.
     partners: set[str] = field(default_factory=set)
+    #: The program opens the file EXTEND or I-O: it works on the records
+    #: already there (appends after them, rewrites them), so a job step
+    #: must stage the dataset's current contents even with no READ.
+    opens_existing: bool = False
 
     @property
     def round_trip(self) -> bool:
@@ -158,8 +162,10 @@ def plan_real_files(
                         plan.first_create = min(plan.first_create or line, line)
                     elif mode in ("INPUT", "I-O"):
                         plan.first_open_read = min(plan.first_open_read or line, line)
-                if mode in ("INPUT", "I-O", "EXTEND"):
-                    plan.reads = plan.reads or mode == "INPUT"
+                if mode == "INPUT":
+                    plan.reads = True
+                if mode in ("I-O", "EXTEND"):
+                    plan.opens_existing = True
     for file, plan in plans.items():
         plan.partners = together.get(file, set())
     return sorted(plans.values(), key=lambda p: p.file), notes

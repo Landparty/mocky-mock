@@ -62,9 +62,23 @@ def _matches(names: Iterable[str], name: str) -> list[str]:
 
 
 def _step_rc(
-    rcs: dict[str, int | None], step: str, bypassed: Collection[str] = ()
+    rcs: dict[str, int | None],
+    step: str,
+    bypassed: Collection[str] = (),
+    current: str | None = None,
 ) -> int | None:
+    """The RC of the earlier step `step` names. `current` is the step being
+    decided (`INVOCATION.PROCSTEP` inside a procedure): there an unqualified
+    name means the step of that same procedure invocation, as on z/OS --
+    not a job-level step of the same name, nor the same step of another
+    call of the procedure."""
     name = step.upper()
+    if current and "." in current and "." not in name:
+        own = f"{current.upper().rpartition('.')[0]}.{name}"
+        if own in rcs:
+            return rcs[own]
+        if own in bypassed:
+            raise _StepBypassed(f"step {step} was bypassed")
     if name in rcs:
         return rcs[name]
     matches = _matches(rcs, name)
@@ -72,6 +86,10 @@ def _step_rc(
         return rcs[matches[0]]
     if name in bypassed or len(_matches(bypassed, name)) == 1:
         raise _StepBypassed(f"step {step} was bypassed")
+    if len(matches) > 1:
+        raise ConditionError(
+            f"step name {step} is ambiguous: {', '.join(sorted(matches))}"
+        )
     raise ConditionError(f"no earlier step named {step} ran")
 
 
@@ -112,6 +130,7 @@ def cond_bypasses(
     rcs: dict[str, int | None],
     abended: bool,
     bypassed: Collection[str] = (),
+    step: str | None = None,
 ) -> bool:
     """Whether `COND=` bypasses the step: any test `(code,op[,step])` with
     `code op RC` true bypasses it. `EVEN` runs it even after an abend,
@@ -134,7 +153,7 @@ def cond_bypasses(
         op = _OPS[match.group("op").upper()]
         if match.group("step"):
             try:
-                rc = _step_rc(rcs, match.group("step"), bypassed)
+                rc = _step_rc(rcs, match.group("step"), bypassed, step)
             except _StepBypassed:
                 continue
             if rc is not None and op(code, rc):
@@ -168,11 +187,21 @@ def _tokens(text: str) -> list[str]:
 
 
 class _IfParser:
-    def __init__(self, tokens: list[str], rcs: dict[str, int | None], abended: bool):
+    def __init__(
+        self,
+        tokens: list[str],
+        rcs: dict[str, int | None],
+        abended: bool,
+        step: str | None = None,
+    ):
         self.tokens = tokens
         self.index = 0
         self.rcs = rcs
         self.abended = abended
+        self.step = step
+
+    def rc_of(self, name: str) -> int | None:
+        return _step_rc(self.rcs, name, current=self.step)
 
     def peek(self) -> str | None:
         return self.tokens[self.index] if self.index < len(self.tokens) else None
@@ -223,11 +252,11 @@ class _IfParser:
         if name.endswith(".ABEND") or name == "ABEND":
             if name == "ABEND":
                 return self.abended
-            return _step_rc(self.rcs, name[: -len(".ABEND")]) is ABEND
+            return self.rc_of(name[: -len(".ABEND")]) is ABEND
         if name.endswith(".RUN"):
             step = name[: -len(".RUN")]
             try:
-                _step_rc(self.rcs, step)
+                self.rc_of(step)
             except ConditionError:
                 return False
             return True
@@ -236,7 +265,7 @@ class _IfParser:
                 ran = [rc for rc in self.rcs.values() if rc is not None]
                 rc = max(ran) if ran else 0
             else:
-                found = _step_rc(self.rcs, name[: -len(".RC")])
+                found = self.rc_of(name[: -len(".RC")])
                 if found is None:
                     raise ConditionError(f"{name} of an abended step")
                 rc = found
@@ -250,8 +279,13 @@ class _IfParser:
         raise ConditionError(f"cannot evaluate {name!r} in an IF condition")
 
 
-def if_true(condition: str, rcs: dict[str, int | None], abended: bool) -> bool:
-    return _IfParser(_tokens(condition), rcs, abended).parse()
+def if_true(
+    condition: str,
+    rcs: dict[str, int | None],
+    abended: bool,
+    step: str | None = None,
+) -> bool:
+    return _IfParser(_tokens(condition), rcs, abended, step).parse()
 
 
 def step_runs(
@@ -260,9 +294,12 @@ def step_runs(
     abended: bool,
     *,
     bypassed: Collection[str] = (),
+    step: str | None = None,
 ) -> bool:
     """Whether a step with `condition` runs, given `rcs` (step name -> RC,
-    None for an abend) of the steps that ran before it.
+    None for an abend) of the steps that ran before it. `step` is the name
+    of the step being decided (`INVOCATION.PROCSTEP` for a procedure step),
+    which an unqualified step name in its condition is resolved against.
 
     Raises:
         ConditionError: The condition cannot be evaluated exactly.
@@ -270,7 +307,7 @@ def step_runs(
     if not condition or not condition.strip():
         return not abended
     if is_cond_parameter(condition):
-        return not cond_bypasses(condition, rcs, abended, bypassed)
+        return not cond_bypasses(condition, rcs, abended, bypassed, step)
     if abended and "ABEND" not in condition.upper():
         return False
-    return if_true(condition, rcs, abended)
+    return if_true(condition, rcs, abended, step)

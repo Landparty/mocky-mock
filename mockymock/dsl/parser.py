@@ -943,6 +943,11 @@ def _instantiate_row(
         _reject_sentence_period(expectation.expected_value, row_line)
     for value, _ in setup_moves:
         _reject_sentence_period(value, row_line, "MOVE")
+    # The MOVEs above an earlier PERFORM of a multi-call case are spliced
+    # the same way as the setup MOVEs.
+    for step in steps:
+        if step.kind == "MOVE":
+            _reject_sentence_period(step.value, row_line, "MOVE")
     return MockTestCase(
         name=f"{case.name} [row {row_index}: {_display_value(row[0])}]",
         # `list(case.mocks)` copies the list, but not its elements: every
