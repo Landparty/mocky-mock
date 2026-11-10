@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-10 -- job runner and PROVIDER fixes from a bug hunt
+
+[cli](cli.md): `job` stages OPEN EXTEND / I-O files with the dataset's
+records whatever the DISP (they were replaced by the new records under
+DISP=OLD/SHR) without DISP=MOD prepending them twice; an unqualified step
+name in a PROC's `COND=` / `IF` resolves within its own invocation; a
+passed `&&` temporary is no longer deleted by a bare `DISP=SHR` reader.
+[dsl](dsl.md): a PROVIDER value ending in a period is refused in a
+multi-call case's step MOVEs too. Test: `test_job_run_fixes.py`.
+
 ## 2026-11-09 -- hunt sweep: #436, #441, #444, #446, #448, #450, #451
 
 [integration](integration.md): layout imports work on cobol-parser 3.x and

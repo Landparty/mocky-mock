@@ -168,11 +168,13 @@ def _disposition(dd: Any) -> tuple[str, str, str]:
     normal = parts[1] if len(parts) > 1 and parts[1] else ""
     abnormal = parts[2] if len(parts) > 2 and parts[2] else ""
     if not normal:
-        normal = (
-            "DELETE" if status == "NEW" and not _is_temporary(dd.dataset) else "KEEP"
-        )
-        if _is_temporary(dd.dataset):
+        # z/OS: DELETE for a NEW dataset, KEEP for an existing one (OLD,
+        # SHR, MOD) -- and KEEP on a `&&` temporary is PASS, so a passed
+        # temporary read with a bare DISP=SHR stays there for later steps.
+        if status == "NEW":
             normal = "DELETE"
+        else:
+            normal = "PASS" if _is_temporary(dd.dataset) else "KEEP"
     return status, normal, abnormal or normal
 
 
@@ -306,7 +308,11 @@ class JobRun:
                 continue
             try:
                 runs = step_runs(
-                    step.condition, self.rcs, self.abended, bypassed=self.bypassed
+                    step.condition,
+                    self.rcs,
+                    self.abended,
+                    bypassed=self.bypassed,
+                    step=name,
                 )
             except ConditionError as exc:
                 self.gaps.append(f"step {name}: condition {step.condition!r}: {exc}")
@@ -445,10 +451,18 @@ class JobRun:
         return result
 
     def _write_output(
-        self, step_name: str, ddname: str, cards: list[Any], data: bytes
+        self,
+        step_name: str,
+        ddname: str,
+        cards: list[Any],
+        data: bytes,
+        *,
+        holds_existing: bool = False,
     ) -> str | None:
         """Store what a step wrote through DD `ddname`; the dataset name (or
-        None for DUMMY)."""
+        None for DUMMY). `holds_existing`: `data` already starts with the
+        dataset's records (the step was staged with them and opened the file
+        EXTEND or I-O), so DISP=MOD does not prepend them a second time."""
         dd = cards[0]
         if dd.is_dummy:
             return None
@@ -460,7 +474,12 @@ class JobRun:
             return None
         path = self._dataset_path(key)
         status = _disposition(dd)[0] if dd.dataset else "NEW"
-        if status == "MOD" and path.exists() and key not in self.deleted:
+        if (
+            status == "MOD"
+            and not holds_existing
+            and path.exists()
+            and key not in self.deleted
+        ):
             data = path.read_bytes() + data
         path.write_bytes(data)
         self.deleted.discard(key)
@@ -618,7 +637,11 @@ class JobRun:
             saved = step_dir / "out" / spec.file
             if saved.exists():
                 key = self._write_output(
-                    name, spec.ddname, spec.cards, saved.read_bytes()
+                    name,
+                    spec.ddname,
+                    spec.cards,
+                    saved.read_bytes(),
+                    holds_existing=spec.opens_existing and spec.source is not None,
                 )
                 if key:
                     result.writes.append(key)
@@ -666,9 +689,18 @@ class JobRun:
                 continue
             cards = bindings[ddname]
             spec = StepFile(
-                plan.file, ddname, cards, plan.reads, plan.writes, names=set(plan.names)
+                plan.file,
+                ddname,
+                cards,
+                plan.reads,
+                plan.writes,
+                names=set(plan.names),
+                opens_existing=plan.opens_existing,
             )
-            if plan.reads:
+            # OPEN EXTEND appends after the records already there, whatever
+            # the DISP, and OPEN I-O rewrites them: both start from the
+            # dataset's current contents, READ or not.
+            if plan.reads or plan.opens_existing:
                 staged, why = self._input_file(
                     name, ddname, cards, plan.line_sequential
                 )
@@ -771,6 +803,9 @@ class StepFile:
     source: Path | None = None
     #: The file and its record names (upper case): the MOCK keys to drop.
     names: set[str] = field(default_factory=set)
+    #: Opened EXTEND or I-O: what the step saves already holds the staged
+    #: records, so DISP=MOD must not prepend them again.
+    opens_existing: bool = False
 
 
 def step_suite(cut_text: str, files: list[StepFile], step: str) -> str:
