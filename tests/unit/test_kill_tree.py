@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from mockymock.runtime import native_toolchain
+from mockymock.runtime import _proc, native_toolchain
 
 
 class _FakeProc:
@@ -24,7 +24,7 @@ class _FakeProc:
 
 @pytest.fixture
 def windows(monkeypatch):
-    monkeypatch.setattr(native_toolchain.sys, "platform", "win32")
+    monkeypatch.setattr(_proc.sys, "platform", "win32")
 
 
 @pytest.mark.parametrize(
@@ -44,18 +44,18 @@ def test_the_process_is_killed_whatever_taskkill_did(monkeypatch, windows, failu
             raise failure
         return subprocess.CompletedProcess(cmd, 128)
 
-    monkeypatch.setattr(native_toolchain.subprocess, "run", fake_run)
+    monkeypatch.setattr(_proc.subprocess, "run", fake_run)
     proc = _FakeProc()
     native_toolchain.kill_tree(proc)  # type: ignore[arg-type]
 
     assert calls[0][0] == ["taskkill", "/F", "/T", "/PID", "4242"]
-    assert calls[0][1]["timeout"] == native_toolchain._TASKKILL_TIMEOUT
+    assert calls[0][1]["timeout"] == _proc._TASKKILL_TIMEOUT
     assert proc.killed
 
 
 def test_an_already_exited_process_is_not_an_error(monkeypatch, windows):
     monkeypatch.setattr(
-        native_toolchain.subprocess,
+        _proc.subprocess,
         "run",
         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 128),
     )

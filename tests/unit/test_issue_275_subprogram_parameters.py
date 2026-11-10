@@ -6,9 +6,9 @@ import pytest
 
 import mockymock.cli.commands.init as init_mod
 import mockymock.cli.doctor as doctor_mod
-from mockymock.cli.checks import cases_asserting_nothing
 from mockymock.cli.main import main
 from mockymock.dsl.entry_parameters import add_entry_parameters
+from mockymock.engine.checks import cases_asserting_nothing
 from mockymock.runtime import status
 
 CALCSUB = """\

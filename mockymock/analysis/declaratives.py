@@ -130,7 +130,7 @@ def _use_statements(program):
 
 
 def _select_files(program) -> list[str]:
-    from mockymock.analysis.mock_surface import file_selects
+    from mockymock.analysis._program_walk import file_selects
 
     return sorted(file_selects(program))
 
@@ -138,7 +138,7 @@ def _select_files(program) -> list[str]:
 def use_procedures(program) -> UseProcedures | None:
     """The program's USE AFTER EXCEPTION/ERROR procedures, or None when it
     has none."""
-    from mockymock.analysis.mock_surface import _fd_records
+    from mockymock.analysis._program_walk import _fd_records
 
     files = _select_files(program)
     by_file: dict[str, str] = {}

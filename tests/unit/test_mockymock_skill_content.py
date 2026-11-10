@@ -81,7 +81,7 @@ def test_skill_modes_match_the_cli_vocabulary():
     """The skill's three modes are the CLI's three modes. A mode added to
     ai_mode.MODES that the packaged skill never explains would be a
     setting with no behavior behind it."""
-    from mockymock.cli.ai_mode import MODES
+    from mockymock.project.ai_mode import MODES
 
     text = (SKILL_DIR / "reference" / "modes.md").read_text(encoding="utf-8")
     for mode in MODES:

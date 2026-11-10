@@ -7,7 +7,7 @@ step 6 (cobol-parser repo) and `dsl.generator.scaffold_cut`'s own
 docstring.
 
 Docker-free by design (`run_static_checks` never imports
-mockymock.runtime.docker_toolchain -- see cli/checks.py), so this runs in
+mockymock.runtime.docker_toolchain -- see engine/checks.py), so this runs in
 every CI lane, not just the Docker-gated one.
 
 Covers every `--scenarios` mode (happy/branches/all), not just the
@@ -28,9 +28,9 @@ from cobolparser.preprocess import (
 )
 
 from mockymock.analysis.mock_surface import analyze
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.fixture_bundle import load_fixture_bundle
 from mockymock.dsl.generator import scaffold_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
 EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"

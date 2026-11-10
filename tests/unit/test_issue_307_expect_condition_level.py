@@ -1,7 +1,7 @@
 """Issue #307: EXPECT TRUE/FALSE on a non-88 item, or a value on an 88,
 must be refused at its .cut line rather than reaching cobc."""
 
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.

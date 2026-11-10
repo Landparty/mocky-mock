@@ -15,10 +15,10 @@ from mockymock.analysis.real_programs import (
     matched_directive_ids,
     prepare_real_program,
 )
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.model import MockCategory
 from mockymock.dsl.module_suite import RealLink, link_real_programs
 from mockymock.dsl.parser import CutParseError, parse_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.driver import DriverArtifact
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.real_programs import (
@@ -171,7 +171,9 @@ class TestPrepareAndGate:
             "    END-MOCK\n"
             "    PERFORM 0000-MAIN\n"
         )
-        reasons = check_real_program(prepared, suite)
+        from mockymock.dsl.generator import directive_snippet
+
+        reasons = check_real_program(prepared, suite, suggest_fix=directive_snippet)
         assert [r.code for r in reasons] == ["UNMOCKED_SQL"]
         assert "'without sql'" in reasons[0].message
         assert reasons[0].suggested_fix.startswith('    MOCK SQL "SELECT"')

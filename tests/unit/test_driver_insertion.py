@@ -1,4 +1,4 @@
-"""Where `_insert_driver` puts the generated driver into the program:
+"""Where `insert_driver` puts the generated driver into the program:
 WORKING-STORAGE fields (declaring the section when there is none),
 the PROCEDURE DIVISION header however it is spelled or wrapped, and
 a synthetic paragraph header for an unnamed main line.
@@ -11,9 +11,10 @@ import re
 
 import pytest
 
-from mockymock.cli.main import _insert_driver, main
+from mockymock.cli.main import main
 from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.driver import build_driver
+from mockymock.splicer.insertion import insert_driver
 from mockymock.splicer.naming import TallyRegistry
 
 # --- driver: programs with no WORKING-STORAGE SECTION ---------------------
@@ -45,7 +46,7 @@ def test_driver_fields_get_a_working_storage_section_when_there_is_none():
         "P1.",
         '    CALL "SUBPGM".',
     ]
-    data = _data_division(_insert_driver(lines, _driver_artifact()))
+    data = _data_division(insert_driver(lines, _driver_artifact()))
     assert data[2:4] == ["DATA DIVISION.", "WORKING-STORAGE SECTION."]
     assert any(line.startswith("01  UT-CURRENT-CASE") for line in data)
     assert any(line.startswith("01  UT-SUBPGM-TALLY") for line in data)
@@ -66,7 +67,7 @@ def test_headers_with_any_whitespace_between_their_words_get_the_driver(gap):
         "P1.",
         '    CALL "SUBPGM".',
     ]
-    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    instrumented = [line.strip() for line in insert_driver(lines, _driver_artifact())]
     ws = instrumented.index(f"WORKING-STORAGE{gap}SECTION.")
     proc = instrumented.index(f"PROCEDURE{gap}DIVISION.")
     assert instrumented.count("WORKING-STORAGE SECTION.") == 0
@@ -76,7 +77,7 @@ def test_headers_with_any_whitespace_between_their_words_get_the_driver(gap):
 
 def _after_driver(lines: list[str]) -> list[str]:
     """The instrumented lines after the last generated UT-TESTCASE body."""
-    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    instrumented = [line.strip() for line in insert_driver(lines, _driver_artifact())]
     last_case = max(
         i for i, line in enumerate(instrumented) if line.startswith("UT-TESTCASE-")
     )
@@ -148,7 +149,7 @@ def test_driver_goes_after_a_wrapped_header_and_before_its_unnamed_body(header):
         "P1.",
         '    CALL "SUBPGM".',
     ]
-    instrumented = [line.strip() for line in _insert_driver(lines, _driver_artifact())]
+    instrumented = [line.strip() for line in insert_driver(lines, _driver_artifact())]
     start = instrumented.index(header[0])
     end = start + len(header) - 1
     assert instrumented[start : end + 1] == [line.strip() for line in header]
@@ -181,7 +182,7 @@ def test_driver_working_storage_goes_before_local_storage_and_linkage():
             "P1.",
             '    CALL "SUBPGM".',
         ]
-        data = _data_division(_insert_driver(lines, _driver_artifact()))
+        data = _data_division(insert_driver(lines, _driver_artifact()))
         assert data.count("DATA DIVISION.") == 1
         ws = data.index("WORKING-STORAGE SECTION.")
         assert ws < data.index(later)
@@ -200,7 +201,7 @@ def test_existing_working_storage_is_still_used_as_is():
         "01  WS-A PIC X.",
         "PROCEDURE DIVISION.",
     ]
-    data = _data_division(_insert_driver(lines, _driver_artifact()))
+    data = _data_division(insert_driver(lines, _driver_artifact()))
     assert data.count("WORKING-STORAGE SECTION.") == 1
     assert data[4].startswith("01  UT-CURRENT-CASE")
 
@@ -292,7 +293,7 @@ def test_driver_goes_after_a_procedure_header_split_over_lines():
         '    CALL "SUBPGM".',
     ]
     instrumented = [
-        line.strip() for line in _insert_driver(lines, _nist_driver_artifact())
+        line.strip() for line in insert_driver(lines, _nist_driver_artifact())
     ]
     period = instrumented.index(".")
     p1 = instrumented.index("P1.")

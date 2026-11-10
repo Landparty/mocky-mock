@@ -4,7 +4,7 @@ case's PERFORM runs exactly once, so `generate` / `init` may pin
 
 Regression: bug hunt of 2026-10-27, after the SECTION-member terminator
 support (PR #367); each program was reproduced on GnuCOBOL 3.2. Executed
-counterpart: tests/integration/test_bug_hunt_20261027.py."""
+counterpart: tests/integration/test_section_fallthrough.py."""
 
 from cobolparser import parse_cobol
 

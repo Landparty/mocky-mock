@@ -342,7 +342,7 @@ def test_scaffold_mocks_boundaries_in_paragraphs_the_entry_reaches():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 
 
 def test_144_ambiguous_folded_field_becomes_a_stub_not_a_dotted_expect() -> None:

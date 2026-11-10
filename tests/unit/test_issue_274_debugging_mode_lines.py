@@ -1,11 +1,11 @@
 """Issue #274: under SOURCE-COMPUTER ... WITH DEBUGGING MODE the D lines
 are code -- parsed, gated and compiled like any other line."""
 
-from mockymock.cli.checks import run_static_checks
 from mockymock.debugging_lines import (
     activate_debugging_lines,
     declares_debugging_mode,
 )
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """       IDENTIFICATION DIVISION.
        PROGRAM-ID. DBG.

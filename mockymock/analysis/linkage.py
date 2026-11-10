@@ -54,7 +54,7 @@ class LinkagePlan:
     linkage_items: list
     header_line: int
     # Folded items whose `SET ADDRESS OF` keeps its real meaning (issue
-    # #226): `splicer.linkage.Rebinding`s, filled in by `cli.checks` once
+    # #226): `splicer.linkage.Rebinding`s, filled in by `engine.checks` once
     # `splicer.linkage.mark_based` has made them BASED.
     rebindings: list = field(default_factory=list)
 
@@ -328,7 +328,7 @@ def procedure_header_clause_spans(
     the start of the first span, so the header ends on the line its clause
     starts on (the first line, unless the clause is wrapped onto a later
     one); the driver is inserted after the header's period
-    (`cli._common._insert_driver`). `[]` when the header has no such
+    (`splicer.insertion.insert_driver`). `[]` when the header has no such
     clause. None when it cannot be blanked safely: a `CHAINING` clause (a
     different mechanism, never neutralized) or no closing period within
     `_HEADER_MAX_LINES` lines."""

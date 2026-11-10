@@ -156,7 +156,7 @@ reached `STOP RUN` does) do they fall back to the
 Do not re-hardcode that hypothesis into the message: it was previously
 shown even for timeouts and aborts whose stderr evidence had been
 discarded (audit 2026-07-07, findings 4.2/5.1). A nonzero exit says nothing about *why* the case was cut short, so the
-driver also catches the commonest cause itself: `cli._common._insert_driver`
+driver also catches the commonest cause itself: `splicer.insertion.insert_driver`
 appends `driver.END_OF_PROGRAM_TRAP` (`UT-END-OF-PROGRAM SECTION`) after
 the program's last paragraph (before its `END PROGRAM`, closing an
 unterminated last sentence with a lone period), which nothing PERFORMs and
@@ -466,7 +466,7 @@ the `cobol-test` skill's hand-over.
   false and the step `skipped`), analysis (`program_analysis.py`, below),
   inventory (the `.cut` via `dsl.parser`
   + `assertion_labels.scan_assertion_labels`), lint
-  (`cli.checks.run_static_checks`), scenarios
+  (`engine.checks.run_static_checks`), scenarios
   (`ProgramFixtureGenerator.generate_with_scenarios_from_file`'s
   `scenario_coverage`), run, coverage, mutation, dialect
   (`analysis.dialect_risk.find_dialect_risks`), verdict.

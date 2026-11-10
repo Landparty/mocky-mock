@@ -10,8 +10,9 @@ from mockymock.analysis.refusal import (
 )
 from mockymock.dsl.model import HookStep
 from mockymock.dsl.parser import parse_cut
-from mockymock.splicer.driver import _step_lines, split_long_move
+from mockymock.splicer.driver import _step_lines
 from mockymock.splicer.injector import build_rows_block
+from mockymock.splicer.literals import split_long_move
 
 LIT = 'X"' + "41" * 300 + '"'
 

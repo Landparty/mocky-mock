@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from mockymock.cli._args import _positive_seconds
+
 
 def _cmd_runner(args: argparse.Namespace) -> int:
     """Claim and run LegacyLens change-impact oracle jobs
@@ -54,3 +56,69 @@ def _cmd_runner(args: argparse.Namespace) -> int:
     LOGGER.info("runner finished", extra={"jobs": ran})
     print(f"mockymock runner: ran {ran} job(s)")
     return 0
+
+
+def register_runner(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock runner` to the top-level parser."""
+    runner_parser = subparsers.add_parser(
+        "runner",
+        help=(
+            "Claim LegacyLens change-impact oracle jobs, run each load "
+            "module's suites with --record-baseline / --baseline, and report back"
+        ),
+    )
+    runner_parser.add_argument(
+        "--url",
+        help="LegacyLens backend base URL (default: $LEGACYLENS_URL)",
+    )
+    runner_parser.add_argument(
+        "--token-env",
+        default="RUNNER_TOKEN",
+        help="Environment variable holding the backend's runner token (default: RUNNER_TOKEN)",
+    )
+    runner_parser.add_argument(
+        "--name", help="Runner name the backend records (default: mockymock@HOST)"
+    )
+    runner_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run the queued jobs, then exit instead of waiting for more",
+    )
+    runner_parser.add_argument(
+        "--poll-interval",
+        type=_positive_seconds,
+        default=10.0,
+        help="Seconds between claims when no job is queued (default: 10)",
+    )
+    runner_parser.add_argument(
+        "--suite-timeout",
+        type=_positive_seconds,
+        default=900.0,
+        help="Seconds one generate or run may take (default: 900)",
+    )
+    runner_parser.add_argument(
+        "--work-dir",
+        help="Folder jobs are unpacked in (default: the system temp folder)",
+    )
+    runner_parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep each job's unpacked folder (for debugging)",
+    )
+    runner_parser.add_argument(
+        "--log-file",
+        help="Append the runner's log to this file (default: stderr)",
+    )
+    runner_parser.add_argument(
+        "--log-format",
+        choices=("text", "json"),
+        default="text",
+        help="text (default) or json: one JSON object per line, for a log collector",
+    )
+    runner_parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+        help="Lowest level logged (default: INFO)",
+    )
+    runner_parser.set_defaults(func=_cmd_runner)

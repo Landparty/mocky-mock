@@ -767,7 +767,7 @@ def test_format_console_escapes_terminal_control_characters():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 
 
 def test_139_marker_after_no_advancing_output_is_still_parsed() -> None:

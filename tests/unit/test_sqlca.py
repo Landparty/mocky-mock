@@ -401,7 +401,7 @@ def test_generated_sqlca_is_the_full_136_byte_db2_layout():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 
 
 def test_148_the_generated_sqlca_is_reset_between_cases() -> None:

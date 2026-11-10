@@ -2,7 +2,7 @@
 comment block ahead of the CBL/PROCESS card, which IBM requires first."""
 
 from mockymock.cli.main import main
-from mockymock.cli.mainframe_export import insert_provenance_header
+from mockymock.engine.mainframe_export import insert_provenance_header
 
 
 def test_export_keeps_cbl_card_first_with_id_division(tmp_path):

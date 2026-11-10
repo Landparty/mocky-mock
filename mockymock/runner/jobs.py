@@ -336,7 +336,7 @@ def _stop(proc: subprocess.Popen) -> tuple[str, str]:
     if sys.platform == "win32":
         # No SIGTERM to forward on Windows, and proc.kill() alone left the
         # compiler mockymock started running: kill the whole tree.
-        from mockymock.runtime.native_toolchain import kill_tree
+        from mockymock.runtime._proc import kill_tree
 
         kill_tree(proc)
         return proc.communicate()

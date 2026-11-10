@@ -12,9 +12,9 @@ from mockymock.analysis.flow_targets import (
     name_unnamed_main_line,
     normalize_flow_targets,
 )
-from mockymock.cli import ai_mode
-from mockymock.cli.config import load_config
 from mockymock.cli.main import main
+from mockymock.project import ai_mode
+from mockymock.project.config import load_config
 from mockymock.report.journal import read_journal
 
 UNNAMED_CBL = """\

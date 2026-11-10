@@ -64,7 +64,7 @@ def test_dashboard_finds_reports_in_the_artifact_folder(tmp_path):
 
 
 def _staged_copylib(tmp_path):
-    from mockymock.cli.copybook_aliases import stage_copybook_aliases
+    from mockymock.project.copybook_aliases import stage_copybook_aliases
 
     lib = tmp_path / "copylib"
     lib.mkdir(parents=True)
@@ -75,7 +75,7 @@ def _staged_copylib(tmp_path):
 
 
 def test_clean_removes_staged_copies_of_renamed_copybooks(tmp_path, capsys):
-    from mockymock.cli.copybook_aliases import manifest_path
+    from mockymock.project.copybook_aliases import manifest_path
 
     _lib, staged = _staged_copylib(tmp_path)
     manifest = manifest_path(staged)
@@ -109,7 +109,7 @@ def test_clean_follows_the_configured_copybook_path(tmp_path, monkeypatch):
 
 
 def test_clean_removes_staging_without_a_manifest(tmp_path):
-    from mockymock.cli.copybook_aliases import manifest_path
+    from mockymock.project.copybook_aliases import manifest_path
 
     _lib, staged = _staged_copylib(tmp_path / "other")
     manifest_path(staged).unlink()

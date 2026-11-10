@@ -686,7 +686,7 @@ def test_rewrite_keeps_a_crlf_file_crlf_throughout():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 from mockymock.report.results import parse_stdout
 
 

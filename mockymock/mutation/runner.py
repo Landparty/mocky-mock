@@ -35,13 +35,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.engine.build import BuildOptions, build_instrumented
 from mockymock.mutation.operators import Mutant, generate_mutants
 from mockymock.mutation.report import (
     MutantResult,
     MutationOutcome,
     StillbornReason,
 )
-from mockymock.report.record_rewrite import numeric_edited_fields
 
 
 @dataclass(frozen=True)
@@ -122,18 +122,8 @@ def _run_suite_once(
     failures are in them, and which reported every one of
     `expected_cases`, is "passed".
     """
-    from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import (
-        find_goto_exit_plans,
-        find_terminator_plans,
-        needs_call_frame,
-        program_end_thru,
-    )
-    from mockymock.cli._common import _insert_driver
-    from mockymock.cli.checks import (
+    from mockymock.engine.checks import (
         REAL_CALL_UNSUPPORTED,
-        extra_reset_lines_for,
-        extra_working_storage,
         run_static_checks,
     )
     from mockymock.report.coverage import map_coverage_to_original, parse_gcov
@@ -141,14 +131,6 @@ def _run_suite_once(
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.runtime.toolchain import active as active_toolchain
-    from mockymock.splicer import cics_eib
-    from mockymock.splicer.driver import build_driver
-    from mockymock.splicer.linkage import extra_reset_lines
-    from mockymock.splicer.naming import TallyRegistry
-    from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import reset_move_lines
-    from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
 
     toolchain = active_toolchain()
 
@@ -179,51 +161,9 @@ def _run_suite_once(
         # normalized lines, exactly as `_cmd_run` keeps its own copy.
         normalized_lines = list(lines)
 
-        boundaries = collect_boundaries(result.ast)
-        registry = TallyRegistry(suite)
-        terminator_plans, _ = find_terminator_plans(
-            surface, result.ast, suite, scope_map, lines
-        )
-        goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
-        flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
-        lines = splice_program(
-            lines,
-            boundaries,
-            surface,
-            suite,
-            registry,
-            terminator_plans,
-            flow_plans,
-            checked.file_status_fields,
-            goto_exit_plans=goto_exit_plans,
-            trace=False,
-            fallthrough_traps=checked.fallthrough_traps,
-        )
-        lines, _ = transform_data_division_exec(lines, copybook_paths=copybook_paths)
-
-        reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
-        if checked.linkage is not None:
-            reset_lines = reset_lines + extra_reset_lines(checked.linkage)
-        if checked.cics_eib is not None:
-            reset_lines = reset_lines + cics_eib.reset_lines(checked.cics_eib)
-        # Synthesized CAPTURE targets need the same between-case reset the
-        # run/debug/export pipelines give them. The suite compiles to ONE
-        # binary here too, so without this a case that never reached its
-        # CALL would assert against the previous case's captured value --
-        # and a mutant could then be "killed" by that stale value rather
-        # than by the mutation, silently inflating the score.
-        reset_lines = reset_lines + extra_reset_lines_for(checked)
-        artifact = build_driver(
-            suite,
-            reset_lines,
-            registry,
-            extra_working_storage_lines=extra_working_storage(checked),
-            snapshot=checked.snapshot,
-            numeric_edited=numeric_edited_fields(result.ast, checked.captures),
-            program_end=program_end_thru(result.ast, terminator_plans),
-            call_frame=needs_call_frame(terminator_plans),
-        )
-        instrumented = _insert_driver(lines, artifact)
+        instrumented = build_instrumented(
+            checked, BuildOptions(copybook_paths=copybook_paths)
+        ).source()
 
         instrumented_path = tmp / f"instrumented_{source_name}"
         instrumented_path.write_text(
@@ -584,7 +524,7 @@ def run_mutation(
             None,
             all_notes,
         )
-    from mockymock.cli.checks import REAL_CALL_UNSUPPORTED
+    from mockymock.engine.checks import REAL_CALL_UNSUPPORTED
 
     if baseline.phase == "checks" and baseline.detail == REAL_CALL_UNSUPPORTED:
         # Not a red suite: mutate cannot link USE REAL CALL programs yet.
@@ -720,7 +660,7 @@ def _equivalent_mutants(
     ]
     if not candidates:
         return {}
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
     from mockymock.mutation.equivalence import equivalence_reason
 
     try:
@@ -785,7 +725,7 @@ def _attach_zero_baseline_hints(
     candidates = [r for r in survivors if r.mutant.operator == "arith-verb-swap"]
     if not candidates:
         return
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
     from mockymock.mutation.zero_baseline import zero_baseline_hint
 
     try:

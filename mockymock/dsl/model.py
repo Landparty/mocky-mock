@@ -270,7 +270,7 @@ class MockDirective:
     real_line: int = 0
     """1-based .cut line of the `USE REAL CALL` statement (0 otherwise)."""
     real_file: str | None = None
-    """Set on the directives `cli.checks.expand_real_files` builds for a
+    """Set on the directives `engine.checks.expand_real_files` builds for a
     `USE REAL FILE <file>`: one per file-op site of that file, answering it
     by running the statement as written."""
 
@@ -488,7 +488,7 @@ class MockTestSuite:
     program_path: str | None = None
     """The optional `PROGRAM "<path>"` line: the program under test, as
     written (relative paths resolve against the .cut file's folder; see
-    cli/discovery.py). None when the suite names no program and pairing
+    project/discovery.py). None when the suite names no program and pairing
     falls back to file-name conventions."""
     program_line: int = 0
     """1-based .cut line of the PROGRAM line (0 when absent)."""

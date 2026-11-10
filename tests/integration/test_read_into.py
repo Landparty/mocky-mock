@@ -1,14 +1,14 @@
 """Executed regressions for READ ... INTO (and the FILE SECTION reset)
 found by the 2026-10-09 nightly bug hunt: each compiles and runs with real
 GnuCOBOL. Unit-level counterparts are in
-tests/unit/test_nightly_20261009_read_into.py."""
+the unit feature files (each block marked `# Regression:`)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from tests.integration._docker import requires_docker
-from tests.integration.test_bug_hunt_m1_fixes import _run
+from tests.integration.test_issues_139_to_150 import _run
 
 RINTO_CBL = """\
        IDENTIFICATION DIVISION.

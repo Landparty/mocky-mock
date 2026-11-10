@@ -1,5 +1,5 @@
 """Bug hunt of 2026-11-05 on the .cut suite language, end to end on
-GnuCOBOL (see tests/unit/test_bug_hunt_20261105_cut_language.py)."""
+GnuCOBOL (see the unit feature files (each block marked `# Regression:`))."""
 
 from pathlib import Path
 

@@ -88,7 +88,7 @@ CobolParagraph.paragraph_name / .statements / .location(SourceLocation.line)
 | `cobolparser.generators.ProgramFixtureGenerator`, `DataGeneratorOptions` | `generate --with-data` / `fixtures` (serialized `FixtureBundle` JSON only -- see Overview) |
 | `cobolparser.analysis.value_tracker.DynamicCallAnalyzer().analyze(program)` → `CallStatement.possible_values`, metadata `possible_values_incomplete` | the program names a dynamic CALL's identifier can hold, which `generate` branches the `MOCK CALL <identifier>` body on (`generator._dynamic_call_targets`) |
 | `ProgramLayoutIndex.from_file`, `BoundaryInventoryAnalyzer().analyze(ast, index)` (`Boundary.call_args[].name/.direction/.provenance`), `generators.data.flatten_record`, `generators.data.ValueFactory` (package-level, #451) | `dsl/call_arguments.py` lays out a CALL argument the fixture bundle reported unresolvable (see [cli](cli.md)) |
-| `cobolparser.config.load_project_config`, `ConfigError` | the universal `cobol.yml` (soft-imported in `cli/config.py`; absent from every tagged release up to v1.9.0 -- see [cli](cli.md)) |
+| `cobolparser.config.load_project_config`, `ConfigError` | the universal `cobol.yml` (soft-imported in `project/config.py`; absent from every tagged release up to v1.9.0 -- see [cli](cli.md)) |
 | `cobolparser.cli.parse.main` | `mockymock analyze` delegates in-process, `sys.argv` patched around the call |
 | (v2) `IOOpenStatement.file_names` / `IOCloseStatement.file_names` | multi-file OPEN/CLOSE mock key matching |
 | (v2) `IOReadStatement.file_name`, `IODeleteStatement.file_name`, `IOStartStatement.file_name`, `IOUnlockStatement.file_name` | file-keyed mock matching |

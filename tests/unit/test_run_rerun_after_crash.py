@@ -127,8 +127,8 @@ def test_run_stops_when_every_rerun_crashes_on_its_first_case(
 
 # Regression: bug hunt of 2026-11-05 (running suites). Crash reruns pick cases
 # by position.
-from mockymock.cli.checks import filter_suite_cases
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import filter_suite_cases
 from mockymock.report.json_report import not_run_case_positions, report_case_positions
 from mockymock.report.results import parse_stdout
 

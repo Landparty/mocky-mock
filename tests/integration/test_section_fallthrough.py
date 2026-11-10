@@ -1,5 +1,5 @@
 """Bug hunt of 2026-10-27, end to end on GnuCOBOL (see
-tests/unit/test_bug_hunt_20261027.py for the analysis side)."""
+the unit feature files (each block marked `# Regression:`) for the analysis side)."""
 
 from pathlib import Path
 

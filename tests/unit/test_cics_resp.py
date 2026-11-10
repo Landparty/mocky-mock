@@ -8,7 +8,7 @@ from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
 from mockymock.analysis.refusal import check_cics_eib_layout
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.cics_resp import DFHRESP_VALUES, expand_dfhresp
 
 RESP_CBL = """\

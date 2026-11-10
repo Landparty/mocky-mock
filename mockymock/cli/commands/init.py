@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from mockymock._lines import read_utf8_source
+from mockymock.cli._args import _suite_name
 from mockymock.cli._common import (
     _check_input_files,
     _default_output,
@@ -26,7 +27,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     Reentrant rather than a deep refactor of `_cmd_generate`/`_cmd_run`'s
     internals: builds real argv lists and parses them with the CLI's
-    own `build_parser()` (mockymock.cli.main), so every flag `generate --with-data`/
+    own `build_parser()` (mockymock.cli.parser), so every flag `generate --with-data`/
     `run --record-expectations` would need gets argparse's own correct
     default -- never a hand-built Namespace that could silently miss an
     attribute those large functions read. This is a deliberate departure
@@ -36,9 +37,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     existing code changes at all."""
     from mockymock.cli.doctor import gather_full_status
 
-    # The one call back into mockymock.cli.main: build_parser lives there
-    # and main imports this module, so it is imported at call time only.
-    from mockymock.cli.main import build_parser
+    # The one call back into the parser: it imports this module to add
+    # `init`'s own subparser, so build_parser is imported at call time only.
+    from mockymock.cli.parser import build_parser
     from mockymock.runtime.status import OK
 
     source_path = Path(args.program)
@@ -169,3 +170,61 @@ def _cmd_init(args: argparse.Namespace) -> int:
             f"--record-expectations'"
         )
     return run_exit_code
+
+
+def register_init(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock init` to the top-level parser."""
+    init_parser = subparsers.add_parser(
+        "init",
+        help=(
+            "One command from a COBOL program to a .cut file with real, "
+            "golden-recorded assertions"
+        ),
+        description=(
+            "Composes 'generate --with-data' + 'run --record-expectations' "
+            "into one step, so a first scaffold has real generated data "
+            "and recorded expected values instead of empty mock bodies. "
+            "Degrades to a plain data-driven scaffold (no run attempted) "
+            "with a clear next step when Docker isn't set up yet. See "
+            "docs/2026-09-15-init-command-design.md."
+        ),
+    )
+    init_parser.add_argument("program")
+    init_parser.add_argument(
+        "-o",
+        "--output",
+        help="Where to write the .cut file (default: tests/<folder>/<program>.cut)",
+    )
+    init_parser.add_argument(
+        "--name",
+        type=_suite_name,
+        help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    init_parser.add_argument(
+        "--seed", type=int, help="Seed for the fixture bundle's random data generation"
+    )
+    init_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Scenario strategy for the fixture bundle (default happy)",
+    )
+    init_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    init_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
+    )
+    init_parser.set_defaults(func=_cmd_init)

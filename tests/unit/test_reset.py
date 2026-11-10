@@ -895,7 +895,7 @@ def test_an_entry_written_without_a_data_name_is_filler():
 
 
 # Regression: executed bug hunt of 2026-10-05 (issues #139-#150); the executed
-# counterparts live in tests/integration/test_bug_hunt_m1_fixes.py.
+# counterparts live in tests/integration/test_issues_139_to_150.py.
 
 
 LS_CBL = """\

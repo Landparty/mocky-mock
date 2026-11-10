@@ -10,11 +10,12 @@ import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.cli._args import _percent, _timeout_seconds
 from mockymock.cli._common import (
     _apply_config_to_args,
-    _insert_driver,
     _layout,
     _print_cics_eib_synthesis,
     _print_linkage_neutralization,
@@ -24,8 +25,13 @@ from mockymock.cli._common import (
     _several_suites,
     _write_report_file,
 )
+from mockymock.engine.build import BuildOptions, build_instrumented
 from mockymock.report.artifacts import fingerprint
-from mockymock.report.record_rewrite import numeric_edited_fields
+
+if TYPE_CHECKING:
+    from mockymock.dsl.model import MockTestSuite
+    from mockymock.engine.checks import StaticCheckResult
+    from mockymock.report.results import TestSuiteResult
 
 
 def _write_failure_reports(
@@ -188,7 +194,7 @@ def _run_directory(
     See docs/2026-09-15-cli-ergonomics-design.md."""
     import copy
 
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         DiscoveryError,
         discover_cut_files,
         read_program_line,
@@ -608,31 +614,15 @@ def _merge_rerun_reports(
 
 
 def _cmd_run_suite(args: argparse.Namespace) -> int:
-    import json
 
     from mockymock._decimal import decimal_point_is_comma
-    from mockymock.analysis.flow_mocks import find_flow_mock_plans
-    from mockymock.analysis.refusal import (
-        find_goto_exit_plans,
-        find_terminator_plans,
-        needs_call_frame,
-        program_end_thru,
-    )
     from mockymock.analysis.stub_expectations import scan_stub_expectations
-    from mockymock.cli.checks import (
-        extra_reset_lines_for,
-        extra_working_storage,
+    from mockymock.dsl.model import MockCategory
+    from mockymock.engine.checks import (
         run_static_checks,
     )
-    from mockymock.dsl.model import MockCategory
     from mockymock.report.coverage import (
-        build_copybook_line_map,
-        build_original_line_map,
-        format_coverage_console,
-        format_coverage_json,
-        map_coverage_to_original,
         parse_gcov,
-        summarize_original,
     )
     from mockymock.report.formatters import (
         CLEAN_EXIT_CRASH_DETAIL,
@@ -652,28 +642,14 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         address_fields,
         build_recording_report,
         clock_value_fields,
-        condition_names,
         field_pictures,
         rewrite_cut_text,
     )
     from mockymock.report.results import parse_stdout
-    from mockymock.report.trace import (
-        case_entries,
-        format_trace_console,
-        format_trace_json,
-        parse_trace,
-    )
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
     from mockymock.runtime.sandbox import sandbox_dir_maybe_kept
     from mockymock.runtime.toolchain import active as active_toolchain
-    from mockymock.splicer import cics_eib
-    from mockymock.splicer.driver import build_driver
-    from mockymock.splicer.linkage import extra_reset_lines
-    from mockymock.splicer.naming import TallyRegistry
-    from mockymock.splicer.orchestrator import splice_program
-    from mockymock.splicer.reset import index_names, reset_move_lines
-    from mockymock.splicer.source_map import collect_boundaries
-    from mockymock.splicer.sqlca import sqlca_reset_lines, transform_data_division_exec
+    from mockymock.splicer.reset import index_names
 
     toolchain = active_toolchain()
 
@@ -708,32 +684,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         else None
     )
 
-    # Asking for the coverage JSON, or a coverage report file, is asking
-    # for coverage.
-    if args.coverage_json:
-        args.coverage = True
-    if args.coverage_out:
-        args.coverage = True
-    # ... and so is asking for the coverage gate: --coverage-fail-under is
-    # the `run` counterpart of `mutate --fail-under`, so it must be usable
-    # on its own in a CI lane without also remembering --coverage.
-    if args.coverage_fail_under is not None:
-        args.coverage = True
-
-    # Asking for the trace JSON is asking for the trace.
-    if args.trace_json:
-        args.trace = True
-    if args.trace and (len(args.case or []) != 1 or args.tag):
-        # The suite compiles and runs as ONE binary, and the trace file is a
-        # separate stream from stdout with no shared timestamps -- so an
-        # unscoped trace interleaves every case with nothing to segment it
-        # by. Requiring a single case makes attribution true by
-        # construction. See docs/2026-07-21-debug-trace-design.md.
-        print(
-            "mockymock run: --trace requires exactly one --case (and no "
-            "--tag): the suite runs as a single binary, so an unscoped "
-            "trace cannot be attributed to one case"
-        )
+    if not _imply_run_flags(args):
         return 1
 
     # Static checks run BEFORE the toolchain comes up (see the lint design
@@ -748,34 +699,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         tag_names=args.tag,
         case_positions=case_positions,
     )
-    for note in checked.notes:
-        print(f"mockymock run: {note}")
-    for warning in checked.warnings:
-        print(f"mockymock run: {warning}")
-    if checked.linkage is not None:
-        _print_linkage_neutralization(
-            "run",
-            checked.linkage,
-            applied=True,
-            address_of=checked.linkage_address_of,
-        )
-    if checked.cics_eib is not None:
-        _print_cics_eib_synthesis("run", checked.cics_eib, applied=True)
-    if checked.problems:
-        for problem in checked.problems:
-            if problem.startswith("  "):
-                print(problem)  # indented parse-error detail lines
-            else:
-                print(f"mockymock run: {problem}")
-        _write_failure_reports(
-            args,
-            "run",
-            checked.suite.name if checked.suite is not None else "",
-            "\n".join(checked.problems),
-            cut_suite=checked.suite,
-            cut_file=cut_path,
-            program_file=source_path,
-        )
+    if not _report_checks(args, checked, source_path, cut_path):
         return 1
 
     try:
@@ -789,8 +713,6 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     surface = checked.surface
     lines = checked.lines
     scope_map = checked.scope_map
-    linkage = checked.linkage
-    cics_eib_plan_ = checked.cics_eib
     assert (
         result is not None
         and suite is not None
@@ -806,29 +728,10 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     # and every FROM source must exist before anything compiles.
     real_fixtures: dict[tuple[int, str], tuple[Path, str]] = {}
     if checked.real_file_selects:
-        from mockymock.splicer.real_files import FIXTURES_DIR, rewrite_assigns
-
-        lines, assign_problems = rewrite_assigns(
-            lines, checked.real_file_selects, set(checked.real_file_selects)
-        )
-        for index, case in enumerate(suite.test_cases, start=1):
-            for real in case.real_files:
-                if real.source is None:
-                    continue
-                fixture = (cut_path.parent / real.source).resolve()
-                if not fixture.is_file():
-                    assign_problems.append(
-                        f"USE REAL FILE {real.file} FROM {real.source!r} "
-                        f"(.cut line {real.line}): no such file {fixture}"
-                    )
-                real_fixtures[(index, real.file)] = (
-                    fixture,
-                    f"{FIXTURES_DIR}/{index:03d}-{real.file}",
-                )
-        if assign_problems:
-            for problem in assign_problems:
-                print(f"mockymock run: {problem}")
+        staged = _stage_real_files(checked, suite, lines, cut_path)
+        if staged is None:
             return 1
+        lines, real_fixtures = staged
 
     # --record-baseline / --baseline: every mocked boundary reports what it
     # was sent (splicer.behaviour, report.baseline). A baseline to compare
@@ -843,50 +746,6 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         except BaselineError as exc:
             print(f"mockymock run: --baseline: {exc}")
             return 2
-
-    boundaries = collect_boundaries(result.ast)
-    registry = TallyRegistry(suite)
-    terminator_plans, _ = find_terminator_plans(
-        surface, result.ast, suite, scope_map, lines
-    )
-    goto_exit_plans, _ = find_goto_exit_plans(result.ast, scope_map, lines)
-    flow_plans, _ = find_flow_mock_plans(result.ast, suite, lines)
-    lines = splice_program(
-        lines,
-        boundaries,
-        surface,
-        suite,
-        registry,
-        terminator_plans,
-        flow_plans,
-        checked.file_status_fields,
-        goto_exit_plans=goto_exit_plans,
-        trace=args.trace,
-        fallthrough_traps=checked.fallthrough_traps,
-        behaviour=behaviour,
-    )
-    lines, _ = transform_data_division_exec(lines, copybook_paths=args.copybook_path)
-
-    reset_lines = reset_move_lines(result.ast) + sqlca_reset_lines(lines)
-    if linkage is not None:
-        # LINKAGE items `neutralize` folded into WORKING-STORAGE live under
-        # the LINKAGE section in `result.ast` still (the transform edited
-        # text, not the AST), so `reset_move_lines`'s WORKING-STORAGE walk
-        # never sees them -- add their reset lines explicitly.
-        reset_lines = reset_lines + extra_reset_lines(linkage)
-    if cics_eib_plan_ is not None:
-        reset_lines = reset_lines + cics_eib.reset_lines(cics_eib_plan_)
-    reset_lines = reset_lines + extra_reset_lines_for(checked)
-    real_programs = checked.real_programs
-    if real_programs:
-        from mockymock.splicer.real_programs import (
-            cancel_lines,
-            instrument_real_program,
-            share_driver_state,
-        )
-
-        # Every real program starts each case from its VALUE clauses.
-        reset_lines = reset_lines + cancel_lines([p.spec for p in real_programs])
 
     # --record-expectations: scan the raw .cut text (not the parsed suite --
     # a "*> STUB EXPECT" line is an ordinary comment to parse_cut) against
@@ -906,50 +765,20 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         for stub in stub_scan.stubs:
             record_targets.setdefault(stub.case_index, []).append(stub.data_name)
 
-    record_conditions = condition_names(result.ast) if record_targets else set()
-    from mockymock.splicer.behaviour import returned_items
-
-    artifact = build_driver(
-        suite,
-        reset_lines,
-        registry,
-        record_targets=record_targets,
-        extra_working_storage_lines=extra_working_storage(checked),
-        snapshot=checked.snapshot,
-        numeric_edited=numeric_edited_fields(result.ast, checked.captures),
-        program_end=program_end_thru(result.ast, terminator_plans),
-        call_frame=needs_call_frame(terminator_plans),
-        condition_names=record_conditions,
-        behaviour=behaviour,
-        returned=returned_items(result.ast) if behaviour else (),
+    built = build_instrumented(
+        checked,
+        BuildOptions(
+            copybook_paths=args.copybook_path,
+            trace=args.trace,
+            behaviour=behaviour,
+            record_targets=record_targets,
+        ),
+        lines=lines,
     )
-
-    real_sources: list[tuple[str, list[str]]] = []
-    if real_programs:
-        # USE REAL CALL: the programs share the driver's bookkeeping
-        # (EXTERNAL items) and are compiled into the same binary.
-        artifact, shared_ws = share_driver_state(artifact, registry)
-        for prepared in real_programs:
-            real_sources.append(
-                (
-                    f"real_{prepared.program_id.upper()}.cbl",
-                    instrument_real_program(
-                        prepared,
-                        suite,
-                        registry,
-                        shared_ws,
-                        args.copybook_path,
-                        trace=args.trace,
-                        behaviour=behaviour,
-                    ),
-                )
-            )
-    if behaviour:
-        from mockymock.splicer.behaviour import HEXDUMP_PROGRAM, hexdump_program
-
-        real_sources.append((f"{HEXDUMP_PROGRAM.lower()}.cbl", hexdump_program()))
-
-    instrumented = _insert_driver(lines, artifact)
+    record_conditions = built.condition_names
+    real_programs = checked.real_programs
+    real_sources = built.extra_sources
+    instrumented = built.source()
     if checked.real_file_selects:
         from mockymock.splicer.real_files import insert_case_staging
 
@@ -1242,6 +1071,98 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         )
         args.saved_run_report = artifact_path(cut_path, "run")
 
+    coverage_gate_failed = _report_coverage(
+        args,
+        coverage_report,
+        coverage_text,
+        instrumented,
+        instrumented_name,
+        normalized_lines,
+        source_path,
+        cut_path,
+        saved_inputs,
+    )
+
+    if getattr(args, "branch_coverage", None):
+        _write_branch_coverage(
+            args,
+            trace_text,
+            suite_result,
+            cut_path,
+            source_path,
+            result.ast,
+            normalized_lines,
+            instrumented,
+            checked.source_location_map,
+            real_programs,
+            real_sources,
+            suite,
+        )
+
+    if args.trace:
+        _print_trace(
+            args,
+            trace_text,
+            suite_result,
+            suite,
+            instrumented,
+            normalized_lines,
+            checked,
+            source_path,
+            cut_path,
+        )
+
+    # A nonzero binary exit is a failed run even when every case that got
+    # to print its markers passed (e.g. libcob aborted after the SUMMARY
+    # line, or the timeout killed a straggler). A tripped
+    # --coverage-fail-under gate fails the command the same way, so a green
+    # suite under an unmet coverage floor still exits nonzero in CI.
+    if (
+        suite_result.results
+        and suite_result.tests_run == 0
+        and all(result.passed for result in suite_result.results)
+    ):
+        # Every case printed a clean END, yet the driver never reached its
+        # SUMMARY line: something the program ran after the last case
+        # ended the binary before AFTER-ALL. Exiting 1 under an all-PASS
+        # report without saying why read as a mockymock bug (issue #264).
+        print(
+            "mockymock run: every case passed, but the test binary ended "
+            "without printing its SUMMARY line -- program code that ran "
+            "after the last case (a STOP RUN, GOBACK, or abend) stopped it "
+            "before AFTER-ALL, so the run is not counted as passed"
+        )
+    baseline_differs = False
+    if behaviour:
+        baseline_differs = _finish_baseline(
+            args, suite_result, cut_path, source_path, real_programs, baseline_document
+        )
+    if coverage_gate_failed or baseline_differs:
+        return 1
+    return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
+
+
+def _report_coverage(
+    args: argparse.Namespace,
+    coverage_report: Any,
+    coverage_text: str | None,
+    instrumented: list[str],
+    instrumented_name: str,
+    normalized_lines: list[str],
+    source_path: Path,
+    cut_path: Path,
+    saved_inputs: Any,
+) -> bool:
+    """`--coverage`: print and write the coverage report, mapped onto the
+    original program, and judge `--coverage-fail-under`. True when the
+    gate failed."""
+    from mockymock.report.coverage import (
+        format_coverage_console,
+        format_coverage_json,
+        map_coverage_to_original,
+        summarize_original,
+    )
+
     # The original-.cbl remap is what BOTH the console headline and the
     # --coverage-fail-under gate read, so it is computed once here for
     # every --coverage run -- not only when --coverage-json asked for it,
@@ -1319,92 +1240,181 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
                 f"is below --coverage-fail-under {args.coverage_fail_under}"
             )
             coverage_gate_failed = True
+    return coverage_gate_failed
 
-    if getattr(args, "branch_coverage", None):
-        _write_branch_coverage(
-            args,
-            trace_text,
-            suite_result,
-            cut_path,
-            source_path,
-            result.ast,
-            normalized_lines,
-            instrumented,
-            checked.source_location_map,
-            real_programs,
-            real_sources,
-            suite,
-        )
 
-    if args.trace:
-        if not trace_text:
-            print(
-                "mockymock run: no execution trace produced -- the binary "
-                "wrote no trace file (it may have died before executing a "
-                "single statement)"
-            )
-        else:
-            # Exactly one case is selected (enforced above), but the trace
-            # also holds the BEFORE-ALL/AFTER-ALL steps run around it, so
-            # it is cut to the case's own span (case_entries, #334).
-            selected = args.case[0]
-            case_result = next(
-                (r for r in suite_result.results if r.case_name == selected), None
-            )
-            model_case = next((c for c in suite.test_cases if c.name == selected), None)
-            trace_json = format_trace_json(
-                case_entries(
-                    parse_trace(trace_text),
-                    instrumented,
-                    case_result.case_id if case_result is not None else None,
-                ),
-                build_original_line_map(
-                    instrumented,
-                    normalized_lines,
-                    split_source_lines(read_utf8_source(source_path)),
-                ),
-                case_result.mock_hits if case_result is not None else [],
-                selected,
-                model_case.line if model_case is not None else None,
-                str(cut_path),
-                str(source_path),
-                build_copybook_line_map(
-                    instrumented, normalized_lines, checked.source_location_map
-                ),
-                original_lines=split_source_lines(read_utf8_source(source_path)),
-            )
-            if args.trace_json:
-                _write_report_file("run", "--trace-json", args.trace_json, trace_json)
-            print(format_trace_console(json.loads(trace_json)))
+def _imply_run_flags(args: argparse.Namespace) -> bool:
+    """Turn on what a more specific flag implies (`--coverage-json` means
+    `--coverage`, `--trace-json` means `--trace`, ...); False, after saying
+    why, when the flags cannot be honoured together."""
+    # Asking for the coverage JSON, or a coverage report file, is asking
+    # for coverage.
+    if args.coverage_json:
+        args.coverage = True
+    if args.coverage_out:
+        args.coverage = True
+    # ... and so is asking for the coverage gate: --coverage-fail-under is
+    # the `run` counterpart of `mutate --fail-under`, so it must be usable
+    # on its own in a CI lane without also remembering --coverage.
+    if args.coverage_fail_under is not None:
+        args.coverage = True
 
-    # A nonzero binary exit is a failed run even when every case that got
-    # to print its markers passed (e.g. libcob aborted after the SUMMARY
-    # line, or the timeout killed a straggler). A tripped
-    # --coverage-fail-under gate fails the command the same way, so a green
-    # suite under an unmet coverage floor still exits nonzero in CI.
-    if (
-        suite_result.results
-        and suite_result.tests_run == 0
-        and all(result.passed for result in suite_result.results)
-    ):
-        # Every case printed a clean END, yet the driver never reached its
-        # SUMMARY line: something the program ran after the last case
-        # ended the binary before AFTER-ALL. Exiting 1 under an all-PASS
-        # report without saying why read as a mockymock bug (issue #264).
+    # Asking for the trace JSON is asking for the trace.
+    if args.trace_json:
+        args.trace = True
+    if args.trace and (len(args.case or []) != 1 or args.tag):
+        # The suite compiles and runs as ONE binary, and the trace file is a
+        # separate stream from stdout with no shared timestamps -- so an
+        # unscoped trace interleaves every case with nothing to segment it
+        # by. Requiring a single case makes attribution true by
+        # construction. See docs/2026-07-21-debug-trace-design.md.
         print(
-            "mockymock run: every case passed, but the test binary ended "
-            "without printing its SUMMARY line -- program code that ran "
-            "after the last case (a STOP RUN, GOBACK, or abend) stopped it "
-            "before AFTER-ALL, so the run is not counted as passed"
+            "mockymock run: --trace requires exactly one --case (and no "
+            "--tag): the suite runs as a single binary, so an unscoped "
+            "trace cannot be attributed to one case"
         )
-    baseline_differs = False
-    if behaviour:
-        baseline_differs = _finish_baseline(
-            args, suite_result, cut_path, source_path, real_programs, baseline_document
+        return False
+    return True
+
+
+def _report_checks(
+    args: argparse.Namespace,
+    checked: StaticCheckResult,
+    source_path: Path,
+    cut_path: Path,
+) -> bool:
+    """Print the static checks' notes and warnings; False, after printing
+    the problems and writing the failure reports, when the run must stop."""
+    for note in checked.notes:
+        print(f"mockymock run: {note}")
+    for warning in checked.warnings:
+        print(f"mockymock run: {warning}")
+    if checked.linkage is not None:
+        _print_linkage_neutralization(
+            "run",
+            checked.linkage,
+            applied=True,
+            address_of=checked.linkage_address_of,
         )
-    if coverage_gate_failed or baseline_differs:
-        return 1
-    return 0 if suite_result.all_passed and executed.exit_code == 0 else 1
+    if checked.cics_eib is not None:
+        _print_cics_eib_synthesis("run", checked.cics_eib, applied=True)
+    if checked.problems:
+        for problem in checked.problems:
+            if problem.startswith("  "):
+                print(problem)  # indented parse-error detail lines
+            else:
+                print(f"mockymock run: {problem}")
+        _write_failure_reports(
+            args,
+            "run",
+            checked.suite.name if checked.suite is not None else "",
+            "\n".join(checked.problems),
+            cut_suite=checked.suite,
+            cut_file=cut_path,
+            program_file=source_path,
+        )
+        return False
+    return True
+
+
+def _stage_real_files(
+    checked: StaticCheckResult, suite: MockTestSuite, lines: list[str], cut_path: Path
+) -> tuple[list[str], dict[tuple[int, str], tuple[Path, str]]] | None:
+    """USE REAL FILE: `lines` with each real file's ASSIGN pointed into the
+    sandbox, and (case index, file) -> (fixture on disk, sandbox path) for
+    every FROM source; None, after printing why, when a source is missing."""
+    real_fixtures: dict[tuple[int, str], tuple[Path, str]] = {}
+    from mockymock.splicer.real_files import FIXTURES_DIR, rewrite_assigns
+
+    lines, assign_problems = rewrite_assigns(
+        lines, checked.real_file_selects, set(checked.real_file_selects)
+    )
+    for index, case in enumerate(suite.test_cases, start=1):
+        for real in case.real_files:
+            if real.source is None:
+                continue
+            fixture = (cut_path.parent / real.source).resolve()
+            if not fixture.is_file():
+                assign_problems.append(
+                    f"USE REAL FILE {real.file} FROM {real.source!r} "
+                    f"(.cut line {real.line}): no such file {fixture}"
+                )
+            real_fixtures[(index, real.file)] = (
+                fixture,
+                f"{FIXTURES_DIR}/{index:03d}-{real.file}",
+            )
+    if assign_problems:
+        for problem in assign_problems:
+            print(f"mockymock run: {problem}")
+        return None
+    return lines, real_fixtures
+
+
+def _print_trace(
+    args: argparse.Namespace,
+    trace_text: str | None,
+    suite_result: TestSuiteResult,
+    suite: MockTestSuite,
+    instrumented: list[str],
+    normalized_lines: list[str],
+    checked: StaticCheckResult,
+    source_path: Path,
+    cut_path: Path,
+) -> None:
+    """`--trace`: print (and with `--trace-json`, write) the one selected
+    case's execution trace, mapped back onto the original source."""
+    import json
+
+    from mockymock.report.coverage import (
+        build_copybook_line_map,
+        build_original_line_map,
+    )
+    from mockymock.report.trace import (
+        case_entries,
+        format_trace_console,
+        format_trace_json,
+        parse_trace,
+    )
+
+    if not trace_text:
+        print(
+            "mockymock run: no execution trace produced -- the binary "
+            "wrote no trace file (it may have died before executing a "
+            "single statement)"
+        )
+    else:
+        # Exactly one case is selected (enforced above), but the trace
+        # also holds the BEFORE-ALL/AFTER-ALL steps run around it, so
+        # it is cut to the case's own span (case_entries, #334).
+        selected = args.case[0]
+        case_result = next(
+            (r for r in suite_result.results if r.case_name == selected), None
+        )
+        model_case = next((c for c in suite.test_cases if c.name == selected), None)
+        trace_json = format_trace_json(
+            case_entries(
+                parse_trace(trace_text),
+                instrumented,
+                case_result.case_id if case_result is not None else None,
+            ),
+            build_original_line_map(
+                instrumented,
+                normalized_lines,
+                split_source_lines(read_utf8_source(source_path)),
+            ),
+            case_result.mock_hits if case_result is not None else [],
+            selected,
+            model_case.line if model_case is not None else None,
+            str(cut_path),
+            str(source_path),
+            build_copybook_line_map(
+                instrumented, normalized_lines, checked.source_location_map
+            ),
+            original_lines=split_source_lines(read_utf8_source(source_path)),
+        )
+        if args.trace_json:
+            _write_report_file("run", "--trace-json", args.trace_json, trace_json)
+        print(format_trace_console(json.loads(trace_json)))
 
 
 def _baseline_inputs(
@@ -1572,3 +1582,194 @@ def _compile_failure_diagnosis(
 def _holds_exec(lines: list[str]) -> bool:
     """Whether `lines` hold an EXEC block, which plain cobc cannot compile."""
     return any(_EXEC_RE.search(line.split("*>", 1)[0]) for line in lines)
+
+
+def register_run(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock run` to the top-level parser."""
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Splice, compile, run, and assert a COBOL program against a .cut file",
+    )
+    run_parser.add_argument(
+        "program",
+        nargs="?",
+        help=(
+            "COBOL source file. Omit to infer it from --cut's sibling "
+            "file (same directory, same stem); omit both program and "
+            "--cut to discover and run every .cut file under the "
+            "current directory (or the config file's test_root)"
+        ),
+    )
+    run_parser.add_argument(
+        "--cut",
+        help="Test file. Omit to infer it from program's sibling .cut file",
+    )
+    run_parser.add_argument(
+        "--junit-xml",
+        help="Write a JUnit XML report (one testcase per TESTCASE) to this file, "
+        "for CI test dashboards",
+    )
+    run_parser.add_argument(
+        "--json-report",
+        help=(
+            "Write a machine-readable run report (per-case status, .cut "
+            "line numbers, expected/actual per failure, tags) to this file"
+        ),
+    )
+    run_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Run only the TESTCASE with this exact name (repeatable; "
+            "combines with --tag as a union). The suite still runs as one "
+            "compile + binary, just with only the selected cases spliced in"
+        ),
+    )
+    run_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Run only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
+    )
+    run_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    run_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    run_parser.add_argument(
+        "--keep-sandbox",
+        action="store_true",
+        help="Do not delete the sandbox; print its path for inspection",
+    )
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="On compile failure, print the path to the instrumented source",
+    )
+    run_parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "Compile with GnuCOBOL's --coverage flag and report per-line "
+            "coverage after the run (gcov-based). The headline figure is "
+            "the ORIGINAL .cbl's own coverage; the instrumented sandbox "
+            "copy's higher number is reported below it for reference -- "
+            "see docs/2026-07-17-coverage-reporting-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--coverage-out",
+        help="Write the full coverage report (percentage + uncovered lines) to this file",
+    )
+    run_parser.add_argument(
+        "--coverage-fail-under",
+        type=_percent,
+        metavar="PERCENT",
+        help=(
+            "Exit nonzero when the ORIGINAL .cbl's line coverage is below "
+            "this percentage -- the `run` counterpart of `mutate "
+            "--fail-under`, so coverage can be CI-gated the same way. "
+            "Implies --coverage"
+        ),
+    )
+    run_parser.add_argument(
+        "--coverage-json",
+        help=(
+            "Write machine-readable coverage to this file, remapped onto "
+            "the ORIGINAL .cbl's line numbers (splicer-inserted lines "
+            "excluded). Implies --coverage"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Trace the executed path through the program for a single test "
+            "case and print it after the run, together with the mocks that "
+            "fired in order. Requires exactly one --case"
+        ),
+    )
+    run_parser.add_argument(
+        "--branch-coverage",
+        metavar="FILE",
+        help=(
+            "Write paragraph, branch (IF true/false, each EVALUATE WHEN) and "
+            "statement coverage of every case, for the program and every "
+            "USE REAL CALL program, to this JSON file, and print a summary. "
+            "Read from GnuCOBOL's statement trace, so it works on any "
+            "GnuCOBOL 3.x (see docs/2026-11-06-branch-coverage-design.md)"
+        ),
+    )
+    run_parser.add_argument(
+        "--trace-json",
+        help=(
+            "Write the machine-readable execution trace (executed path "
+            "remapped onto the ORIGINAL .cbl's line numbers, plus the "
+            "ordered mock timeline) to this file. Implies --trace"
+        ),
+    )
+    run_parser.add_argument(
+        "--timeout",
+        type=_timeout_seconds,
+        default=30,
+        help=(
+            "Binary execution timeout in seconds (default 30); a mocked "
+            "CALL that removes a loop's terminating condition can "
+            "otherwise hang until this limit kills it -- give a "
+            'retrieve-and-loop CALL a sequence instead, MOCK CALL "X" '
+            "ROWS ( ... ) TERMINAL ( ... ), so later calls end the loop "
+            "(mirrors mutate's own --timeout)"
+        ),
+    )
+    run_parser.add_argument(
+        "--record-expectations",
+        action="store_true",
+        help=(
+            "Golden/characterization mode: run the suite, capture the real "
+            "runtime value behind every '*> STUB EXPECT <name>' comment in "
+            "the .cut file, and rewrite the file in place with those stubs "
+            "turned into real EXPECT lines. Best-effort and cumulative -- "
+            "recorded/skipped counts are printed, with a reason for every "
+            "skip. Never touches a line that isn't a stub comment (so a "
+            "hand-written or previously-recorded EXPECT is never "
+            "overwritten), and never rewrites the file at all if nothing "
+            "was recorded. Does not change the run's exit code. See "
+            "docs/2026-08-04-record-expectations-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--record-baseline",
+        metavar="FILE",
+        help=(
+            "Record what every case sends out of the program (each mocked "
+            "boundary in order, the bytes of every value passed to it, the "
+            "program's DISPLAY output and RETURN-CODE) to FILE, as the "
+            "baseline later runs are compared with. See "
+            "docs/2026-11-01-baseline-design.md"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline",
+        metavar="FILE",
+        help=(
+            "Compare this run's behaviour with a baseline recorded by "
+            "--record-baseline, case by case (by name). Exits 1 when any "
+            "case's behaviour differs, even if every EXPECT passed"
+        ),
+    )
+    run_parser.add_argument(
+        "--baseline-json",
+        metavar="FILE",
+        help="Write the --baseline comparison as JSON to FILE",
+    )
+    run_parser.set_defaults(func=_cmd_run)

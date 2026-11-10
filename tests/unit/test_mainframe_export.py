@@ -1,4 +1,4 @@
-"""Unit tests for mockymock.cli.mainframe_export -- the export-only text
+"""Unit tests for mockymock.engine.mainframe_export -- the export-only text
 transforms that make the instrumented source z/OS-compilable. See
 docs/2026-08-03-mainframe-export-command-design.md for the empirical basis
 (spiked against a real cobolparser install and a real GnuCOBOL container
@@ -6,7 +6,7 @@ before this code was written)."""
 
 import random
 
-from mockymock.cli.mainframe_export import (
+from mockymock.engine.mainframe_export import (
     build_provenance_header,
     fit_within_columns,
     insert_provenance_header,
@@ -246,7 +246,7 @@ def test_comment_line_overflow_is_not_reported_as_a_problem():
 
 
 def test_atomic_units_keeps_doubled_quote_pairs_together():
-    from mockymock.cli.mainframe_export import _atomic_units
+    from mockymock.engine.mainframe_export import _atomic_units
 
     units = _atomic_units('AB""CD""""EF')
     assert units == ["A", "B", '""', "C", "D", '""', '""', "E", "F"]
@@ -254,7 +254,7 @@ def test_atomic_units_keeps_doubled_quote_pairs_together():
 
 
 def test_chunk_units_never_splits_a_unit_and_clamps_non_positive_budget():
-    from mockymock.cli.mainframe_export import _atomic_units, _chunk_units
+    from mockymock.engine.mainframe_export import _atomic_units, _chunk_units
 
     units = _atomic_units('AB""CD')
     for budget in (-5, 0, 1, 2, 3, 10):
@@ -329,7 +329,7 @@ def _assert_same_statement(original, wrapped):
     whitespace between the prefix and the opening delimiter may differ:
     that is the padding that fills a continued line to exactly column 72,
     and extra spaces before a literal are separators in COBOL."""
-    from mockymock.cli.mainframe_export import _find_single_literal
+    from mockymock.engine.mainframe_export import _find_single_literal
 
     rebuilt = _read_back_continuation(wrapped)
     was = _find_single_literal(original)
@@ -559,7 +559,7 @@ def test_fit_within_columns_refuses_an_overlong_directive_rather_than_breaking_i
 # quote, with the same effect.
 import re
 
-from mockymock.cli.mainframe_export import COLUMN_LIMIT
+from mockymock.engine.mainframe_export import COLUMN_LIMIT
 
 # --- export: literal type prefixes ----------------------------------------
 
@@ -600,7 +600,7 @@ def test_export_literal_continuation_pads_before_the_literal_prefix():
 
 
 # Regression: bug hunt round 11.
-from mockymock.cli.mainframe_export import SourceAttribution
+from mockymock.engine.mainframe_export import SourceAttribution
 
 # --- export: UPON clause on every DISPLAY fragment -------------------------
 

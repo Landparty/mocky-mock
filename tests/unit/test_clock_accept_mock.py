@@ -12,8 +12,8 @@ from cobolparser import parse_cobol
 from mockymock.analysis.mock_surface import analyze, promote_clock_accepts
 from mockymock.analysis.refusal import check_test_case
 from mockymock.analysis.stub_expectations import StubExpectation, StubScanResult
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase, MockTestSuite
+from mockymock.engine.checks import run_static_checks
 from mockymock.report import results as run_results
 from mockymock.report.record_rewrite import (
     build_recording_report,

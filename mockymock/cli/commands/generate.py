@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from mockymock._lines import SourceEncodingError, read_utf8_source, split_source_lines
+from mockymock.cli._args import _suite_name
 from mockymock.cli._common import (
     _apply_config_to_args,
     _check_input_files,
@@ -52,13 +53,13 @@ def _fill_cut_file(source_path: Path, cut_path: Path, args: argparse.Namespace) 
     its `unmocked_reasons`, docs/2026-09-15-actionable-refusals-and-fill-design.md)
     rather than re-running reachability analysis independently, so
     `--fill` and `lint` can never disagree about what's missing."""
-    from mockymock.cli.checks import run_static_checks
     from mockymock.dsl.parser import (
         _END_MOCK_RE,
         _MOCK_BARE_RE,
         _MOCK_QUOTED_RE,
         _PERFORM_RE,
     )
+    from mockymock.engine.checks import run_static_checks
 
     if not _check_input_files("mockymock generate", cut_path):
         return 1
@@ -273,7 +274,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
-    from mockymock.cli.discovery import copybook_not_found_hint
     from mockymock.dsl.fixture_bundle import (
         FixtureBundle,
         UnsupportedBundleVersionError,
@@ -281,6 +281,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         load_fixture_bundle_file,
     )
     from mockymock.dsl.generator import ProgramContext, scaffold_cut
+    from mockymock.project.discovery import copybook_not_found_hint
     from mockymock.splicer.cics_resp import expand_dfhresp, expansion_note
     from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
@@ -502,7 +503,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if copybook_reasons:
         return 1
 
-    # See mockymock/cli/checks.py::run_static_checks for why PROCESS/CBL
+    # See mockymock/engine/checks.py::run_static_checks for why PROCESS/CBL
     # precompiler directives must be stripped before normalizing here too.
     lines = split_source_lines(
         normalize_fixed_format(
@@ -847,8 +848,8 @@ def _note_pending_stubs(command: str, cut_text: str) -> None:
     comments: `generate` leaves them out of its "asserts nothing" warning,
     while `lint` reports them as NO_ASSERTION until the stubs are recorded,
     so without this line the two counts disagree with no explanation."""
-    from mockymock.cli.checks import stub_case_lines
     from mockymock.dsl.parser import CutParseError, parse_cut
+    from mockymock.engine.checks import stub_case_lines
 
     try:
         suite = parse_cut(cut_text)
@@ -879,7 +880,7 @@ def _refused_cases(source_path: Path, cut_path: Path, cut_text: str, args) -> in
     """How many of `cut_text`'s test cases `lint` refuses (all of them on a
     whole-program refusal), checked through a scratch copy at `cut_path`'s
     location."""
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
 
     scratch = cut_path.with_name(f".{cut_path.name}.main-line-check")
     try:
@@ -925,7 +926,7 @@ def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
     unsafe STOP RUN (UNSUPPORTED_TERMINATOR_LAYOUT) is known to be unusable
     here, not only at the next `lint`/`run`. Mirrors `--fill`'s own closing
     check; UNMOCKED_* refusals are left to `generate --fill`."""
-    from mockymock.cli.checks import run_static_checks
+    from mockymock.engine.checks import run_static_checks
 
     checked = run_static_checks(source_path, cut_path, args.copybook_path)
     per_case = {
@@ -964,3 +965,163 @@ def _refuse_unusable_scaffold(source_path: Path, cut_path: Path, args) -> int:
         file=sys.stderr,
     )
     return 1
+
+
+def register_generate(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock generate` to the top-level parser."""
+    generate_parser = subparsers.add_parser(
+        "generate", help="Scaffold a starter .cut file from a COBOL program"
+    )
+    generate_parser.add_argument("program")
+    generate_parser.add_argument(
+        "-o",
+        "--output",
+        help=(
+            "Where to write the .cut file (default: tests/<folder>/<program>.cut, "
+            "mirroring the program's folder; beside the program when it "
+            "already has a <program>.cut there)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--name",
+        type=_suite_name,
+        help="Name a second suite for the program: writes <program>.<NAME>.cut",
+    )
+    generate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output .cut file if it already exists",
+    )
+    generate_parser.add_argument(
+        "--fill",
+        metavar="CUT_FILE",
+        help=(
+            "Insert only the missing MOCK blocks an existing .cut file's "
+            "test cases need (from the same UNMOCKED_* analysis 'lint' "
+            "runs), writing back to CUT_FILE in place. Every existing "
+            "directive, EXPECT, VERIFY, and comment is left untouched -- "
+            "an existing MOCK block is never edited even if its body is "
+            "empty or wrong. Mutually exclusive with -o/--output, "
+            "--with-data, and --fixtures. See "
+            "docs/2026-09-15-actionable-refusals-and-fill-design.md"
+        ),
+    )
+    generate_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    generate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--with-data",
+        action="store_true",
+        help=(
+            "Data-driven mode, the default: one TESTCASE per scenario from "
+            "a cobol-parser fixture bundle, mock bodies built from its own "
+            "generated data. Passing it explicitly makes a generator "
+            "failure fatal instead of falling back to --per-paragraph. "
+            "Calls cobol-parser's Python API directly unless --fixtures is "
+            "also given. See "
+            "docs/plans/2026-08-02-program-data-generation-implementation.md's "
+            "Phase 8"
+        ),
+    )
+    generate_parser.add_argument(
+        "--per-paragraph",
+        action="store_true",
+        help=(
+            "One TESTCASE per paragraph that touches a boundary, with "
+            "placeholder mock bodies, instead of one per scenario. Useful "
+            "for isolating a leaf paragraph. Not valid with --with-data or "
+            "--fixtures"
+        ),
+    )
+    generate_parser.add_argument(
+        "--fixtures",
+        help=(
+            "Consume a pre-generated fixture bundle JSON file (e.g. from "
+            "cobol-parser's own 'gen-fixtures --format json') instead of "
+            "calling cobol-parser's Python API. Implies --with-data"
+        ),
+    )
+    generate_parser.add_argument(
+        "--seed",
+        type=int,
+        help=(
+            "Seed for the fixture bundle's random data generation "
+            "(--with-data only, ignored with --fixtures). Omit to draw one; "
+            "the bundle always reports which seed it used"
+        ),
+    )
+    generate_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help=(
+            "Scenario strategy for the fixture bundle (--with-data only, "
+            "ignored with --fixtures): happy (one unconstrained scenario, "
+            "default), branches (one scenario per reachable/satisfiable "
+            "branch arm), all (branches + fixed empty-input/error-status/"
+            "boundary-values families). Mirrors cobol-parser's own "
+            "gen-fixtures --scenarios flag"
+        ),
+    )
+    generate_parser.add_argument(
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table on the --with-data "
+            "self-generating path (generator default; invalid together "
+            "with --fixtures, whose row count is already baked into the "
+            "bundle). A scenario family that pins its own row count "
+            "(e.g. --scenarios all's fixed 'empty input' family) ignores "
+            "this and always generates zero rows for that scenario"
+        ),
+    )
+    generate_parser.add_argument(
+        "--placeholder",
+        action="append",
+        default=[],
+        metavar="CATEGORY:KEY",
+        help=(
+            "Downgrade this boundary's mock body to its ordinary "
+            "placeholder instead of bundle-seeded data (repeatable; the "
+            "fixture stays mocked, just without generated data; valid "
+            "with --with-data or --fixtures; an unmatched pair warns on "
+            "stderr rather than silently doing nothing)"
+        ),
+    )
+    generate_parser.add_argument(
+        "--real",
+        action="append",
+        default=[],
+        metavar="SUBPROGRAM.cbl",
+        help=(
+            "Load-module suite: run this subprogram for real instead of "
+            "mocking its CALL (repeatable; USE REAL CALL, see "
+            "docs/2026-11-01-real-call-integration-design.md). Its CALL "
+            "mocks become USE REAL CALL lines and every boundary of the "
+            "subprogram gets a placeholder MOCK in BEFORE-EACH"
+        ),
+    )
+    generate_parser.add_argument(
+        "--real-files",
+        action="store_true",
+        help=(
+            "Integration tests level 2: make every sequential file real. "
+            "Each scenario's generated READ records are written to a data "
+            "file (encoded with the FD record layout) and staged with USE "
+            "REAL FILE ... FROM; each output file gets an EXPECT FILE "
+            "recorded by run --record-expectations. Indexed and relative "
+            "files stay mocked (see docs/2026-11-06-real-files-and-job-runs-"
+            "design.md)"
+        ),
+    )
+    generate_parser.set_defaults(func=_cmd_generate)

@@ -53,7 +53,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
 - `PROGRAM "<path>"` (2026-10-14) is optional, at most once, and only
   directly after `TESTSUITE` (before any TESTCASE, hook or PROVIDER); it
   sets `MockTestSuite.program_path`/`program_line`. The parser only stores
-  it -- pairing is `cli/discovery.py`'s job, which reads the line from raw
+  it -- pairing is `project/discovery.py`'s job, which reads the line from raw
   text (`read_program_line`) so a suite with a later syntax error still
   pairs. See [cli](cli.md).
 - `TESTCASE` must follow a `TESTSUITE`; `MOCK`/`MOVE`/`PERFORM`/`EXPECT`/`VERIFY`
@@ -66,7 +66,7 @@ TESTCASE "<name>" [ TAGS "<tag>" ... ] [ USING PROVIDER <name> ]
   mocks; `UT-EARLY-EXIT` is reset after each step PERFORM. VERIFY counts
   every call of the case. `hook_checks()` gates each step PERFORM as hook
   `"TESTCASE"`, and a case mock no call reaches is refused
-  `UNMATCHED_MOCK` after all of them (`cli.checks`). A `MOVE` or
+  `UNMATCHED_MOCK` after all of them (`engine.checks`). A `MOVE` or
   `PERFORM` below an `EXPECT`/`VERIFY` raises (`after an EXPECT/VERIFY`),
   as does a `MOVE` after the last `PERFORM`.
 - `<expectation>` is validated **at parse time**: `ONCE`, `NEVER`,
@@ -200,7 +200,7 @@ terminator chain check the flag too).
 
 **Static checks**: `MockTestSuite.hook_checks()` turns each hook
 `PERFORM` into a synthetic `MockTestCase` (EACH hooks once per test
-case), and `analysis_cases()` = test cases + those. `cli.checks` runs
+case), and `analysis_cases()` = test cases + those. `engine.checks` runs
 `check_test_case` on each (problems prefixed `BEFORE-ALL PERFORM X:`,
 deduplicated across cases, fix hint `Add to BEFORE-ALL:`/`BEFORE-EACH:`;
 every mock in force counts as `shared` there, the case's own included,
@@ -216,7 +216,7 @@ precedence on a `(category, key)` collision is `TESTCASE` >
 `BEFORE-EACH` > `BEFORE-ALL`, silently. The same directive objects stay
 on `suite.before_all_mocks` / `before_each_mocks`. A shared mock is a
 default: `check_test_case(shared=..., matched_out=...)` no longer
-refuses one a given case doesn't reach; `cli.checks` refuses it
+refuses one a given case doesn't reach; `engine.checks` refuses it
 (`UNMATCHED_MOCK`, "not reached by any test case or hook step") only
 when nothing reaches it (2026-10-10; before, every case had to reach
 every shared mock). "Nothing" means the whole suite, not a `--case`/`--tag`
@@ -322,7 +322,7 @@ name starts with `splicer.captures.CAPTURE_TARGET_PREFIX` (`UT-CAP-`) means
 WORKING-STORAGE item mirroring the captured argument's own PICTURE/USAGE
 (a DISPLAY-only group becomes one `PIC X(<byte length>)` field, which is
 exactly what a group MOVE copies) and a reset line, both threaded through
-`cli.checks.extra_working_storage` / `extra_reset_lines_for` so all four
+`engine.checks.extra_working_storage` / `extra_reset_lines_for` so all four
 splice-and-compile pipelines (`run`, `debug`, `export`, `mutate`) stay in
 step. The reset matters as much as the declaration: the suite compiles to
 ONE binary, so an unreset capture would let a case that never reached its
@@ -623,7 +623,7 @@ pieces of mutable state: current `suite`, current `case`, and current open
 which also broke a line at a form feed, VT, NEL or U+2028: a page eject in a
 `*>` comment made the comment's tail an "unrecognized statement" and shifted
 every later line number. Every `.cut` reader that numbers lines uses it --
-the parser, `cli/checks.py`, `cli/discovery.read_program_line`,
+the parser, `engine/checks.py`, `cli/discovery.read_program_line`,
 `analysis/stub_expectations`, `analysis/assertion_labels` and
 `report/record_rewrite` -- so lint, stub scanning and the
 `--record-expectations` rewrite agree. Each line then goes through
@@ -1374,7 +1374,7 @@ paragraph-grouped path described above, unchanged. A real
 - **Lint gate**: `tests/integration/test_generate_with_data_lint_gate.py`
   generates a `.cut` for every corpus program across all three
   `--scenarios` modes (happy/branches/all) and asserts `mockymock lint`
-  (via `cli.checks.run_static_checks`, Docker-free) finds zero problems —
+  (via `engine.checks.run_static_checks`, Docker-free) finds zero problems —
   "a generator that emits a refusable `.cut` is worse than none."
 
 #### Scaffold corrections from the 2026-10-05 bug hunt (#141-#145, #148, #150)

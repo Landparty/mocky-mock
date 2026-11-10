@@ -29,7 +29,7 @@ from mockymock.analysis.refusal import (
     check_cics_eib_layout,
     check_cics_eib_layout_scoped,
 )
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.stub_writer import replace_columns
 
 # 2000-MAIN performs only 2100-WORK; 2900-LIRE-ECRAN (the DFHVALUE holder)

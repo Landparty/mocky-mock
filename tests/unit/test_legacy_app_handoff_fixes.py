@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mockymock.cli.discovery import effective_copybook_paths
+from mockymock.project.discovery import effective_copybook_paths
 
 
 def test_sibling_copybook_folder_one_level_up_is_found(tmp_path: Path) -> None:

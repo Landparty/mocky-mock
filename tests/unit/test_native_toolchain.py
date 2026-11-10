@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from mockymock.runtime import docker_toolchain, native_toolchain, status, toolchain
+from mockymock.runtime import (
+    _proc,
+    docker_toolchain,
+    native_toolchain,
+    status,
+    toolchain,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -232,7 +238,7 @@ def test_capped_stdout_bounds_marker_lines_too() -> None:
 def test_run_capped_keeps_memory_bounded_and_the_markers(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 1000)
+    monkeypatch.setattr(_proc, "STDOUT_CAPTURE_BYTES", 1000)
     script = (
         "import sys\n"
         "sys.stdout.write('x' * 100 + '\\n')\n"
@@ -253,7 +259,7 @@ def test_run_capped_keeps_memory_bounded_and_the_markers(
 def test_run_capped_times_out_with_what_was_printed(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(native_toolchain, "STDOUT_CAPTURE_BYTES", 100)
+    monkeypatch.setattr(_proc, "STDOUT_CAPTURE_BYTES", 100)
     script = (
         "import sys\n"
         "sys.stdout.write('__MOCKYMOCK__ CASE 001 START: loop\\n')\n"

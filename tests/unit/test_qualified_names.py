@@ -131,7 +131,7 @@ def test_combined_condition_with_a_text_operand_stays_textual() -> None:
 
 # Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
 # (executed counterpart:
-# tests/integration/test_bug_hunt_20261105_cut_language.py). An EXPECT / MOVE
+# tests/integration/test_cut_suite_language.py). An EXPECT / MOVE
 # name declared in two groups (one copybook COPYed twice with REPLACING) and
 # not qualified, or qualified by a group it is not in, passed lint; cobc then
 # rejected the driver ("ambiguous; needs qualification") and mockymock blamed
@@ -139,8 +139,8 @@ def test_combined_condition_with_a_text_operand_stays_textual() -> None:
 from pathlib import Path
 
 from mockymock.analysis.cut_names import check_cut_data_names, data_item_paths
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 
 # --- 3. ambiguous / wrongly qualified names ---------------------------------
 

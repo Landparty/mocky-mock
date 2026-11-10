@@ -108,7 +108,7 @@ def test_an_error_in_a_real_program_with_exec_blocks_gets_no_verdict(tmp_path: P
 
 # Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
 # (executed counterpart:
-# tests/integration/test_bug_hunt_20261105_cut_language.py). `run --coverage`
+# tests/integration/test_cut_suite_language.py). `run --coverage`
 # on a cobc without `--coverage` (GnuCOBOL 3.1) was diagnosed as "the code
 # mockymock added broke the compile".
 

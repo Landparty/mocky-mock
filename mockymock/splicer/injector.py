@@ -43,8 +43,8 @@ from mockymock.splicer.cics_resp import (
     cics_resp_mirror,
     cics_success_defaults,
 )
-from mockymock.splicer.driver import split_long_move
 from mockymock.splicer.io_copy import DataLayout, from_move, into_move
+from mockymock.splicer.literals import split_long_move
 from mockymock.splicer.naming import TallyRegistry, assign
 
 #: One token of a CALL statement's text: a (possibly X/N/G/Z/NX/U-prefixed)

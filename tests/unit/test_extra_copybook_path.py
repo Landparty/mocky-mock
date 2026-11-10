@@ -5,9 +5,9 @@ copybook_path list is kept)."""
 
 import argparse
 
-from mockymock.cli.config import MockymockConfig
-from mockymock.cli.discovery import SYSTEM_COPYBOOK_DIR
 from mockymock.cli.main import _apply_config_to_args, build_parser, main
+from mockymock.project.config import MockymockConfig
+from mockymock.project.discovery import SYSTEM_COPYBOOK_DIR
 
 PROGRAM = """       IDENTIFICATION DIVISION.
        PROGRAM-ID. TWOCPY.

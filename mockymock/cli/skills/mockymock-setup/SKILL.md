@@ -6,8 +6,8 @@ description: Use when someone wants a COBOL repository or VS Code workspace set 
 <!--
 Maintainer note: reference/settings.md lists every setting this skill may
 write. Keep it in step with:
-  - mockymock/cli/config.py `_KNOWN_KEYS` (the mockymock: / mockymock.toml keys)
-  - mockymock/cli/ai_mode.py `MODES`
+  - mockymock/project/config.py `_KNOWN_KEYS` (the mockymock: / mockymock.toml keys)
+  - mockymock/project/ai_mode.py `MODES`
   - the MOCKYMOCK_* environment variables the CLI reads
   - mocky-mock-vscode's package.json `contributes.configuration`
     (every `mockymock.*` setting and the `mockymock.toolchain` enum)

@@ -3,7 +3,7 @@ name, EXPECT or MOVE literal produced lines past column 72 bytes -- the unit
 a fixed-format compiler actually counts."""
 
 from mockymock.cli.main import main
-from mockymock.cli.mainframe_export import COLUMN_LIMIT, fit_within_columns
+from mockymock.engine.mainframe_export import COLUMN_LIMIT, fit_within_columns
 
 
 def _byte_width(line: str) -> int:

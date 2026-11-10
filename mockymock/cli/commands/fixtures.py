@@ -37,7 +37,7 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         check_unresolved_copybooks,
         check_whole_program,
     )
-    from mockymock.cli.discovery import copybook_not_found_hint
+    from mockymock.project.discovery import copybook_not_found_hint
 
     source_path = Path(args.program)
     if not source_path.is_file():
@@ -139,3 +139,46 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
         return 1
     print(bundle.to_json())
     return 0
+
+
+def register_fixtures(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock fixtures` to the top-level parser."""
+    fixtures_parser = subparsers.add_parser(
+        "fixtures",
+        help=(
+            "Print a FixtureBundle (scenarios, mock data, expectations) as "
+            "JSON for editor integrations"
+        ),
+    )
+    fixtures_parser.add_argument("program")
+    fixtures_parser.add_argument(
+        "--scenarios",
+        choices=["happy", "branches", "all"],
+        default="happy",
+        help="Which scenario set to generate (default happy)",
+    )
+    fixtures_parser.add_argument("--seed", type=int, help="Deterministic RNG seed")
+    fixtures_parser.add_argument(
+        "--rows",
+        type=int,
+        help=(
+            "Rows to generate per data table (generator default). A "
+            "scenario family that pins its own row count (e.g. "
+            "--scenarios all's fixed 'empty input' family) ignores this "
+            "and always generates zero rows for that scenario"
+        ),
+    )
+    fixtures_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    fixtures_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    fixtures_parser.set_defaults(func=_cmd_fixtures)

@@ -5,7 +5,8 @@ import argparse
 
 import pytest
 
-from mockymock.cli.main import _GROUPED_COMMANDS, build_parser, main
+from mockymock.cli.main import build_parser, main
+from mockymock.cli.parser import _GROUPED_COMMANDS
 
 
 def _registered() -> list[str]:

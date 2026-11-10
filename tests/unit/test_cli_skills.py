@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from mockymock.cli import ai_mode
 from mockymock.cli.main import build_parser, main
+from mockymock.project import ai_mode
 
 
 def test_skills_install_writes_to_home_by_default(monkeypatch, tmp_path, capsys):
@@ -222,7 +222,7 @@ def test_building_the_parser_does_not_import_the_ai_mode_module():
     probe = (
         "import sys; from mockymock.cli.main import build_parser; "
         "build_parser(); "
-        "print('mockymock.cli.ai_mode' in sys.modules)"
+        "print('mockymock.project.ai_mode' in sys.modules)"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True

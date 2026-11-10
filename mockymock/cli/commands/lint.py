@@ -24,7 +24,7 @@ def _lint_directory(
     reusing _cmd_lint's own single-pair path unchanged."""
     import copy
 
-    from mockymock.cli.discovery import (
+    from mockymock.project.discovery import (
         DiscoveryError,
         discover_cut_files,
         read_program_line,
@@ -133,7 +133,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     structural guarantee (not just documentation) is what makes `lint`
     usable in editors, pre-commit hooks, and CI lanes with no daemon."""
     from mockymock.analysis.assertion_labels import orphan_label_warnings
-    from mockymock.cli.checks import no_assertion_warnings, run_static_checks
+    from mockymock.engine.checks import no_assertion_warnings, run_static_checks
 
     if args.program is None and args.cut is None:
         return _lint_directory(args)
@@ -192,3 +192,56 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         return 1
     print("mockymock lint: no problems found.")
     return 0
+
+
+def register_lint(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock lint` to the top-level parser."""
+    lint_parser = subparsers.add_parser(
+        "lint",
+        help=(
+            "Run every static refusal check on a program + .cut pair "
+            "without Docker (fast, editor/CI friendly)"
+        ),
+    )
+    lint_parser.add_argument(
+        "program",
+        nargs="?",
+        help=(
+            "Omit to infer from --cut's sibling file; omit both to "
+            "discover and lint every .cut file under the current "
+            "directory (or the config file's test_root)"
+        ),
+    )
+    lint_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    lint_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    lint_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    lint_parser.add_argument(
+        "--case",
+        action="append",
+        help=(
+            "Check only this TESTCASE (repeatable; combines with --tag as a "
+            "union). File-wide problems are still reported"
+        ),
+    )
+    lint_parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Check only TESTCASEs carrying this tag (repeatable; combines "
+            "with --case as a union)"
+        ),
+    )
+    lint_parser.set_defaults(func=_cmd_lint)

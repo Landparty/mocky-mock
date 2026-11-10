@@ -45,8 +45,9 @@ feature's tests finds them. `test_issue_<number>_*.py` files stay, since the
 number traces to a GitHub issue. On 2026-11-07 (tech-debt audit item 10,
 docs/2026-11-06-tech-debt-audit.md) the 18 date/round-named unit files were
 regrouped this way, and `generate --with-data`'s shared test helper moved to
-`tests/unit/_generate.py`; `tests/integration/` still has date-named files,
-some importing their program constants from the unit feature files.
+`tests/unit/_generate.py`. On 2026-11-09 the 12 date-named integration
+files were renamed by feature the same way (whole files, since each covers
+one feature; the provenance stays in each docstring).
 
 # Docker-availability skip pattern
 

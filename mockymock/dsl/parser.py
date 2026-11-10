@@ -102,7 +102,7 @@ _ROWS_SUPPORTED = (
 
 _TESTSUITE_RE = re.compile(r'^TESTSUITE\s+"(?P<name>[^"]*)"$')
 # `PROGRAM "<path>"`: names the program under test, so a suite can live
-# anywhere and be called anything (cli/discovery.py reads it). Only legal
+# anywhere and be called anything (project/discovery.py reads it). Only legal
 # between TESTSUITE and the first TESTCASE/hook/PROVIDER.
 PROGRAM_RE = re.compile(r'^PROGRAM\s+"(?P<path>[^"]*)"$')
 _TAG_LIST = r'"[^"]*"(?:\s+"[^"]*")*'

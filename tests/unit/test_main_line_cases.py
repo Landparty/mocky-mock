@@ -15,11 +15,12 @@ from mockymock.analysis.refusal import (
     program_end_thru,
     program_last_paragraph,
 )
-from mockymock.cli.main import _insert_driver, main
+from mockymock.cli.main import main
 from mockymock.dsl.model import MockTestCase, MockTestSuite
 from mockymock.dsl.parser import parse_cut
 from mockymock.splicer.driver import build_driver
 from mockymock.splicer.injector import build_terminator_neutralization
+from mockymock.splicer.insertion import insert_driver
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
@@ -242,7 +243,7 @@ def test_the_driver_runs_thru_the_program_end_paragraph():
         "PERFORM TEST-1 THRU TEST-2",
     ]
     lines = normalize_fixed_format(CCVS.splitlines()).splitlines()
-    instrumented = [line.strip() for line in _insert_driver(lines, artifact)]
+    instrumented = [line.strip() for line in insert_driver(lines, artifact)]
     end = instrumented.index(f"{PROGRAM_END_PARAGRAPH}.")
     assert instrumented[end + 1] == "EXIT."
     # After the program's last paragraph, before the end-of-program trap.
@@ -257,7 +258,7 @@ def test_without_a_main_line_end_the_driver_is_unchanged():
     assert any(line.strip() == "PERFORM A THRU B" for line in artifact.procedure_lines)
     lines = normalize_fixed_format(CCVS.splitlines()).splitlines()
     assert f"{PROGRAM_END_PARAGRAPH}." not in [
-        line.strip() for line in _insert_driver(lines, artifact)
+        line.strip() for line in insert_driver(lines, artifact)
     ]
 
 
@@ -459,7 +460,7 @@ def test_generate_keeps_the_bare_perform_when_the_main_line_is_refused(
 def test_comment_entries_become_comments():
     """NIST SG101A / RW101A: AUTHOR and INSTALLATION text on the lines below
     the paragraph name compiled as code in free form."""
-    from mockymock.cli.main import comment_out_comment_entries
+    from mockymock.splicer.insertion import comment_out_comment_entries
 
     lines = [
         "IDENTIFICATION DIVISION.",

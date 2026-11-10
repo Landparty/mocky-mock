@@ -6,7 +6,7 @@ from cobolparser import parse_cobol
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.sql_whenever import is_sql_declaration
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """       IDENTIFICATION DIVISION.
        PROGRAM-ID. DC.

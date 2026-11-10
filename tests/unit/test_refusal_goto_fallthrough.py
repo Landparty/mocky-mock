@@ -220,7 +220,7 @@ class TestSharedMockReachedOnlyByFallThrough:
     def _lint(self, tmp_path, cases: str):
         from pathlib import Path
 
-        from mockymock.cli.checks import run_static_checks
+        from mockymock.engine.checks import run_static_checks
 
         program = (
             Path(__file__).parents[1]

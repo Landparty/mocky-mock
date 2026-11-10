@@ -3,7 +3,7 @@ negative or out-of-range threshold, poll interval or timeout is a
 usage error, not a crash after the whole run.
 
 Regression: bug hunt of 2026-11-05 on the .cut suite language and the CLI
-(executed counterpart: tests/integration/test_bug_hunt_20261105_cut_language.py).
+(executed counterpart: tests/integration/test_cut_suite_language.py).
 `--coverage-fail-under nan` never failed, `mutate --fail-under nan`
 crashed after the whole run, 150 was accepted; the runner took a
 negative `--poll-interval` (crash on the first idle sleep) or 0."""

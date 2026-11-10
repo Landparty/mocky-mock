@@ -4,8 +4,8 @@ to keep a folded LINKAGE item's rebind (#226). It keeps the IBM-legal
 UT-ADDR-SINK redirect instead, warns, and names the item in the
 provenance header; `run` still models the rebind."""
 
-from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.

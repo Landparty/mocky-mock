@@ -23,8 +23,8 @@ from mockymock.analysis.clause_bodies import (
     lift_clause_bodies,
 )
 from mockymock.analysis.mock_surface import analyze
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.naming import TallyRegistry
 from mockymock.splicer.orchestrator import splice_program
 from mockymock.splicer.source_map import (

@@ -423,7 +423,7 @@ def test_set_address_of_to_a_program_address_is_a_real_rebind(tmp_path):
     its own backing storage, so reads through it see the data it points
     at. A rebind to a pointer anything else fills (LK-PCBAL, written by
     the mocked CBLTDLI) keeps the redirect into UT-ADDR-SINK."""
-    from mockymock.cli.checks import extra_working_storage, run_static_checks
+    from mockymock.engine.checks import extra_working_storage, run_static_checks
     from mockymock.splicer.linkage import extra_reset_lines
 
     cbl = tmp_path / "LK.cbl"

@@ -390,8 +390,8 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
                 toolchain = {"ready": False, "error": str(exc), "checks": []}
             details["toolchain"] = toolchain
         try:
-            from mockymock.cli.ai_mode import resolve_mode
-            from mockymock.cli.config import load_config
+            from mockymock.project.ai_mode import resolve_mode
+            from mockymock.project.config import load_config
 
             details["aiMode"] = resolve_mode(load_config()).to_dict()
         except Exception as exc:  # noqa: BLE001 -- a malformed config is reported
@@ -702,7 +702,7 @@ def build_report(options: ReportOptions) -> dict[str, Any]:  # noqa: C901
     )
     lint_problems: list[str] = []
     with _Timer(lint):
-        from mockymock.cli.checks import run_static_checks
+        from mockymock.engine.checks import run_static_checks
 
         try:
             checked = run_static_checks(

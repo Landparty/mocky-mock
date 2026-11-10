@@ -11,9 +11,9 @@ from pathlib import Path
 from cobolparser import parse_cobol
 
 from mockymock.analysis.sql_whenever import whenever_can_fire
-from mockymock.cli.checks import run_static_checks
 from mockymock.cli.main import main
 from mockymock.dsl.model import MockCategory, MockDirective
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.

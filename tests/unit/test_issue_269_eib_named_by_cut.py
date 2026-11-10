@@ -1,7 +1,7 @@
 """Issue #269: an EIB field named only by the .cut (setup MOVE, EXPECT, a
 mock body) still gets the synthesized DFHEIBLK it needs to compile."""
 
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """\
        IDENTIFICATION DIVISION.

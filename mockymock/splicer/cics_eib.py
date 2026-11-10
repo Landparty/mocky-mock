@@ -10,7 +10,7 @@ physical lines. Every `SourceLocation`-driven step downstream of
 before them -- so its output is never spliced into `lines` directly. Instead
 `working_storage_lines`'s output is merged into `DriverArtifact.working_
 storage_lines` (via `build_driver`'s `extra_working_storage_lines` param)
-right before `_insert_driver`, the one point already proven safe for adding
+right before `insert_driver`, the one point already proven safe for adding
 new WORKING-STORAGE: the driver's own bookkeeping fields (`UT-CURRENT-CASE`
 etc.) are inserted exactly the same way, at the same point, today.
 
@@ -92,7 +92,7 @@ def working_storage_lines(plan: CicsEibPlan) -> list[str]:
     """The `01 DFHEIBLK.` group's WORKING-STORAGE text, unindented (callers
     add whatever column-position prefix their own insertion point needs --
     matching how `driver.build_driver`'s own bookkeeping fields are
-    generated and later prefixed by `cli._common._insert_driver`).
+    generated and later prefixed by `splicer.insertion.insert_driver`).
 
     The full fixed `DFHEIBLK` layout when any EIB name is referenced, and
     the `DLIDIB` block when any DIB name is (issue #145) -- each whole,

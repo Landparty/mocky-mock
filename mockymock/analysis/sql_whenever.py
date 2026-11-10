@@ -96,7 +96,7 @@ def _procedure_sql_statements(program) -> list:
     """Every EXEC SQL statement in the PROCEDURE DIVISION, nested bodies
     included, in physical source order."""
     # Imported here: mock_surface imports this module.
-    from mockymock.analysis.mock_surface import (
+    from mockymock.analysis._program_walk import (
         _all_paragraphs,
         _nested_statement_lists,
     )

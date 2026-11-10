@@ -25,3 +25,25 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     finally:
         sys.argv = saved_argv
     return 0
+
+
+def register_analyze(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock analyze` to the top-level parser."""
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help=(
+            "Run a cobol-parser analyzer subcommand (dead-code, "
+            "program-flow, io-sequence, move-type-check, linkage-check, "
+            "language-env, ims-dli, analyze) and print its JSON report"
+        ),
+    )
+    analyze_parser.add_argument(
+        "cobolparser_args",
+        nargs=argparse.REMAINDER,
+        metavar="COBOL_PARSER_ARGS",
+        help=(
+            "Arguments forwarded verbatim to cobol-parser's own CLI, e.g. "
+            "'dead-code PROGRAM.cbl --compact'"
+        ),
+    )
+    analyze_parser.set_defaults(func=_cmd_analyze)

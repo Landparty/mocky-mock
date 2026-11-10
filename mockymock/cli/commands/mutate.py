@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from mockymock._lines import read_utf8_source, split_source_lines
+from mockymock.cli._args import _percent, _timeout_seconds
 from mockymock.cli._common import (
     _apply_config_to_args,
     _resolve_program_and_cut,
@@ -147,3 +148,83 @@ def _cmd_mutate(args: argparse.Namespace) -> int:
             )
             return 1
     return 0
+
+
+def register_mutate(subparsers: argparse._SubParsersAction) -> None:
+    """Add `mockymock mutate` to the top-level parser."""
+    mutate_parser = subparsers.add_parser(
+        "mutate",
+        help=(
+            "Mutation-test a program against its .cut suite: mutate "
+            "statements one at a time and report which mutants the tests "
+            "fail to kill"
+        ),
+    )
+    mutate_parser.add_argument(
+        "program", nargs="?", help="Omit to infer from --cut's sibling file"
+    )
+    mutate_parser.add_argument(
+        "--cut", help="Omit to infer from program's sibling .cut file"
+    )
+    mutate_parser.add_argument(
+        "--copybook-path",
+        action="append",
+        help="Directory to search for copybooks (repeatable)",
+    )
+    mutate_parser.add_argument(
+        "--extra-copybook-path",
+        action="append",
+        help=(
+            "Directory to search for copybooks after the --copybook-path / "
+            "config file list (repeatable; adds to it instead of replacing it)"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--list",
+        action="store_true",
+        help="Only list the mutants that would be run (no Docker needed)",
+    )
+    mutate_parser.add_argument(
+        "--timeout",
+        type=_timeout_seconds,
+        default=15,
+        help=(
+            "Per-mutant run timeout in seconds (default 15); a mutant that "
+            "exceeds it counts as killed -- a hang would be noticed too"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Run N mutants in parallel, each in its own sandbox and worker "
+            "process (default 1). The useful ceiling is not the core count "
+            "but the shared mockymock-cobc container's 1 GiB memory limit, "
+            "which every concurrent cobc draws from at once -- raise this "
+            "gradually and watch for compile failures on a large program"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--no-coverage-gate",
+        dest="coverage_gate",
+        action="store_false",
+        help=(
+            "Build and run every mutant, including ones on lines the "
+            "baseline proved the suite never executes. By default those are "
+            "reported as survivors straight from the baseline's coverage, "
+            "which is the same verdict for a fraction of the wall clock"
+        ),
+    )
+    mutate_parser.add_argument(
+        "--json-report",
+        help="Write the full machine-readable mutation report to this file",
+    )
+    mutate_parser.add_argument(
+        "--fail-under",
+        type=_percent,
+        help="Exit 1 if the mutation score (percent) is below this value",
+    )
+    mutate_parser.set_defaults(func=_cmd_mutate)

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from mockymock._lines import read_utf8_source, split_source_lines
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 from mockymock.report.coverage import build_copybook_line_map, build_original_line_map
 from mockymock.report.trace import TraceEntry, format_trace_console, format_trace_json
 

@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from cobolparser import parse_cobol
 
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.model import SUITE_PHASE_ID
 from mockymock.dsl.parser import parse_cut
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.driver import build_driver
 from mockymock.splicer.injector import dispatch_entries
 from mockymock.splicer.naming import TallyRegistry

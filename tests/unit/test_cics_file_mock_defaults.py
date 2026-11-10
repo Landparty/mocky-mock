@@ -1,6 +1,6 @@
 """Unit checks for the CICS / file / MQ / SQL mock defaults fixed in the
 2026-11-05 round-2 bug hunt (executed counterpart:
-tests/integration/test_cics_file_mock_bugs_20261105.py): the RESP
+tests/integration/test_mocks_answer_like_real_statements.py): the RESP
 mirror, MQ reply fields, SQL cursor names and row rewinds on OPEN."""
 
 from types import SimpleNamespace

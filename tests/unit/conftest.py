@@ -16,8 +16,8 @@ def _docker_backend_by_default(monkeypatch):
 @pytest.fixture(autouse=True)
 def _private_copybook_alias_staging(monkeypatch, tmp_path_factory):
     """Copybook aliases stage into the system temp folder by default
-    (cli/copybook_aliases.py); keep each test's staging out of it."""
-    from mockymock.cli import copybook_aliases
+    (project/copybook_aliases.py); keep each test's staging out of it."""
+    from mockymock.project import copybook_aliases
 
     monkeypatch.setattr(
         copybook_aliases,

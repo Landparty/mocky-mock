@@ -3,8 +3,8 @@ counts the READs of one sequential stream once.
 
 Regression: nightly bug hunt of 2026-10-09 (priming READ loops) and
 of 2026-10-13 (a READ loop that ends on its FILE STATUS alone). The
-executed counterparts live in tests/integration/test_nightly_20261009_fixes.py
-and tests/integration/test_nightly_20261013b_status_read_eof.py."""
+executed counterparts live in tests/integration/test_generated_priming_read.py
+and tests/integration/test_generated_status_read_loop.py."""
 
 from tests.unit._generate import _generate
 

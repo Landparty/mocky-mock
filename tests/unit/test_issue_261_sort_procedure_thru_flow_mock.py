@@ -2,7 +2,7 @@
 THRU range is refused like one inside a PERFORM ... THRU range: the
 range's fall-through would run the mock body and the real body."""
 
-from mockymock.cli.checks import run_static_checks
+from mockymock.engine.checks import run_static_checks
 
 PROGRAM = """       IDENTIFICATION DIVISION.
        PROGRAM-ID. SRF.

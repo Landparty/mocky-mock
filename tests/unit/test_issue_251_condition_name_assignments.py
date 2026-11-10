@@ -2,8 +2,8 @@
 level-88 condition-name splices as SET <88> TO TRUE|FALSE (COBOL cannot
 MOVE to an 88), and lint refuses the forms cobc would reject."""
 
-from mockymock.cli.checks import run_static_checks
 from mockymock.dsl.model import HookStep
+from mockymock.engine.checks import run_static_checks
 from mockymock.splicer.driver import _step_lines
 from mockymock.splicer.injector import build_rows_block
 from mockymock.splicer.naming import assign

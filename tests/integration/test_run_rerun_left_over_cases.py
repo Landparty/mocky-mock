@@ -1,6 +1,6 @@
 """Executed regressions for the 2026-11-05 bug hunt in running suites:
 each compiles and runs with real GnuCOBOL. Unit-level counterparts live
-in tests/unit/test_bug_hunt_20261105_runner.py."""
+in the unit feature files (each block marked `# Regression:`)."""
 
 from __future__ import annotations
 

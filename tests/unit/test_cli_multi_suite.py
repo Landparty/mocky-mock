@@ -1,6 +1,6 @@
 """Several suites per program, and suites under tests/: the PROGRAM line,
 the four-step program lookup, default_suite_path, and `mockymock suites`.
-See mockymock/cli/discovery.py and
+See mockymock/project/discovery.py and
 docs/2026-10-14-multi-suite-layout-design.md."""
 
 import json
@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from mockymock.cli.config import MockymockConfig
-from mockymock.cli.discovery import (
+from mockymock.cli.main import main
+from mockymock.dsl.parser import CutParseError, parse_cut
+from mockymock.project.config import MockymockConfig
+from mockymock.project.discovery import (
     DiscoveryError,
     ProjectLayout,
     default_suite_path,
@@ -20,8 +22,6 @@ from mockymock.cli.discovery import (
     resolve_program,
     suite_base_name,
 )
-from mockymock.cli.main import main
-from mockymock.dsl.parser import CutParseError, parse_cut
 
 
 def _layout(root: Path, source: str = "src", tests: str = "tests") -> ProjectLayout:
@@ -235,7 +235,7 @@ def test_project_layout_defaults_and_config_overrides(tmp_path):
 
 
 def test_source_root_config_key_resolves_against_the_config_file(tmp_path, monkeypatch):
-    from mockymock.cli.config import load_config
+    from mockymock.project.config import load_config
 
     _write(tmp_path / "mockymock.toml", 'source_root = "src"\n')
     config = load_config(tmp_path)
@@ -409,7 +409,7 @@ def test_run_selector_matching_no_suite_is_an_error(tmp_path, monkeypatch, capsy
 
 
 def test_single_suite_tag_union_accepts_a_tag_it_lacks():
-    from mockymock.cli.checks import filter_suite_cases
+    from mockymock.engine.checks import filter_suite_cases
 
     suite = parse_cut(
         'TESTSUITE "s"\nTESTCASE "a" TAGS "smoke"\n    PERFORM P\n'

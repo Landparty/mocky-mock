@@ -829,7 +829,7 @@ def test_a_multi_file_open_takes_mode_qualified_mocks_per_file():
 # are now dispatched on the calling paragraph (`UT-CALLING-PARAGRAPH`), the
 # status is pinned only at the call in the branch's own paragraph, and the
 # end-of-data reply counts each site's own calls (`UT-SITE-TALLY`). Executed
-# counterpart: tests/integration/test_bug_hunt_20261105_generation_round2.py.
+# counterpart: tests/integration/test_generated_dli_loop_cases.py.
 from types import SimpleNamespace
 
 from mockymock.splicer.injector import passed_argument_names, site_tally_lines

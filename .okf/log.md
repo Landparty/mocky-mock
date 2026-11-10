@@ -15,6 +15,24 @@ passed `&&` temporary is no longer deleted by a bare `DISP=SHR` reader.
 [dsl](dsl.md): a PROVIDER value ending in a period is refused in a
 multi-call case's step MOVEs too. Test: `test_job_run_fixes.py`.
 
+## 2026-11-09 -- engine layer and package layering
+
+Acting on the 2026-11-09 architecture review. [index](index.md#layering)
+now states the layering, enforced by `tests/unit/test_layering.py` (no
+upward import; no cycle beyond the CLI's own). `engine/build.py` builds
+every instrumented program (run, debug, export, mutate had four copies of
+the sequence). Engine code left `cli/`: `engine/checks.py`,
+`engine/mainframe_export.py`, `project/` (config, discovery, copybook
+aliases, ai_mode), `splicer/insertion.py`; the old paths warn and forward.
+[cli](cli.md): each command registers its own subparser
+(`cli/parser.py`), `_cmd_run_suite` split into stages; `--help` output is
+byte-identical and `build_parser()` imports less (about 150 modules
+instead of 340). Cycles broken: refusal gate / generator (the gate takes
+`suggest_fix`), toolchains (`runtime/_proc.py`), `mock_surface` and its
+scanners (`analysis/_program_walk.py`). `mockymock.api` declares the
+public Python API ([publishing](publishing.md#python-api)). The 12
+date-named integration test files are renamed by feature.
+
 ## 2026-11-09 -- hunt sweep: #436, #441, #444, #446, #448, #450, #451
 
 [integration](integration.md): layout imports work on cobol-parser 3.x and
