@@ -167,3 +167,96 @@ TESTCASE "c" USING PROVIDER D
 """
     with pytest.raises(CutParseError, match="line 4: MOVE value '5.'"):
         parse_cut(text)
+
+
+# -- follow-ups from the second 2026-11-10 bug hunt ------------------------
+
+
+def test_generate_inputs_leaves_a_new_extend_only_dataset_empty(tmp_path):
+    """--generate-inputs is for files the program reads: a log the step only
+    appends to, with no dataset yet, starts empty as on z/OS -- no synthetic
+    records in the job output, nothing written to --data."""
+    source = tmp_path / "APPENDR.cbl"
+    source.write_text(_APPENDER, encoding="utf-8")
+    data = tmp_path / "data"
+    data.mkdir()
+    run = JobRun(
+        JobOptions(
+            jcl=tmp_path / "j.jcl",
+            sources=[],
+            data=data,
+            work_dir=tmp_path,
+            generate_inputs=True,
+        )
+    )
+    run._load_inputs()
+    bindings = {"LOGDD": [_dd("LOGDD", "APP.LOG", "(MOD,CATLG)")]}
+    files, problem = run._step_files("S1", source, bindings)
+    assert problem is None
+    (spec,) = files
+    assert spec.source is None
+    assert run.generated_inputs == []
+    assert list(data.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["(PS1.RUN)", "(PS1.RC = 0)", "(PS1.ABEND)"],
+)
+def test_if_does_not_borrow_another_call_when_its_own_step_was_bypassed(condition):
+    # B.PS1 was bypassed; A.PS1 (another call of the PROC) ran with RC 0.
+    rcs = {"A.PS1": 0, "A.PS2": 0}
+    if condition == "(PS1.RUN)":
+        assert not step_runs(condition, rcs, False, bypassed={"B.PS1"}, step="B.PS2")
+    else:
+        with pytest.raises(ConditionError, match="bypassed"):
+            step_runs(condition, rcs, False, bypassed={"B.PS1"}, step="B.PS2")
+
+
+def test_if_does_not_borrow_a_job_level_step_when_its_own_step_was_bypassed():
+    with pytest.raises(ConditionError, match="bypassed"):
+        step_runs("(PS1.RC = 8)", {"PS1": 8}, False, bypassed={"A.PS1"}, step="A.PS2")
+
+
+_OUTPUT_THEN_EXTEND = _APPENDER.replace(
+    """           OPEN EXTEND LOGF
+""",
+    """           OPEN OUTPUT LOGF
+           CLOSE LOGF
+           OPEN EXTEND LOGF
+""",
+)
+
+
+def test_output_then_extend_marks_the_plan():
+    from cobolparser import parse_cobol
+
+    from mockymock.analysis.mock_surface import analyze
+    from mockymock.dsl.real_file_suite import plan_real_files
+
+    ast = parse_cobol(_OUTPUT_THEN_EXTEND, filename="a.cbl").ast
+    (plan,), _ = plan_real_files(ast, analyze(ast))
+    assert plan.opens_existing and plan.opens_output
+
+
+def test_disp_mod_keeps_old_records_when_the_step_also_opens_output(tmp_path):
+    """DISP=MOD makes OPEN OUTPUT append on z/OS. The step's own OPEN OUTPUT
+    truncated the staged copy, so what it saved does not hold the old
+    records and the MOD prepend must put them back."""
+    from mockymock.jobstream.runner import StepFile
+
+    run = _job(tmp_path, {"LOG.DATA": b"OLD "})
+    cards = [_dd("LOGDD", "LOG.DATA", "MOD")]
+    spec = StepFile(
+        "LOGF",
+        "LOGDD",
+        cards,
+        False,
+        True,
+        opens_existing=True,
+        opens_output=True,
+        source=run.datasets["LOG.DATA"],
+    )
+    assert not spec.holds_existing
+    run._write_output("S1", "LOGDD", cards, b"NEW ", holds_existing=spec.holds_existing)
+    assert run.datasets["LOG.DATA"].read_bytes() == b"OLD NEW "

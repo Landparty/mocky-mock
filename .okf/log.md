@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-10 -- follow-ups to the job runner fixes
+
+[cli](cli.md): `job --generate-inputs` no longer fills a new EXTEND / I-O
+dataset with synthetic records (only a file the program reads is
+generated); an `IF` in a PROC step whose own-invocation step was bypassed
+no longer reads a job-level step or another call of the PROC; under
+DISP=MOD, a program that opens a file OUTPUT and EXTEND keeps the old
+records. Test: `test_job_run_fixes.py`.
+
 ## 2026-11-10 -- job runner and PROVIDER fixes from a bug hunt
 
 [cli](cli.md): `job` stages OPEN EXTEND / I-O files with the dataset's

@@ -73,6 +73,9 @@ class RealFilePlan:
     #: already there (appends after them, rewrites them), so a job step
     #: must stage the dataset's current contents even with no READ.
     opens_existing: bool = False
+    #: The program opens the file OUTPUT somewhere, which truncates what was
+    #: staged: what it saves no longer holds the dataset's old records.
+    opens_output: bool = False
 
     @property
     def round_trip(self) -> bool:
@@ -166,6 +169,8 @@ def plan_real_files(
                     plan.reads = True
                 if mode in ("I-O", "EXTEND"):
                     plan.opens_existing = True
+                if mode == "OUTPUT":
+                    plan.opens_output = True
     for file, plan in plans.items():
         plan.partners = together.get(file, set())
     return sorted(plans.values(), key=lambda p: p.file), notes

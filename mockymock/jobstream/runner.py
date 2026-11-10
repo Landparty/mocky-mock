@@ -649,7 +649,7 @@ class JobRun:
                     spec.ddname,
                     spec.cards,
                     saved.read_bytes(),
-                    holds_existing=spec.opens_existing and spec.source is not None,
+                    holds_existing=spec.holds_existing,
                 )
                 if key:
                     result.writes.append(key)
@@ -704,6 +704,7 @@ class JobRun:
                 plan.writes,
                 names=set(plan.names),
                 opens_existing=plan.opens_existing,
+                opens_output=plan.opens_output,
             )
             # OPEN EXTEND appends after the records already there, whatever
             # the DISP, and OPEN I-O rewrites them: both start from the
@@ -712,8 +713,11 @@ class JobRun:
                 staged, why = self._input_file(
                     name, ddname, cards, plan.line_sequential
                 )
+                # Only a file the program reads gets generated records: an
+                # EXTEND / I-O file with no dataset yet starts empty.
                 can_generate = (
-                    self.options.generate_inputs
+                    plan.reads
+                    and self.options.generate_inputs
                     and len(cards) == 1
                     and bool(cards[0].dataset)
                     and not _is_temporary(cards[0].dataset)
@@ -814,6 +818,14 @@ class StepFile:
     #: Opened EXTEND or I-O: what the step saves already holds the staged
     #: records, so DISP=MOD must not prepend them again.
     opens_existing: bool = False
+    #: Also opened OUTPUT, which truncates the staged records: under
+    #: DISP=MOD (where OPEN OUTPUT appends on z/OS) they are prepended again.
+    opens_output: bool = False
+
+    @property
+    def holds_existing(self) -> bool:
+        """What the step saves already starts with the dataset's records."""
+        return self.opens_existing and not self.opens_output and self.source is not None
 
 
 def step_suite(cut_text: str, files: list[StepFile], step: str) -> str:
