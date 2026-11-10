@@ -87,7 +87,7 @@ def _data_item_index(program) -> dict[str, dict]:
     A name declared more than once under different parents is omitted
     rather than guessed at -- an ambiguous capture source is exactly the
     case this module must refuse on."""
-    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+    from mockymock._cobol_layout import compute_program_data_items
 
     items = compute_program_data_items(program).get("items", [])
     non_display_prefixes = [

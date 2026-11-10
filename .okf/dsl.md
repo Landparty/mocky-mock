@@ -1771,7 +1771,9 @@ relative files qualify here (`plan_real_files(self_built=True)`,
 `SELF_BUILT_ORGANIZATIONS`): `expand_real_files` lets them be real only
 with no FROM and no EXPECT / SAVE FILE. Files one statement names
 (`OPEN OUTPUT A B`, `RealFilePlan.partners`) are real together or not at
-all. A site only pass-through directives match is not spliced (the
+all: `_round_trip_files` closes the partners transitively into groups and
+makes a group real only when every member is round-trip or output-only
+(#444: the old add/discard loop never ended on such a chain). A site only pass-through directives match is not spliced (the
 splicer's pass 1 and the nesting gate skip it), so a real file's WRITE
 nested in an IF without END-WRITE runs as written. It also appends a
 **real-calls case** (`real_calls_case`): when a statically CALLed program's

@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-10 -- job runner and PROVIDER fixes from a bug hunt
+
+[cli](cli.md): `job` stages OPEN EXTEND / I-O files with the dataset's
+records whatever the DISP (they were replaced by the new records under
+DISP=OLD/SHR) without DISP=MOD prepending them twice; an unqualified step
+name in a PROC's `COND=` / `IF` resolves within its own invocation; a
+passed `&&` temporary is no longer deleted by a bare `DISP=SHR` reader.
+[dsl](dsl.md): a PROVIDER value ending in a period is refused in a
+multi-call case's step MOVEs too. Test: `test_job_run_fixes.py`.
+
 ## 2026-11-09 -- engine layer and package layering
 
 Acting on the 2026-11-09 architecture review. [index](index.md#layering)
@@ -22,6 +32,17 @@ instead of 340). Cycles broken: refusal gate / generator (the gate takes
 scanners (`analysis/_program_walk.py`). `mockymock.api` declares the
 public Python API ([publishing](publishing.md#python-api)). The 12
 date-named integration test files are renamed by feature.
+
+## 2026-11-09 -- hunt sweep: #436, #441, #444, #446, #448, #450, #451
+
+[integration](integration.md): layout imports work on cobol-parser 3.x and
+main (`_cobol_layout.py`, #451). [cli](cli.md): `job` COND / IF and SORT
+framing (#436, #441). [dsl](dsl.md): round-trip partner groups (#444).
+[coverage](coverage.md): reused storage drops to static claims; taken
+outcomes never unreachable (#446). [analysis](analysis.md): `GO TO.` into
+a section (#448); GO TO loops (#450). Tests: `test_issue_436_441_jobstream.py`,
+`test_issue_444_round_trip_groups.py`, `test_issue_448_450.py`,
+`test_unreachable.py`.
 
 ## 2026-11-07 -- tech-debt remediation (all four phases)
 

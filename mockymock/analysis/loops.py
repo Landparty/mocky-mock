@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from cobolparser.models.statements.control import (
     EvaluateStatement,
+    GoStatement,
     IfStatement,
     PerformStatement,
 )
@@ -136,14 +137,42 @@ def loop_guards(program) -> list[LoopGuard]:
     return guards
 
 
+def goto_loop_paragraphs(program) -> set[str]:
+    """Paragraphs inside a GO TO loop: a GO TO back to its own paragraph or
+    an earlier one makes every paragraph from that target to the GO TO's own
+    a loop body (source order), the `GO TO FETCH-LOOP` style written without
+    PERFORM UNTIL (#450)."""
+    procedure = program.get_division("PROCEDURE") if program is not None else None
+    if procedure is None:
+        return set()
+    ordered = sorted(
+        _all_paragraphs(procedure),
+        key=lambda p: getattr(getattr(p, "location", None), "line", 0) or 0,
+    )
+    names = [str(getattr(p, "paragraph_name", "") or "").upper() for p in ordered]
+    position = {name: i for i, name in enumerate(names) if name}
+    looped: set[str] = set()
+    for end, paragraph in enumerate(ordered):
+        for statement in _walk(list(paragraph.statements)):
+            if not isinstance(statement, GoStatement):
+                continue
+            for target in statement.target_paragraphs:
+                start = position.get(str(target or "").upper())
+                if start is not None and start <= end:
+                    looped.update(n for n in names[start : end + 1] if n)
+    return looped
+
+
 def looped_paragraphs_and_statements(program) -> tuple[set[str], set[int]]:
-    """(paragraph/section names reachable from a looping PERFORM's target,
-    ids of statements nested inside a looping inline PERFORM's body)."""
+    """(paragraph/section names reachable from a looping PERFORM's target or
+    inside a GO TO loop, ids of statements nested inside a looping inline
+    PERFORM's body)."""
     paragraphs: set[str] = set()
     statement_ids: set[int] = set()
     for guard in loop_guards(program):
         paragraphs |= guard.paragraphs
         statement_ids |= guard.statement_ids
+    paragraphs |= goto_loop_paragraphs(program)
     return paragraphs, statement_ids
 
 

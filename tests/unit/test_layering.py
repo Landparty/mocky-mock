@@ -56,6 +56,7 @@ LAYERS: list[tuple[str, tuple[str, ...]]] = [
             "mockymock.report",
             "mockymock.copybooks",
             "mockymock._lines",
+            "mockymock._cobol_layout",
             "mockymock._decimal",
             "mockymock._qualified",
             "mockymock.debugging_lines",

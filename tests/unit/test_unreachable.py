@@ -130,3 +130,48 @@ def test_report_without_classification_has_no_unreachable_keys():
     report = program_report(points, "P.cbl", lambda line: (None, line))
     assert "unreachableScope" not in report
     assert "unreachable" not in report["branches"]
+
+
+# -- #446: runs that do not start from VALUE-clause storage ---------------------
+
+
+def test_case_calling_the_program_twice_drops_to_static():
+    ast, points = _measured()
+    found = classify(
+        ast, points, _suite("    PERFORM MAIN-PARA\n    PERFORM MAIN-PARA\n")
+    )
+    assert found is not None and found.scope == SCOPE_STATIC
+    assert found.note == "a case calls the program more than once"
+    assert found.outcomes == {}
+
+
+def test_before_all_running_program_code_drops_to_static():
+    ast, points = _measured()
+    suite = parse_cut(
+        'TESTSUITE "P"\n\nBEFORE-ALL\n    PERFORM MAIN-PARA\nEND-BEFORE\n\n'
+        'TESTCASE "one"\n    PERFORM MAIN-PARA\n'
+    )
+    found = classify(ast, points, suite)
+    assert found is not None and found.scope == SCOPE_STATIC
+    assert found.note == "BEFORE-ALL / AFTER-ALL runs program code"
+
+
+def test_taken_outcome_is_never_reported(monkeypatch):
+    import cobolparser.analysis.input_dependence as dep
+
+    ast, points = _measured()
+    branch = next(b for b in points.branches if b.line == 10)
+    original = dep.InputDependenceReport.unreachable
+
+    def unreachable(self, taken, executed_lines=None):
+        found = original(self, taken, executed_lines)
+        # An analysis that also prunes an outcome the run took.
+        hit = next(iter(taken[(branch.kind, branch.line)]))
+        found.outcomes.setdefault((branch.kind, branch.line), {})[hit] = "pruned"
+        return found
+
+    monkeypatch.setattr(dep.InputDependenceReport, "unreachable", unreachable)
+    found = classify(ast, points, _suite("    PERFORM MAIN-PARA\n"))
+    assert found is not None
+    taken = {i for i, o in enumerate(branch.outcomes) if o.hits > 0}
+    assert not taken & set(found.outcomes.get((branch.kind, branch.line), {}))

@@ -122,7 +122,7 @@ def declared_data_names(program) -> list[str]:
     """Every addressable data item the program declares, in declaration
     order: FILLER, condition names (88) and RENAMES (66) have no storage
     of their own to show."""
-    from cobolparser.generators.data.layout_offsets import compute_program_data_items
+    from mockymock._cobol_layout import compute_program_data_items
 
     try:
         items = compute_program_data_items(program).get("items", [])

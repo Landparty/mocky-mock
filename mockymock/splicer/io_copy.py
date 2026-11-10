@@ -73,7 +73,7 @@ def data_layout(program) -> DataLayout:
 
 def record_length(item) -> int:
     """Bytes the 01 record *item* occupies, 0 when it cannot be laid out."""
-    from cobolparser.generators.data.layout_offsets import compute_record_layout
+    from mockymock._cobol_layout import compute_record_layout
 
     try:
         return compute_record_layout(item)[0].byte_length

@@ -6,7 +6,7 @@ copy such values as bytes instead."""
 from __future__ import annotations
 
 from cobolparser import parse_cobol
-from cobolparser.generators.data.layout import FieldCategory, FieldSpec
+from cobolparser.generators.data import FieldCategory, FieldSpec
 
 from mockymock.dsl.generator import _row_move_line
 from mockymock.splicer.captures import _declaration_for

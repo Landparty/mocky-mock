@@ -157,8 +157,7 @@ def _record_length_move(
 
 
 def _compute_record_length_move(key: str, program) -> str | None:
-    from cobolparser.generators.data.layout import VaryingLength
-    from cobolparser.generators.data.program_layout import ProgramLayoutIndex
+    from cobolparser.generators.data import ProgramLayoutIndex, VaryingLength
 
     try:
         records = ProgramLayoutIndex.build(program).records_for_file(key)
