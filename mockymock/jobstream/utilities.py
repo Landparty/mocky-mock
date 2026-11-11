@@ -155,7 +155,7 @@ def _record_key(fields: list[tuple[int, int, str, str]]) -> Callable[[bytes], tu
     return key
 
 
-def _line_framed(data: bytes, record_length: int | None) -> bool:
+def line_framed(data: bytes, record_length: int | None) -> bool:
     """Whether *data* is LINE SEQUENTIAL: newline-terminated records, none
     longer than the LRECL when one is known (GnuCOBOL strips trailing
     blanks, so lines may be shorter, #441)."""
@@ -172,7 +172,7 @@ def split_records(data: bytes, record_length: int | None) -> list[bytes]:
     cannot be told for certain is a gap, never a guess."""
     if not data:
         return []
-    if _line_framed(data, record_length):
+    if line_framed(data, record_length):
         return [line + b"\n" for line in data[:-1].split(b"\n")]
     if record_length:
         if len(data) % record_length:
@@ -202,7 +202,7 @@ def sort_data(
     if key is None:
         return data
     records = split_records(data, record_length)
-    if records and _line_framed(data, record_length):
+    if records and line_framed(data, record_length):
         key = _without_newline(key)
     # A stable sort, as DFSORT's EQUALS: equal keys keep their input order.
     return b"".join(sorted(records, key=key))  # type: ignore[arg-type]

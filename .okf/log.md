@@ -5,6 +5,18 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-11 -- smaller job runner notes from the bug hunts
+
+[cli](cli.md): after an abend, a step whose IF names a step like `ABENDCHK`
+no longer passes the "IF tests ABEND" guard (token test, not substring); an
+in-stream `SORTIN DD *` with no LRECL anywhere sorts as 80-byte cards
+instead of gapping "record length unknown"; the end-of-job comparison takes
+a dataset's framing from the COBOL file's ORGANIZATION (or the copied
+input's), then from the LRECL, so fixed records holding X'0A' are no longer
+compared as lines; `run_job_stream` without `JobOptions.command` raises
+before the first step, not in the middle of the job. Test:
+`test_job_small_fixes.py`.
+
 ## 2026-11-10 -- follow-ups to the job runner fixes
 
 [cli](cli.md): `job --generate-inputs` no longer fills a new EXTEND / I-O

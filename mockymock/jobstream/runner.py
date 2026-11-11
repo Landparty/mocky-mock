@@ -44,6 +44,7 @@ from mockymock.jobstream.utilities import (
     SORT_PROGRAMS,
     UtilityGap,
     control_statements,
+    line_framed,
     sort_data,
 )
 
@@ -208,6 +209,11 @@ class JobRun:
         self.gaps: list[str] = []
         self.notes: list[str] = []
         self.generated_inputs: list[str] = []
+        #: Dataset -> whether its records are newline-framed, when the step
+        #: that last wrote it knew (absent: tell from the data).
+        self.layouts: dict[str, bool] = {}
+        #: Dataset -> the LRECL a DD that wrote it coded.
+        self.lrecls: dict[str, int] = {}
         self._source_index = self._index_sources()
 
     # -- sources ---------------------------------------------------------
@@ -294,6 +300,20 @@ class JobRun:
             self.notes.append(
                 f"{len(parsed.jobs)} jobs in the deck: only {job.name} runs"
             )
+        if self.options.command is None:
+            cobol = [
+                step.program
+                for step in job.steps
+                if step.program
+                and step.program.upper()
+                not in NOOP_PROGRAMS | COPY_PROGRAMS | SORT_PROGRAMS
+                and self.source_of(step.program) is not None
+            ]
+            if cobol:
+                # Before any step runs, not in the middle of the job.
+                raise ValueError(
+                    f"JobOptions.command is required to run COBOL step program {cobol[0]}"
+                )
         self._load_inputs()
         steps: list[StepResult] = []
         stopped = False
@@ -464,11 +484,15 @@ class JobRun:
         data: bytes,
         *,
         holds_existing: bool = False,
+        line_sequential: bool | None = None,
     ) -> str | None:
         """Store what a step wrote through DD `ddname`; the dataset name (or
         None for DUMMY). `holds_existing`: `data` already starts with the
         dataset's records (the step was staged with them and opened the file
-        EXTEND or I-O), so DISP=MOD does not prepend them a second time."""
+        EXTEND or I-O), so DISP=MOD does not prepend them a second time.
+        `line_sequential`: how the records are framed, when the writer
+        knows (the COBOL file's ORGANIZATION); None leaves it to the
+        end-of-job comparison to tell from the data and the LRECL."""
         dd = cards[0]
         if dd.is_dummy:
             return None
@@ -490,6 +514,12 @@ class JobRun:
         path.write_bytes(data)
         self.deleted.discard(key)
         self.written[key] = None
+        if line_sequential is None:
+            self.layouts.pop(key, None)
+        else:
+            self.layouts[key] = line_sequential
+        if dd.record_length:
+            self.lrecls[key] = dd.record_length
         return key
 
     def _run_utility(
@@ -526,9 +556,25 @@ class JobRun:
             lrecl = None
             for dd in [*bindings[source_dd], *bindings[target_dd]]:
                 lrecl = lrecl or dd.record_length
+            staged = [dd for dd in bindings[source_dd] if not dd.is_dummy]
+            if lrecl is None and staged and all(dd.is_instream for dd in staged):
+                # In-stream data is always 80-byte card images.
+                lrecl = 80
             data = sort_data(data, control_statements(lines), lrecl)
-        written = self._write_output(name, target_dd, bindings[target_dd], data)
         reads = [dd.dataset for dd in bindings[source_dd] if dd.dataset]
+        # A copy or a sort keeps its input's framing.
+        layouts = {
+            self.layouts.get(dd.dataset.upper()) if dd.dataset else False
+            for dd in bindings[source_dd]
+            if not dd.is_dummy
+        }
+        written = self._write_output(
+            name,
+            target_dd,
+            bindings[target_dd],
+            data,
+            line_sequential=layouts.pop() if len(layouts) == 1 else None,
+        )
         return StepResult(
             name,
             program,
@@ -650,6 +696,7 @@ class JobRun:
                     spec.cards,
                     saved.read_bytes(),
                     holds_existing=spec.holds_existing,
+                    line_sequential=spec.line_sequential,
                 )
                 if key:
                     result.writes.append(key)
@@ -705,6 +752,7 @@ class JobRun:
                 names=set(plan.names),
                 opens_existing=plan.opens_existing,
                 opens_output=plan.opens_output,
+                line_sequential=plan.line_sequential,
             )
             # OPEN EXTEND appends after the records already there, whatever
             # the DISP, and OPEN I-O rewrites them: both start from the
@@ -781,9 +829,9 @@ class JobRun:
                 data,
                 golden.read_bytes(),
                 (
-                    FileLayout("SEQUENTIAL", None)
-                    if b"\n" not in data
-                    else FileLayout("LINE SEQUENTIAL", None)
+                    FileLayout("LINE SEQUENTIAL", None)
+                    if self.layouts.get(key, line_framed(data, self.lrecls.get(key)))
+                    else FileLayout("SEQUENTIAL", self.lrecls.get(key))
                 ),
             )
             results.append(
@@ -821,6 +869,8 @@ class StepFile:
     #: Also opened OUTPUT, which truncates the staged records: under
     #: DISP=MOD (where OPEN OUTPUT appends on z/OS) they are prepended again.
     opens_output: bool = False
+    #: The program's ORGANIZATION is LINE SEQUENTIAL.
+    line_sequential: bool = False
 
     @property
     def holds_existing(self) -> bool:
