@@ -315,6 +315,9 @@ def step_runs(
         return not abended
     if is_cond_parameter(condition):
         return not cond_bypasses(condition, rcs, abended, bypassed, step)
-    if abended and "ABEND" not in condition.upper():
+    tokens = _tokens(condition)
+    # After an abend only an IF that tests ABEND runs its steps. A token
+    # test, not a substring one: a step named e.g. ABENDCHK is not a test.
+    if abended and not any(t == "ABEND" or t.endswith(".ABEND") for t in tokens):
         return False
-    return if_true(condition, rcs, abended, step, bypassed)
+    return _IfParser(tokens, rcs, abended, step, bypassed).parse()
