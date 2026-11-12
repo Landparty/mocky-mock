@@ -19,7 +19,9 @@ HEAD = """\
 
 # --- #453 -------------------------------------------------------------------
 
-SEARCHES = HEAD.format(name="SRCH") + """\
+SEARCHES = (
+    HEAD.format(name="SRCH")
+    + """\
        01  WS-TBL.
            05  WS-ENT OCCURS 5 TIMES ASCENDING KEY WS-KEY
                    INDEXED BY IX.
@@ -44,6 +46,7 @@ SEARCHES = HEAD.format(name="SRCH") + """\
            END-SEARCH
            GOBACK.
 """
+)
 
 
 def test_only_a_real_search_all_is_a_collation_risk():
@@ -114,16 +117,16 @@ def test_export_keeps_a_same_line_clause_body_in_area_b(tmp_path, capsys):
             continue
         assert line[:7].strip() == "", f"line {number} leaves Area B: {line!r}"
     bodies = [
-        line
-        for line in lines
-        if 'MOVE "Y" TO WS-EOF' in line and line[6:7] != "*"
+        line for line in lines if 'MOVE "Y" TO WS-EOF' in line and line[6:7] != "*"
     ]
     assert bodies and all(line.startswith("       ") for line in bodies)
 
 
 # --- #457 -------------------------------------------------------------------
 
-SECFALL = HEAD.format(name="SECFALL") + """\
+SECFALL = (
+    HEAD.format(name="SECFALL")
+    + """\
        01  WS-FLAG      PIC X VALUE 'N'.
        01  WS-TOTAL     PIC 9(5) VALUE 0.
        PROCEDURE DIVISION.
@@ -141,6 +144,7 @@ SECFALL = HEAD.format(name="SECFALL") + """\
            ADD 5 TO WS-TOTAL.
            GOBACK.
 """
+)
 
 SECFALL_CUT = """\
 TESTSUITE "SECFALL"
@@ -171,7 +175,9 @@ def test_mock_section_fallen_into_through_its_unnamed_paragraph_is_refused(
 
 # --- #458 -------------------------------------------------------------------
 
-SUBQ = HEAD.format(name="SUBQ") + """\
+SUBQ = (
+    HEAD.format(name="SUBQ")
+    + """\
        LINKAGE SECTION.
        01  LK-OUT       PIC X(8).
        PROCEDURE DIVISION USING LK-OUT.
@@ -179,14 +185,18 @@ SUBQ = HEAD.format(name="SUBQ") + """\
            CALL "LEAF" USING LK-OUT
            GOBACK.
 """
+)
 
-MAINQ = HEAD.format(name="MAINQ") + """\
+MAINQ = (
+    HEAD.format(name="MAINQ")
+    + """\
        01  WS-OUT       PIC X(8).
        PROCEDURE DIVISION.
        MAIN-PARA.
            CALL "SUBQ" USING WS-OUT
            GOBACK.
 """
+)
 
 MAINQ_CUT = """\
 TESTSUITE "MAINQ"
