@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from mockymock._lines import read_utf8_source
 from mockymock.cli._common import _apply_config_to_args, _check_rows_non_negative
 from mockymock.debugging_lines import activate_debugging_lines
+from mockymock.dsl.fixture_bundle import bundle_dict
 
 
 def _cmd_fixtures(args: argparse.Namespace) -> int:
@@ -137,7 +139,9 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
         return 1
-    print(bundle.to_json())
+    # Always the version 1 shape mocky-mock documents and reads, whatever
+    # version the installed cobol-parser writes by default (#461).
+    print(json.dumps(bundle_dict(bundle), indent=2))
     return 0
 
 

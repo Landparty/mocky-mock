@@ -45,6 +45,7 @@ from mockymock.jobstream.utilities import (
     UtilityGap,
     control_statements,
     line_framed,
+    refit_records,
     sort_data,
 )
 
@@ -553,14 +554,17 @@ class JobRun:
                 raise UtilityGap(
                     "SORT control statements in a dataset are not emulated"
                 )
-            lrecl = None
-            for dd in [*bindings[source_dd], *bindings[target_dd]]:
-                lrecl = lrecl or dd.record_length
-            staged = [dd for dd in bindings[source_dd] if not dd.is_dummy]
-            if lrecl is None and staged and all(dd.is_instream for dd in staged):
-                # In-stream data is always 80-byte card images.
-                lrecl = 80
-            data = sort_data(data, control_statements(lines), lrecl)
+            in_lrecl = self._sortin_lrecl(bindings[source_dd])
+            out_lrecl = next(
+                (dd.record_length for dd in bindings[target_dd] if dd.record_length),
+                None,
+            )
+            # SORTIN's records are split by SORTIN's own length, then fitted
+            # to SORTOUT's (DFSORT's PAD=RC0 / TRUNC=RC0 defaults), not
+            # re-split by SORTOUT's LRECL (#460).
+            data = sort_data(data, control_statements(lines), in_lrecl or out_lrecl)
+            if in_lrecl and out_lrecl and in_lrecl != out_lrecl:
+                data = refit_records(data, in_lrecl, out_lrecl)
         reads = [dd.dataset for dd in bindings[source_dd] if dd.dataset]
         # A copy or a sort keeps its input's framing.
         layouts = {
@@ -584,6 +588,21 @@ class JobRun:
             reads=reads,
             writes=[written] if written else [],
         )
+
+    def _sortin_lrecl(self, dds: list[Any]) -> int | None:
+        """SORTIN's record length: coded on a DD, recorded for its dataset
+        by an earlier step, or 80 for in-stream card images (#460)."""
+        for dd in dds:
+            if dd.record_length:
+                return int(dd.record_length)
+        for dd in dds:
+            if dd.dataset and dd.dataset.upper() in self.lrecls:
+                return self.lrecls[dd.dataset.upper()]
+        staged = [dd for dd in dds if not dd.is_dummy]
+        if staged and all(dd.is_instream for dd in staged):
+            # In-stream data is always 80-byte card images.
+            return 80
+        return None
 
     # -- COBOL steps -------------------------------------------------------
 

@@ -3,6 +3,7 @@ JSON into mockymock-local dataclasses. See
 docs/plans/2026-08-02-program-data-generation-implementation.md's Phase 8
 and cobol-parser's docs/fixture-bundle-schema.md."""
 
+import copy
 import json
 
 import pytest
@@ -11,6 +12,7 @@ from mockymock.dsl.fixture_bundle import (
     SUPPORTED_BUNDLE_VERSION,
     MalformedBundleError,
     UnsupportedBundleVersionError,
+    expand_shared_fixtures,
     load_fixture_bundle,
     load_fixture_bundle_file,
     parse_fixture_bundle,
@@ -151,9 +153,45 @@ def test_loads_layouts_map():
 
 
 def test_unsupported_bundle_version_raises():
-    bad = dict(MINIMAL_BUNDLE, bundle_version=2)
-    with pytest.raises(UnsupportedBundleVersionError, match="2"):
+    bad = dict(MINIMAL_BUNDLE, bundle_version=3)
+    with pytest.raises(UnsupportedBundleVersionError, match="3"):
         load_fixture_bundle(bad)
+
+
+def _as_version_2(bundle: dict) -> dict:
+    """*bundle* in cobol-parser main's version 2 shape: fixtures shared in a
+    top-level table, scenarios listing ids."""
+    v2 = copy.deepcopy(bundle)
+    table = {}
+    for scenario in v2["scenarios"]:
+        ids = []
+        for n, fixture in enumerate(scenario["fixtures"]):
+            fixture_id = f"{scenario['name']}#{n}"
+            table[fixture_id] = fixture
+            ids.append(fixture_id)
+        scenario["fixtures"] = ids
+    v2["fixtures"] = table
+    v2["bundle_version"] = 2
+    return v2
+
+
+def test_version_2_bundle_is_read_as_version_1():
+    """#461: cobol-parser main writes bundle_version 2."""
+    v2 = _as_version_2(MINIMAL_BUNDLE)
+    assert expand_shared_fixtures(v2) == MINIMAL_BUNDLE
+    assert load_fixture_bundle(v2) == load_fixture_bundle(MINIMAL_BUNDLE)
+
+
+def test_version_2_with_an_unknown_fixture_id_is_malformed():
+    v2 = _as_version_2(MINIMAL_BUNDLE)
+    v2["scenarios"][0]["fixtures"].append("no-such-id")
+    with pytest.raises(MalformedBundleError, match="no-such-id"):
+        load_fixture_bundle(v2)
+
+
+def test_expand_refuses_a_future_version_before_walking_scenarios():
+    with pytest.raises(UnsupportedBundleVersionError):
+        expand_shared_fixtures(dict(MINIMAL_BUNDLE, bundle_version=3))
 
 
 @pytest.mark.parametrize("version", [True, 1.0, "1"])

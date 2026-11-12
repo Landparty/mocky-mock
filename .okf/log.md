@@ -5,6 +5,31 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-12 -- hunt issues #453-#461, cobol-parser 4 bundles, nightly integration
+
+- #461: `dsl/fixture_bundle.py` reads `bundle_version` 2, inlining
+  `shared_fixtures` (`expand_shared_fixtures`). `generate --with-data` and
+  `fixtures` go through `bundle_dict()`, so a version-2 bundle object from
+  cobol-parser main reads like version 1. Against cobol-parser main the unit
+  suite went from 197 failures to none, and it still passes on 3.6.0 and on
+  the 3.1.1 floor.
+- #453: dialect risk looks for SEARCH ALL only in the statement's own
+  `metadata.is_search_all` and strips nested statements before scanning
+  text, so `WS-SMALL-K` or a nested `DISPLAY 'ALLOWED'` no longer reads as
+  SEARCH ALL.
+- #454: a clause body that shares its line with the header (`AT END MOVE
+  ...`) is exported with its header columns blanked, not at column 1.
+- #457: MOCK SECTION's entry is the section's first paragraph even when it
+  is the unnamed one before the first header, so control falling into a
+  section that opens with statements is refused (`find_flow_mock_plans`).
+- #458: real programs PERFORMed from BEFORE-ALL / AFTER-ALL are checked
+  against those hooks' mocks (`_checked_runs`).
+- #460: `mockymock job` SORT splits in-stream SORTIN cards by SORTIN's own
+  LRECL and then refits them to SORTOUT's (`refit_records`).
+- Nightly integration: `uv.lock` moves cobol-parser from 3.1.1 to 3.6.0 and
+  the integration job installs `--extra jcl`. The nightly-failing tests pass
+  locally on GnuCOBOL 3.1.2, except the `--coverage` one, which needs 3.2.
+
 ## 2026-11-11 -- smaller job runner notes from the bug hunts
 
 [cli](cli.md): after an abend, a step whose IF names a step like `ABENDCHK`

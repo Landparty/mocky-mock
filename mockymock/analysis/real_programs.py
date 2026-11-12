@@ -247,6 +247,22 @@ def active_cases(suite: MockTestSuite, key: str) -> list[tuple[int, MockTestCase
     ]
 
 
+def _checked_runs(suite: MockTestSuite, key: str) -> list[tuple[str, MockTestCase]]:
+    """(label, case) of every run that makes `key` real: each test case, and
+    each BEFORE-ALL / AFTER-ALL PERFORM, which runs in the suite phase with
+    only BEFORE-ALL's mocks (#458). BEFORE-EACH / AFTER-EACH steps run with
+    their case's mocks, so the case already covers them."""
+    runs = [(f"TESTCASE {case.name!r}", case) for _, case in active_cases(suite, key)]
+    name = key.upper()
+    for check in suite.hook_checks():
+        if check.hook not in ("BEFORE-ALL", "AFTER-ALL"):
+            continue
+        case = check.case
+        if any(d.is_real and d.key.upper() == name for d in case.mocks):
+            runs.append((f"{check.hook} step PERFORM {check.step.target}", case))
+    return runs
+
+
 def check_real_program(
     prepared: PreparedReal,
     suite: MockTestSuite,
@@ -259,7 +275,7 @@ def check_real_program(
     where = f'real program "{prepared.spec.key}"'
     reasons: list[RefusalReason] = []
     reported: set[tuple[str, int]] = set()
-    for _, case in active_cases(suite, prepared.spec.key):
+    for label, case in _checked_runs(suite, prepared.spec.key):
         for site in prepared.surface.boundary_sites:
             matches = matching_directives(case.mocks, site)
             if site.category is None:
@@ -293,7 +309,7 @@ def check_real_program(
                     RefusalReason(
                         code="AMBIGUOUS_MOCK",
                         message=(
-                            f"TESTCASE {case.name!r}: {where} line {site.line} "
+                            f"{label}: {where} line {site.line} "
                             f"is matched by " + ", ".join(d.describe() for d in matches)
                         ),
                     )
@@ -310,7 +326,7 @@ def check_real_program(
                     RefusalReason(
                         code=code,
                         message=(
-                            f"TESTCASE {case.name!r} runs the {where}, but "
+                            f"{label} runs the {where}, but "
                             f"its {site.label} at line {site.line} (paragraph "
                             f"'{site.paragraph_name}') is not mocked -- a real "
                             f"program runs only with every boundary it has "

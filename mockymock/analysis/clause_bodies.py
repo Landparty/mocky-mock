@@ -637,7 +637,11 @@ def _lift(
         # (issue #319) exists in no source line; it rides separately.
         line_start = text.rfind("\n", 0, offset) + 1
         lead = text[line_start:offset]
-        verbatim = (lead if not lead.strip() else "") + body_text
+        # A body that shares its line with the clause header (`AT END MOVE
+        # ...`) keeps its source column: the header is blanked rather than
+        # dropped, or the fixed-format export put the body at column 1
+        # (issue #454).
+        verbatim = (lead if not lead.strip() else " " * len(lead)) + body_text
         first_line = start_line + text.count("\n", 0, offset)
         numbered = [
             (first_line + index, line.rstrip())

@@ -209,7 +209,37 @@ def _walk_comparisons(node: Any) -> list[dict[str, Any]]:
 
 
 def _shallow_dict(statement_dict: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in statement_dict.items() if k not in _NESTED_STATEMENT_KEYS}
+    """*statement_dict* without the statements nested in it, at any depth.
+
+    A SEARCH's WHEN bodies sit under ``when_clauses[].statements`` and its
+    AT END body under ``at_end_clause``; those statements are visited on
+    their own, so scanning them again here reported them at the SEARCH line
+    (#453)."""
+    stripped = _strip_nested_statements(
+        {k: v for k, v in statement_dict.items() if k not in _NESTED_STATEMENT_KEYS}
+    )
+    return stripped if isinstance(stripped, dict) else {}
+
+
+def _strip_nested_statements(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {
+            k: _strip_nested_statements(v)
+            for k, v in node.items()
+            if k not in _NESTED_STATEMENT_KEYS and not _is_statement(v)
+        }
+    if isinstance(node, list):
+        return [_strip_nested_statements(v) for v in node if not _is_statement(v)]
+    return node
+
+
+def _is_statement(node: Any) -> bool:
+    """A serialized statement (or a list of them) nested in another one."""
+    if isinstance(node, dict):
+        return "statement_type" in node
+    if isinstance(node, list) and node:
+        return all(isinstance(v, dict) and "statement_type" in v for v in node)
+    return False
 
 
 def _is_alphanumeric_operand(operand: Any, items: dict[str, _Item]) -> bool:
@@ -296,7 +326,11 @@ def find_dialect_risks(
 
         if kind in {"SORT", "MERGE"}:
             add("SORT_COLLATION", MEDIUM, line, kind, f"{kind} statement")
-        if kind == "SEARCH" and "ALL" in json.dumps(shallow).upper():
+        # cobol-parser flags SEARCH ALL in the statement's metadata; a
+        # substring test over the whole SEARCH matched any serial SEARCH
+        # naming WS-SMALL-K or displaying 'ALLOWED' (#453).
+        metadata = data.get("metadata") or {}
+        if kind == "SEARCH" and metadata.get("is_search_all"):
             add("SEARCH_ALL_COLLATION", MEDIUM, line, kind, "SEARCH ALL")
 
         for comparison in _walk_comparisons(shallow):

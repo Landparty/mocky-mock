@@ -1041,7 +1041,13 @@ generates a `WHEN <tally> = N` branch that MOVEs its fields then appends
 paragraph-grouped path described above, unchanged. A real
 `dsl.fixture_bundle.FixtureBundle` (parsed from cobol-parser's
 `ProgramFixtureGenerator` JSON, see `fixture_bundle.py` and cobol-parser's
-`docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`:
+`docs/fixture-bundle-schema.md`) switches to `_scaffold_with_bundle`.
+`fixture_bundle.py` reads `bundle_version` 1 and 2 (`READABLE_BUNDLE_VERSIONS`).
+A version-2 bundle hoists the fixtures that several scenarios share into
+`shared_fixtures` and refers to them by key, and `load_fixture_bundle` inlines
+them again (`expand_shared_fixtures`). `bundle_dict(bundle)` does the same for
+the `FixtureBundle` object that `generate --with-data` gets from cobol-parser,
+so everything downstream sees one version-1 shape (#461, 2026-11-12):
 
 - **One `TESTCASE` per `bundle.scenarios[]` entry**, not per paragraph,
   named from `scenario.name`, body `PERFORM <scenario.entry>`. A scenario

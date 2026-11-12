@@ -277,6 +277,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from mockymock.dsl.fixture_bundle import (
         FixtureBundle,
         UnsupportedBundleVersionError,
+        bundle_dict,
         load_fixture_bundle,
         load_fixture_bundle_file,
     )
@@ -400,7 +401,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 copybook_paths=args.copybook_path,
             )
             bundle_data = add_entry_parameters(
-                cp_bundle.to_dict(), str(source_path), args.copybook_path
+                bundle_dict(cp_bundle), str(source_path), args.copybook_path
             )
             # A CALL argument the layout index cannot hold (a 05-level
             # group, one table element) gets its fields from the DATA
