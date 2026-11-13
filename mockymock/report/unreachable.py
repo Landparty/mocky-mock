@@ -26,6 +26,7 @@ plain gap.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,6 +69,7 @@ def suite_entries(suite: Any) -> tuple[set[str], set[str], bool]:
         *getattr(suite, "before_each_mocks", []),
     ]:
         flow = flow or mock.category in FLOW_CATEGORIES
+        moves.update(mock_body_targets(mock))
     for case in getattr(suite, "test_cases", []):
         steps = [*hooks, *case.steps]
         for step in steps:
@@ -79,7 +81,116 @@ def suite_entries(suite: Any) -> tuple[set[str], set[str], bool]:
             performs.add(case.perform_target.upper())
         moves.update(target for _value, target in case.setup_moves)
         flow = flow or any(m.category in FLOW_CATEGORIES for m in case.mocks)
+        for mock in case.mocks:
+            moves.update(mock_body_targets(mock))
     return performs, moves, flow
+
+
+_LITERAL_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+_WORD_RE = re.compile(r"[A-Z0-9][A-Z0-9-]*|=")
+#: Words after which the data names that follow receive a value.
+_RECEIVING_AFTER = frozenset({"TO", "INTO", "GIVING", "FROM", "BY", "REPLACING"})
+#: Statements whose first operands receive a value.
+_RECEIVING_VERBS = frozenset({"INITIALIZE", "SET", "COMPUTE", "ACCEPT"})
+#: Words that end a run of receiving names.
+_STOP_WORDS = frozenset(
+    {
+        "MOVE",
+        "ADD",
+        "SUBTRACT",
+        "MULTIPLY",
+        "DIVIDE",
+        "COMPUTE",
+        "SET",
+        "INITIALIZE",
+        "ACCEPT",
+        "STRING",
+        "UNSTRING",
+        "IF",
+        "ELSE",
+        "END-IF",
+        "EVALUATE",
+        "WHEN",
+        "END-EVALUATE",
+        "PERFORM",
+        "DISPLAY",
+        "CONTINUE",
+        "ROUNDED",
+        "ON",
+        "SIZE",
+        "ERROR",
+        "NOT",
+        "END-ADD",
+        "END-SUBTRACT",
+        "END-MULTIPLY",
+        "END-DIVIDE",
+        "END-COMPUTE",
+        "END-STRING",
+        "END-UNSTRING",
+        "REMAINDER",
+        "DELIMITED",
+        "POINTER",
+        "WITH",
+        "TRUE",
+        "FALSE",
+        "ZERO",
+        "ZEROS",
+        "ZEROES",
+        "SPACE",
+        "SPACES",
+        "OF",
+        "IN",
+        "ALL",
+        "THEN",
+        "AND",
+        "OR",
+        "VALUE",
+        "DATE",
+        "DAY",
+        "TIME",
+        "DAY-OF-WEEK",
+        "UP",
+        "DOWN",
+        "ADDRESS",
+        "LENGTH",
+        "FUNCTION",
+        "HIGH-VALUE",
+        "HIGH-VALUES",
+        "LOW-VALUE",
+        "LOW-VALUES",
+        "QUOTE",
+        "QUOTES",
+        "NULL",
+        "NULLS",
+        "CORRESPONDING",
+        "CORR",
+        "=",
+    }
+)
+
+
+def mock_body_targets(mock: Any) -> set[str]:
+    """Data names a MOCK body may write (#471): the receiving operands of
+    its MOVE / SET / INITIALIZE / COMPUTE / ADD ... statements. The body is
+    spliced in place of the mocked statement, so these change at run time
+    whatever the program's own data says. A superset is safe here: a name
+    taken for a receiving field only keeps an outcome from being claimed
+    unreachable."""
+    names: set[str] = set()
+    for line in getattr(mock, "body_lines", []) or []:
+        text = _LITERAL_RE.sub(" ", line.split("*>", 1)[0].upper())
+        words = _WORD_RE.findall(text.replace("=", " = "))
+        receiving = False
+        for word in words:
+            if word in _RECEIVING_AFTER or word in _RECEIVING_VERBS:
+                receiving = True
+                continue
+            if word in _STOP_WORDS:
+                receiving = word in _RECEIVING_VERBS
+                continue
+            if receiving and not word[0].isdigit():
+                names.add(word)
+    return names
 
 
 def reused_storage(suite: Any) -> str | None:

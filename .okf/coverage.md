@@ -207,6 +207,7 @@ them. `program_report(..., unreachable=)` adds `unreachable` reasons and
 counts and `unreachableScope` (`full`, or `static` with `unreachableNote`
 when a case starts elsewhere than the entry paragraph or mocks a
 paragraph / section, or when a run does not start from VALUE-clause storage: a case PERFORMs program paragraphs more than once, or a BEFORE-ALL / AFTER-ALL PERFORMs one (`reused_storage`, #446): then only code nothing reaches is claimed). An outcome the run took is never reported unreachable. Setup
-`MOVE` targets are passed as `extra_inputs`. Tests:
+`MOVE` targets, and the receiving fields of every MOCK body statement
+(`mock_body_targets`, a safe superset; #471), are passed as `extra_inputs`. Tests:
 `tests/unit/test_unreachable.py`.
 

@@ -99,6 +99,45 @@ def _output_stub(qualified_name: str, program: str) -> dict[str, Any]:
     }
 
 
+def _written_through_redefines(
+    index: Any, names: list[str], written: set[str]
+) -> set[str]:
+    """Names of USING fields the program writes through a REDEFINES of them
+    (cobol-parser#907): `MOVE '0000' TO LK-RC-X` with `LK-RC-X REDEFINES
+    LK-RC`, or a move to `01 LK-ALIAS REDEFINES LK-TOTAL`. Each written
+    item's byte range marks the elementary items of the USING record it
+    overlaps; an ambiguous offset is left out."""
+    from cobolparser.layout.offsets import compute_record_layout
+
+    linkage = index.linkage_records()
+    found: set[str] = set()
+    for name in names:
+        record = index.record_named(name)
+        if record is None:
+            continue
+        base = str(record.name).upper()
+        views = [record] + [
+            other
+            for other in linkage
+            if other is not record and str(other.redefines or "").upper() == base
+        ]
+        ranges = [
+            (item.byte_offset, item.byte_offset + item.byte_length)
+            for view in views
+            for item in compute_record_layout(view)
+            if item.byte_offset is not None
+            and not item.offset_ambiguous
+            and item.name.upper() in written
+        ]
+        for item in compute_record_layout(record) if ranges else []:
+            if item.is_group or item.byte_offset is None or item.offset_ambiguous:
+                continue
+            start, end = item.byte_offset, item.byte_offset + item.byte_length
+            if any(lo < end and start < hi for lo, hi in ranges):
+                found.add(item.name.upper())
+    return found
+
+
 def _entry_parameter_layout(
     program_path: str, copybook_paths: list[str] | None
 ) -> tuple[str, int | None, list[Any], list[str]] | None:
@@ -156,6 +195,7 @@ def _entry_parameter_layout(
         resolved = index.resolve(name)
         if resolved is not None:
             written.add(str(resolved.spec.name).upper())
+    written |= _written_through_redefines(index, names, written)
     outputs = list(
         dict.fromkeys(
             spec.qualified_name

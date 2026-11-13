@@ -5,7 +5,8 @@
   empty (a SYSIN with control statements is a gap).
 * `SORT` / `ICEMAN` / `DFSORT` / `SYNCSORT`: `SORT FIELDS=COPY`,
   `OPTION COPY`, `MERGE FIELDS=COPY`, or `SORT|MERGE FIELDS=(p,l,f,o,...)`
-  with CH, ZD and BI keys, on fixed-length records. Any other control
+  with CH, ZD and BI keys, on fixed-length records; `SKIPREC=` and
+  `STOPAFT=` on SORT or OPTION pick the input records. Any other control
   statement (INCLUDE, OMIT, INREC, OUTREC, SUM, ...) is a gap.
 
 A gap raises `UtilityGap`; the job runner stops there and says so.
@@ -63,8 +64,56 @@ def control_statements(lines: list[str]) -> list[tuple[str, str]]:
     return statements
 
 
-def sort_key(statements: list[tuple[str, str]]) -> Callable[[bytes], tuple] | None:
-    """The record key of a SORT/MERGE (None for a copy).
+_IGNORED_SORT_OPERANDS = frozenset({"EQUALS", "NOEQUALS", "CKPT", "CHKPT"})
+_IGNORED_SORT_KEYWORDS = frozenset({"SIZE", "FILSZ", "DYNALLOC"})
+_RECORD_LIMITS = ("SKIPREC", "STOPAFT")
+
+
+def _split_top_level(operands: str) -> list[str]:
+    """*operands* split at the commas outside parentheses."""
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for char in operands:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "," and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return [p for p in parts if p]
+
+
+def _record_limit(verb: str, operand: str, limits: dict[str, int]) -> bool:
+    """Record ``SKIPREC=n`` / ``STOPAFT=n`` in *limits*; False when
+    *operand* is neither."""
+    name, sep, value = operand.partition("=")
+    if not sep or name not in _RECORD_LIMITS:
+        return False
+    if verb == "MERGE":
+        raise UtilityGap(f"MERGE {operand} is not emulated")
+    if not value.isdigit():
+        raise UtilityGap(f"{verb} {operand} is not emulated")
+    limits[name] = int(value)
+    return True
+
+
+def _ignored_operand(operand: str) -> bool:
+    """An operand that does not change a stable sort's output."""
+    name = operand.partition("=")[0]
+    return operand in _IGNORED_SORT_OPERANDS or name in _IGNORED_SORT_KEYWORDS
+
+
+def sort_plan(
+    statements: list[tuple[str, str]],
+) -> tuple[Callable[[bytes], tuple] | None, int, int | None]:
+    """The record key of a SORT/MERGE (None for a copy), the number of input
+    records ``SKIPREC=`` skips and the number ``STOPAFT=`` keeps (None: all),
+    from the SORT/MERGE or OPTION statement (#463).
 
     Raises:
         UtilityGap: A control statement the emulation does not do.
@@ -72,24 +121,33 @@ def sort_key(statements: list[tuple[str, str]]) -> Callable[[bytes], tuple] | No
     key: Callable[[bytes], tuple] | None = None
     copy = False
     seen_sort = False
+    limits: dict[str, int] = {}
     for verb, rest in statements:
         operands = rest.split(" ", 1)[0].upper()
         if verb == "END":
             continue
         if verb == "OPTION":
-            words = {w.strip() for w in operands.split(",")}
-            if "COPY" in words:
-                copy = True
-                words.discard("COPY")
-            if words - {""}:
-                raise UtilityGap(f"OPTION {operands} is not emulated")
+            for word in _split_top_level(operands):
+                if word == "COPY":
+                    copy = True
+                elif not _record_limit(verb, word, limits) and not _ignored_operand(
+                    word
+                ):
+                    raise UtilityGap(f"OPTION {operands} is not emulated")
             continue
         if verb in ("SORT", "MERGE"):
             seen_sort = True
-            if operands in ("FIELDS=COPY", "FIELDS=(COPY)"):
+            parts = _split_top_level(operands)
+            fields_operand = parts[0] if parts else ""
+            for extra in parts[1:]:
+                if not _record_limit(verb, extra, limits) and not _ignored_operand(
+                    extra
+                ):
+                    raise UtilityGap(f"{verb} {operands}: {extra} is not emulated")
+            if fields_operand in ("FIELDS=COPY", "FIELDS=(COPY)"):
                 copy = True
                 continue
-            match = re.match(r"^FIELDS=\((?P<spec>[^)]*)\)(?:,|$)", operands)
+            match = re.match(r"^FIELDS=\((?P<spec>[^)]*)\)$", fields_operand)
             if match is None:
                 raise UtilityGap(f"{verb} {operands} is not emulated")
             spec = match.group("spec")
@@ -107,7 +165,20 @@ def sort_key(statements: list[tuple[str, str]]) -> Callable[[bytes], tuple] | No
         raise UtilityGap(f"{verb} is not emulated")
     if not seen_sort and not copy:
         raise UtilityGap("no SORT, MERGE or OPTION COPY statement")
-    return None if copy and key is None else key
+    return (
+        None if copy and key is None else key,
+        limits.get("SKIPREC", 0),
+        limits.get("STOPAFT"),
+    )
+
+
+def sort_key(statements: list[tuple[str, str]]) -> Callable[[bytes], tuple] | None:
+    """The record key of a SORT/MERGE (None for a copy).
+
+    Raises:
+        UtilityGap: A control statement the emulation does not do.
+    """
+    return sort_plan(statements)[0]
 
 
 def _zoned(raw: bytes) -> int:
@@ -210,10 +281,14 @@ def refit_records(data: bytes, from_length: int, to_length: int) -> bytes:
 def sort_data(
     data: bytes, statements: list[tuple[str, str]], record_length: int | None
 ) -> bytes:
-    key = sort_key(statements)
-    if key is None:
+    key, skip, stop = sort_plan(statements)
+    if key is None and not skip and stop is None:
         return data
     records = split_records(data, record_length)
+    # SKIPREC= / STOPAFT= pick the input records before the sort (#463).
+    records = records[skip:] if stop is None else records[skip : skip + stop]
+    if key is None:
+        return b"".join(records)
     if records and line_framed(data, record_length):
         key = _without_newline(key)
     # A stable sort, as DFSORT's EQUALS: equal keys keep their input order.

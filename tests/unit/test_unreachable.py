@@ -172,3 +172,46 @@ def test_taken_outcome_is_never_reported(monkeypatch):
     assert found is not None
     taken = {i for i, o in enumerate(branch.outcomes) if o.hits > 0}
     assert not taken & set(found.outcomes.get((branch.kind, branch.line), {}))
+
+
+MOCKED_FLAG = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. P.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-FLAG PIC X VALUE 'N'.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           CALL 'SUBX'
+           IF WS-FLAG = 'Y'
+               DISPLAY 'A'
+           ELSE
+               DISPLAY 'B'
+           END-IF
+           GOBACK.
+"""
+
+
+def test_a_field_written_only_by_a_mock_body_is_an_input():
+    # #471: the mock body is spliced in place of the CALL and sets WS-FLAG.
+    ast = parse_cobol(MOCKED_FLAG, filename="P.cbl").ast
+    points = program_points(ast, split_source_lines(MOCKED_FLAG))
+    measure(
+        points,
+        [
+            TraceEntry(line=7, statement=None, paragraph="MAIN-PARA", program="P"),
+            _stmt(8, "CALL"),
+            _stmt(9, "IF"),
+            _stmt(10, "DISPLAY"),
+            _stmt(14, "GOBACK"),
+        ],
+        IDENTITY,
+    )
+    suite = _suite(
+        '    MOCK CALL "SUBX"\n        MOVE "Y" TO WS-FLAG\n    END-MOCK\n'
+        "    PERFORM MAIN-PARA\n"
+    )
+    _performs, moves, _flow = suite_entries(suite)
+    assert "WS-FLAG" in moves
+    found = classify(ast, points, suite)
+    assert found is not None and ("IF", 9) not in found.outcomes
