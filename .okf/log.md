@@ -14,6 +14,16 @@ database GN's `GB`. [publishing](publishing.md): release-please bumps
 `test_root` and `source_root` expand `~` and `${HOME}`. Tests:
 `test_generator_dli_end_status.py`, `test_cli_config.py`, `test_smoke.py`.
 
+## 2026-11-13 -- issue sweep: SORT record limits, IF NE TRUE, found-record mock, mock-body inputs
+
+[cli](cli.md): job SORT applies `SKIPREC=` / `STOPAFT=` from SORT or OPTION
+(#463) and IF takes `¬=`/`NE TRUE` (#464). `generate --real`'s found-record
+mock qualifies each name `OF <record>` and subscripts table elements (#467).
+[coverage](coverage.md): MOCK body targets count as inputs for unreachable
+outcomes (#471). Entry-parameter top-up maps a write through a REDEFINES to
+the USING fields it overlays (cobol-parser#907,
+`entry_parameters._written_through_redefines`).
+
 ## 2026-11-13 -- benchmark fixes: EJECT/SKIP periods, IMS QC, ~ in aliases
 
 From a run against a real z/OS codebase under GnuCOBOL.

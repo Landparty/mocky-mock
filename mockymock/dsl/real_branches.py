@@ -132,18 +132,27 @@ def found_record_mock(
     assert record is not None
     seed = zlib.crc32(f"{match.program}:{match.file}:{match.record_field}".encode())
     factory = ValueFactory(random.Random(seed), DataGeneratorOptions())
+    # Every name is qualified by its record and a table element carries its
+    # subscripts (#467): the FD's names may also be declared elsewhere (a
+    # WORKING-STORAGE save area from the same copybook), and an OCCURS item
+    # needs its occurrence.
+    record_name = str(record.record.name).upper()
+    key_field = f"{match.record_field} OF {record_name}"
     moves = []
     for spec in flatten_record(record.record, DataGeneratorOptions()):
         if spec.name.upper() in ("FILLER", match.record_field):
             continue
         value = _bundle_rendered_value(factory.value_for(spec, 0), spec.category)
-        moves.append(f"MOVE {value} TO {spec.name}")
-    moves.append(f"MOVE {match.linkage_item} TO {match.record_field}")
+        target = f"{spec.name} OF {record_name}"
+        if spec.subscripts:
+            target += f" ({' '.join(str(n) for n in spec.subscripts)})"
+        moves.append(f"MOVE {value} TO {target}")
+    moves.append(f"MOVE {match.linkage_item} TO {key_field}")
     lines = [
         f"    *> {match.program} line {match.line}: a record matching "
         f"{match.linkage_item}, then end of file",
         f"    MOCK READ {match.file}",
-        f"        IF {match.record_field} = {match.linkage_item}",
+        f"        IF {key_field} = {match.linkage_item}",
         *(f"            {line}" for line in end_of_file_body),
         "        ELSE",
         *(f"            {line}" for line in moves),
