@@ -8,7 +8,6 @@ boundary's clause body still is."""
 
 from __future__ import annotations
 
-import pytest
 from cobolparser import parse_cobol
 from cobolparser.preprocess import normalize_fixed_format
 
@@ -132,21 +131,6 @@ SCREEN_CBL = """\
 """
 
 
-def _parses_screen_displays() -> bool:
-    """cobol-parser marks a screen DISPLAY (`is_screen_display`) only from
-    3.4 on; the compat lane runs the published release, which does not."""
-    program = parse_cobol(SCREEN_CBL).ast
-    return any(
-        getattr(node, "is_screen_display", False)
-        for node in program.find_all_by_type("DisplayStatement")
-    )
-
-
-screen_displays = pytest.mark.skipif(
-    not _parses_screen_displays(), reason="cobol-parser has no screen DISPLAY"
-)
-
-
 def _analyzed(source: str):
     program = parse_cobol(source).ast
     lines = split_source_lines(normalize_fixed_format(split_source_lines(source)))
@@ -165,7 +149,6 @@ def _codes(program, surface) -> set[str]:
     }
 
 
-@screen_displays
 def test_422_nested_answered_sites_are_not_refused() -> None:
     program, _, surface = _analyzed(SCREEN_CBL)
     answered = [s for s in surface.boundary_sites if is_answered_site(s)]
@@ -175,7 +158,6 @@ def test_422_nested_answered_sites_are_not_refused() -> None:
     assert "UNSUPPORTED_STOP_LITERAL" not in codes
 
 
-@screen_displays
 def test_422_nested_answered_sites_are_spliced_to_continue() -> None:
     program, lines, surface = _analyzed(SCREEN_CBL)
     suite = parse_cut('TESTSUITE "s"\nTESTCASE "t"\n    PERFORM MAIN-PARA\n')
@@ -203,7 +185,6 @@ def test_422_an_answered_site_in_a_boundary_clause_is_still_refused() -> None:
     assert "UNSUPPORTED_STOP_LITERAL" in _codes(program, surface)
 
 
-@screen_displays
 def test_422_generate_does_not_list_answered_sites_as_unmockable(
     tmp_path, capsys
 ) -> None:

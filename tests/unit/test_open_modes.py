@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from cobolparser import parse_cobol
-from cobolparser.analysis import constraints
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import matching_directives
@@ -21,16 +20,6 @@ from mockymock.dsl.model import MockCategory, MockDirective, split_read_access
 from mockymock.dsl.parser import CutParseError, parse_cut
 
 SAMPLES = Path(__file__).resolve().parents[2] / "examples" / "oraclemix" / "src"
-
-#: cobol-parser stopped failing an OPEN OUTPUT with 35 when its statement
-#: sites learned open modes; the release the compat job installs may not.
-needs_open_modes = pytest.mark.skipif(
-    "open_modes"
-    not in getattr(constraints, "StatementSite", object).__dict__.get(
-        "__dataclass_fields__", {}
-    ),
-    reason="installed cobolparser still plans 35 for OPEN OUTPUT",
-)
 
 
 def _surface(name: str):
@@ -137,12 +126,9 @@ class TestGenerate:
         assert _mock(missing, "    MOCK OPEN AUDIT-ESDS EXTEND") == [
             'FILE-STATUS IS "35"'
         ]
-        if needs_open_modes.args[0]:
-            pytest.skip("installed cobolparser still plans 35 for OPEN OUTPUT")
         # The OPEN OUTPUT that creates the log succeeds.
         assert _mock(missing, "    MOCK OPEN AUDIT-ESDS OUTPUT") == []
 
-    @needs_open_modes
     def test_open_output_is_never_failed_with_35(self, tmp_path):
         cut = _generate(tmp_path, "VSESDS")
         for header in ("    MOCK OPEN AUDIT-ESDS OUTPUT",):

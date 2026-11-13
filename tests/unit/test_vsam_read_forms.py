@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from cobolparser import parse_cobol
-from cobolparser.analysis.constraints import ConstraintReport
 
 from mockymock.analysis.mock_surface import analyze
 from mockymock.analysis.refusal import matching_directives
@@ -24,14 +23,6 @@ from mockymock.dsl.model import (
 from mockymock.dsl.parser import CutParseError, parse_cut
 
 SAMPLES = Path(__file__).resolve().parents[2] / "examples" / "oraclemix" / "src"
-
-#: cobol-parser's file-status scenario family (one case per FILE STATUS code
-#: a statement is tested for) came with `ConstraintReport.statement_sites`;
-#: the published release the compat job installs may predate it.
-needs_file_status_scenarios = pytest.mark.skipif(
-    not hasattr(ConstraintReport(), "statement_sites"),
-    reason="installed cobolparser has no file-status scenario family",
-)
 
 
 def _surface(name: str):
@@ -164,7 +155,6 @@ class TestGenerate:
         assert '"23"' not in " ".join(browse)
         assert any('MOVE "10" TO WS-CUST-FS' in line for line in browse)
 
-    @needs_file_status_scenarios
     def test_a_duplicate_alternate_key_comes_with_its_record(self, tmp_path):
         cut = _generate(tmp_path, "VSKSDSD")
         case = _case(cut, "file status 02: READ CUST-KSDS")
@@ -172,7 +162,6 @@ class TestGenerate:
         assert 'MOVE "02" TO WS-CUST-FS' in lookup
         assert any("TO CK-NAME" in line for line in lookup)
 
-    @needs_file_status_scenarios
     def test_tested_statuses_get_a_case_at_their_statement(self, tmp_path):
         cut = _generate(tmp_path, "VSKSDSR")
         read = _case(cut, "file status 23: READ ACCT-KSDS")

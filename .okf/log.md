@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- cobol-parser 3.6.0, job IF fixes from the 2026-11-11 bug hunt
+
+[integration](integration.md): dependency floor raised to `cobol-parser>=3.6.0`;
+the test capability probes for screen DISPLAY, file-status scenarios, OPEN
+modes and copybook source maps are gone, since every release in range has
+them. [cli](cli.md): after an abend, `IF (S1.ABENDCC = S0C4)` reaches the
+parser again (a gap, as the abend code is not kept) instead of silently
+skipping its steps, and `ABENDCC` of a step that did not abend is false;
+`ABEND = TRUE` / `stepname.RUN = FALSE` parse instead of gapping
+"unbalanced parentheses"; a step coding `COND=` inside an IF/THEN/ELSE is
+a gap, because cobol-parser still drops that IF. Test:
+`test_job_if_conditions.py`.
+
 ## 2026-11-11 -- smaller job runner notes from the bug hunts
 
 [cli](cli.md): after an abend, a step whose IF names a step like `ABENDCHK`

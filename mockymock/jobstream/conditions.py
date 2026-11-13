@@ -3,7 +3,9 @@
 `cobolparser.jcl` gives each step one `condition` string: the coded
 `COND=` (`(4,LE)`, `((4,LT),(8,GT,STEP1))`, `EVEN`, `ONLY`), or else the
 enclosing `IF` conditions (`(S1.RC = 0)`, `NOT (...)` in an ELSE, nested
-ones joined with ` AND `). `step_runs` evaluates either against the return
+ones joined with ` AND `). A step coding both loses its IF there (still
+so in cobol-parser 3.6.0); the job runner refuses such a step, see
+`if_blocks`. `step_runs` evaluates either against the return
 codes of the steps that ran so far. Anything it cannot read raises
 `ConditionError`: the job runner then stops and reports the step as a gap,
 since guessing would run (or skip) steps the real job would not.
@@ -26,6 +28,10 @@ class _StepBypassed(ConditionError):
     """The step a test names was bypassed: it has no return code."""
 
 
+class _Ambiguous(ConditionError):
+    """The step name a test uses matches several steps."""
+
+
 _COND_TEST_RE = re.compile(
     r"^\(?\s*(?P<code>\d{1,4})\s*,\s*(?P<op>GT|GE|EQ|LT|LE|NE)\s*"
     r"(?:,\s*(?P<step>[A-Z0-9@#$.]+))?\s*\)?$",
@@ -46,6 +52,36 @@ _OPS = {
     "^=": lambda a, b: a != b,
     "¬=": lambda a, b: a != b,
 }
+
+
+_IF_CARD_RE = re.compile(
+    r"^//[A-Z0-9@#$]*\s+(?P<verb>IF|ENDIF)(?:\s|\(|$)", re.IGNORECASE
+)
+
+
+def if_blocks(text: str) -> list[tuple[int, int]]:
+    """The (IF line, ENDIF line) of every IF/THEN/ELSE/ENDIF construct in a
+    JCL deck or procedure member, 1-based. An IF with no ENDIF runs to the
+    end of the text."""
+    blocks: list[tuple[int, int]] = []
+    open_ifs: list[int] = []
+    lines = text.splitlines()
+    for number, line in enumerate(lines, start=1):
+        if line.startswith("//*"):
+            continue
+        match = _IF_CARD_RE.match(line)
+        if match is None:
+            continue
+        if match.group("verb").upper() == "IF":
+            open_ifs.append(number)
+        elif open_ifs:
+            blocks.append((open_ifs.pop(), number))
+    blocks.extend((start, len(lines) + 1) for start in open_ifs)
+    return blocks
+
+
+def inside(blocks: Iterable[tuple[int, int]], line: int) -> bool:
+    return any(start < line < end for start, end in blocks)
 
 
 def is_cond_parameter(condition: str) -> bool:
@@ -87,9 +123,7 @@ def _step_rc(
     if name in bypassed or len(_matches(bypassed, name)) == 1:
         raise _StepBypassed(f"step {step} was bypassed")
     if len(matches) > 1:
-        raise ConditionError(
-            f"step name {step} is ambiguous: {', '.join(sorted(matches))}"
-        )
+        raise _Ambiguous(f"step name {step} is ambiguous: {', '.join(sorted(matches))}")
     raise ConditionError(f"no earlier step named {step} ran")
 
 
@@ -247,6 +281,40 @@ class _IfParser:
             return not self.not_expr()
         return self.atom()
 
+    def truth(self, name: str, value: bool) -> bool:
+        """`value`, or its comparison with an explicit `= TRUE` / `= FALSE`
+        (`EQ` too), which IBM's IF syntax allows after `ABEND`,
+        `stepname.ABEND` and `stepname.RUN`."""
+        if self.peek() not in ("=", "EQ"):
+            if self.peek() in _OPS:
+                raise ConditionError(
+                    f"{name} can only be compared with = TRUE or = FALSE"
+                )
+            return value
+        self.take()
+        word = self.take()
+        if word not in ("TRUE", "FALSE"):
+            raise ConditionError(f"expected TRUE or FALSE after {name} =, got {word!r}")
+        return value == (word == "TRUE")
+
+    def abend_code(self, name: str) -> bool:
+        """`ABENDCC = Sxxx` / `stepname.ABENDCC = Uxxxx`. The run does not keep
+        the abend code, so the test is decided only when the step (or, bare,
+        every step) did not abend: then it is false."""
+        op = self.take()
+        if op not in _OPS:
+            raise ConditionError(f"expected an operator after {name}, got {op!r}")
+        self.take()  # the code
+        if name == "ABENDCC":
+            abended = self.abended
+        else:
+            abended = self.rc_of(name[: -len(".ABENDCC")]) is ABEND
+        if abended or op not in ("=", "EQ"):
+            raise ConditionError(
+                f"cannot evaluate {name}: the run does not record abend codes"
+            )
+        return False
+
     def atom(self) -> bool:
         token = self.take()
         if token == "(":
@@ -257,15 +325,21 @@ class _IfParser:
         name = token
         if name.endswith(".ABEND") or name == "ABEND":
             if name == "ABEND":
-                return self.abended
-            return self.rc_of(name[: -len(".ABEND")]) is ABEND
+                return self.truth(name, self.abended)
+            return self.truth(name, self.rc_of(name[: -len(".ABEND")]) is ABEND)
+        if name == "ABENDCC" or name.endswith(".ABENDCC"):
+            return self.abend_code(name)
         if name.endswith(".RUN"):
             step = name[: -len(".RUN")]
             try:
                 self.rc_of(step)
-            except ConditionError:
-                return False
-            return True
+            except _Ambiguous:
+                raise
+            except ConditionError:  # bypassed, or never reached
+                executed = False
+            else:
+                executed = True
+            return self.truth(name, executed)
         if name == "RC" or name.endswith(".RC"):
             if name == "RC":
                 ran = [rc for rc in self.rcs.values() if rc is not None]
@@ -283,6 +357,10 @@ class _IfParser:
                 raise ConditionError(f"expected a number after {name} {op}")
             return _OPS[op](rc, int(number))
         raise ConditionError(f"cannot evaluate {name!r} in an IF condition")
+
+
+def _is_abend_test(token: str) -> bool:
+    return token in ("ABEND", "ABENDCC") or token.endswith((".ABEND", ".ABENDCC"))
 
 
 def if_true(
@@ -316,8 +394,9 @@ def step_runs(
     if is_cond_parameter(condition):
         return not cond_bypasses(condition, rcs, abended, bypassed, step)
     tokens = _tokens(condition)
-    # After an abend only an IF that tests ABEND runs its steps. A token
-    # test, not a substring one: a step named e.g. ABENDCHK is not a test.
-    if abended and not any(t == "ABEND" or t.endswith(".ABEND") for t in tokens):
+    # After an abend only an IF that tests ABEND (or an abend code,
+    # ABENDCC) runs its steps. A token test, not a substring one: a step
+    # named e.g. ABENDCHK is not a test.
+    if abended and not any(_is_abend_test(t) for t in tokens):
         return False
     return _IfParser(tokens, rcs, abended, step, bypassed).parse()

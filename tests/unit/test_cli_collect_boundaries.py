@@ -214,7 +214,6 @@ def test_collect_without_boundaries_still_needs_a_cut(capsys):
 
 
 # Regression: bug hunt round 12.
-import pytest
 
 from mockymock.cli.main import _collect_boundaries
 
@@ -235,7 +234,6 @@ _r12_COPY_PROGRAM = """\
 
 
 def test_collect_boundaries_lines_are_program_lines(tmp_path):
-    from cobolparser.preprocess import expand_copybooks
 
     books = tmp_path / "copybooks"
     books.mkdir()
@@ -244,10 +242,6 @@ def test_collect_boundaries_lines_are_program_lines(tmp_path):
     )
     program = tmp_path / "P.cbl"
     program.write_text(_r12_COPY_PROGRAM)
-    if not expand_copybooks(
-        _r12_COPY_PROGRAM, copybook_paths=[str(books)], preserve_source_locations=True
-    ).source_location_map:
-        pytest.skip("installed cobol-parser does not fill in a source map")
 
     boundaries = _collect_boundaries(program, [str(books)])
 
