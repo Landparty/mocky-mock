@@ -25,7 +25,7 @@ cobolparser counts records), never `str.splitlines()` -- that also breaks on
 form feed / VT / `\x1c`-`\x1e` / NEL / U+2028, so a page-eject `\f` in a
 comment line shifted every later splice one line early (the mock replaced
 the statement before the CALL and the real CALL ran). The rule is agreement
-with cobolparser, which (from 1.9 on, and so on every release the >= 3.1.1
+with cobolparser, which (from 1.9 on, and so on every release the >= 3.6.0
 floor allows) numbers records on `
 ` / `
 ` / `
