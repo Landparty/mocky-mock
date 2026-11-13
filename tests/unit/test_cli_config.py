@@ -175,3 +175,19 @@ def test_resolve_copybook_paths_falls_back_to_config_list():
 
 def test_resolve_copybook_paths_empty_list_when_no_config():
     assert resolve_copybook_paths(None, MockymockConfig()) == []
+
+
+def test_load_config_reads_ims_call_names_upper_cased(tmp_path):
+    (tmp_path / "mockymock.toml").write_text(
+        'ims_call_names = ["cbltbnc2", "CBLTBNC3"]\n'
+    )
+    assert load_config(tmp_path).ims_call_names == ("CBLTBNC2", "CBLTBNC3")
+
+
+@pytest.mark.parametrize(
+    "body", ['ims_call_names = "CBLTBNC3"\n', 'ims_call_names = ["../X"]\n']
+)
+def test_load_config_validates_ims_call_names(tmp_path, body):
+    (tmp_path / "mockymock.toml").write_text(body)
+    with pytest.raises(ConfigError, match="ims_call_names"):
+        load_config(tmp_path)

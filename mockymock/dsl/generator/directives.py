@@ -180,7 +180,9 @@ def _directive_for(
         # does: RETURN-CODE alone left a program's `IF WS-COMPCODE = 0`
         # test reading whatever the field held before the call.
         body = _dli_success_reply(
-            _mq_success_reply(_placeholder_body_for(category, key), site), site
+            _mq_success_reply(_placeholder_body_for(category, key), site),
+            site,
+            context,
         ) + _call_loop_end_lines(site, context, None)
         return f'MOCK {keyword} "{key}"', _with_captures(category, key, body, context)
 

@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- benchmark: SECTION leading code reachability, configurable IMS call names
+
+[analysis](analysis.md): the reachability walk keys each section's nameless
+leading paragraph per section, so code later sections PERFORM from there is
+reached (its MOCK SQL blocks were dropped, the FETCH looped forever).
+[dsl](dsl.md) / [cli](cli.md): `ims_call_names` in mockymock's config lists
+a site's DL/I wrappers (CBLTBNC2, CBLTBNC3), which `generate` then answers
+like CBLTDLI. Tests: `test_reachability_nameless_section_code.py`,
+`test_generator_dli_end_status.py`, `test_cli_config.py`.
+
 ## 2026-11-13 -- benchmark: unknown program end, duplicate child names in resets
 
 [analysis](analysis.md): a terminator never gets the `GO TO UT-PROGRAM-END`
