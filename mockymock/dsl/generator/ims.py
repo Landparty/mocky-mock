@@ -13,7 +13,11 @@ from mockymock.analysis.loops import (
 )
 from mockymock.analysis.mock_surface import BoundarySite
 from mockymock.dsl.fixture_bundle import BoundaryFixture
-from mockymock.dsl.generator._context import ProgramContext, _reply_watched_names
+from mockymock.dsl.generator._context import (
+    DEFAULT_DLI_CALL_INTERFACES,
+    ProgramContext,
+    _reply_watched_names,
+)
 from mockymock.dsl.generator.keys import _unique_prefix
 from mockymock.dsl.model import MockCategory
 
@@ -65,7 +69,14 @@ def _dli_loop_end_lines(
 
 
 #: CALL-level DL/I interfaces whose USING list is (function, PCB, ...).
-_DLI_CALL_INTERFACES = frozenset({"CBLTDLI", "CEETDLI"})
+_DLI_CALL_INTERFACES = DEFAULT_DLI_CALL_INTERFACES
+
+
+def dli_interfaces(context: ProgramContext | None) -> frozenset[str]:
+    """The CALL names answered as DL/I calls: the program context's (the
+    defaults plus the config's `ims_call_names`), or the defaults alone."""
+    return context.dli_interfaces if context is not None else _DLI_CALL_INTERFACES
+
 
 #: The PCB status a DL/I call reports once nothing more matches: GB (end of
 #: database) for an unqualified get-next, GE (not found) for the rest.
@@ -79,7 +90,9 @@ _DLI_CALL_END = {
 }
 
 
-def _dli_success_reply(body: list[str], site: BoundarySite) -> list[str]:
+def _dli_success_reply(
+    body: list[str], site: BoundarySite, context: ProgramContext | None = None
+) -> list[str]:
     """`body` plus a blank PCB status for a CBLTDLI/CEETDLI call: the
     status DL/I reports for a call that found (or stored) its segment,
     at bytes 11-12 of the PCB, the call's second USING argument. The
@@ -90,7 +103,7 @@ def _dli_success_reply(body: list[str], site: BoundarySite) -> list[str]:
     adds after this still wins on the call that ends the loop."""
     if site.category is not MockCategory.CALL or not site.keys:
         return body
-    if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+    if site.keys[0].upper() not in dli_interfaces(context):
         return body
     using = list(getattr(site.statement, "using_parameters", None) or [])
     names = [str(getattr(param, "name", "") or "") for param in using]
@@ -117,7 +130,7 @@ def _call_end_reply(
         if len(names) < 9 or not names[7] or not names[8]:
             return None
         return (("2", names[7]), ("2033", names[8])), {names[7], names[8]}
-    if key in _DLI_CALL_INTERFACES:
+    if key in dli_interfaces(context):
         if len(names) < 2 or not names[0] or not names[1]:
             return None
         function = _dli_function(names[0], context).strip().upper()
@@ -224,7 +237,7 @@ def _dli_sites(context: ProgramContext) -> list[tuple[BoundarySite, list[str]]]:
     for site in context.surface.boundary_sites if context.surface else []:
         if site.category is not MockCategory.CALL or not site.keys:
             continue
-        if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+        if site.keys[0].upper() not in dli_interfaces(context):
             continue
         using = list(getattr(site.statement, "using_parameters", None) or [])
         sites.append((site, [str(getattr(p, "name", "") or "") for p in using]))
@@ -260,7 +273,7 @@ def _row_already_ends(
     first call and the bundle's own count stands."""
     if context is None:
         return False
-    if site.keys and site.keys[0].upper() in _DLI_CALL_INTERFACES:
+    if site.keys and site.keys[0].upper() in dli_interfaces(context):
         # `_dli_success_reply` blanks the PCB status after the row's own
         # MOVEs, so no DL/I row ends the loop by itself.
         return False
@@ -331,7 +344,7 @@ def _call_loop_end_lines(
         # tally gate alone is right for it.
         distinct = {reply[0] for reply in kept if reply is not None}
         if len(distinct) == 1:
-            if site.keys[0].upper() in _DLI_CALL_INTERFACES and _dli_needs_gate(
+            if site.keys[0].upper() in dli_interfaces(context) and _dli_needs_gate(
                 sites, watched, replies, context
             ):
                 gated = _dli_end_lines_by_function(site, sites, kept, context, tally)
@@ -396,7 +409,7 @@ def _dli_end_lines_by_function(
     MOVE runs before the body). None when that cannot be done: not a DL/I
     key, no function-code capture, or a get site whose function code is
     not a literal."""
-    if site.keys[0].upper() not in _DLI_CALL_INTERFACES:
+    if site.keys[0].upper() not in dli_interfaces(context):
         return None
     capture = next(
         (

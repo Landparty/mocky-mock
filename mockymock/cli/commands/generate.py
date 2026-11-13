@@ -573,7 +573,13 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     # branch can carry the program's own AT END imperative verbatim -- the
     # exact text the splice is about to delete), plus the CAPTURE ARG lines
     # each CALL boundary can safely be scaffolded with.
-    program_context = ProgramContext.build(result.ast, lines, surface)
+    config = getattr(args, "_config", None)
+    program_context = ProgramContext.build(
+        result.ast,
+        lines,
+        surface,
+        ims_call_names=config.ims_call_names if config is not None else (),
+    )
     cut_text = scaffold_cut(
         program_name,
         surface,

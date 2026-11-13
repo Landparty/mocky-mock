@@ -456,12 +456,26 @@ def _reachable_bfs(
     for paragraph in _all_paragraphs(procedure):
         by_name.setdefault(paragraph.paragraph_name, paragraph)
     section_members: dict[str, list[str]] = {}
+    # What a reached section pushes: its members, with the nameless
+    # paragraph holding the code before its first paragraph header keyed
+    # per section. cobol-parser names every such paragraph "", so by name
+    # they were one paragraph: the first section's was walked and every
+    # later section's leading code -- and all it PERFORMs -- never was
+    # (2026-11-13 benchmark: PDSTI16A's 31 SQL statements counted as
+    # unreachable, their MOCKs dropped, the unmocked FETCH looped forever).
+    section_keys: dict[str, list[str]] = {}
     for section_name, section in getattr(procedure, "_sections", {}).items():
-        if not section_name:
+        if not section_name or section_name in section_members:
             continue
-        section_members.setdefault(
-            section_name, [p.paragraph_name for p in section.paragraphs]
-        )
+        section_members[section_name] = [p.paragraph_name for p in section.paragraphs]
+        keys = []
+        for paragraph in section.paragraphs:
+            key = paragraph.paragraph_name
+            if not key:
+                key = _NAMELESS_KEY_PREFIX + section_name
+                by_name[key] = paragraph
+            keys.append(key)
+        section_keys[section_name] = keys
 
     reasons: list[RefusalReason] = []
     stack = [start]
@@ -574,7 +588,7 @@ def _reachable_bfs(
                     # A performed/jumped-to section executes every one of its
                     # paragraphs by fall-through.
                     seen.add(name)
-                    stack.extend(section_members[name])
+                    stack.extend(section_keys[name])
                 # else: only the driver-side seed can be unresolved here
                 # (every in-program edge was resolvability-checked before
                 # pushing); check_test_case reports it as UNKNOWN_PARAGRAPH.
@@ -723,7 +737,7 @@ def _reachable_bfs(
         # which is the fail-closed direction: at worst an extra required
         # mock, never a silently executing unmocked boundary.
         if direct_out is not None and not closure_started:
-            direct_out |= seen
+            direct_out |= _without_nameless_keys(seen)
         closure_started = True
         hazard_sources = seen & go_to_targets
         if not hazard_sources:
@@ -809,7 +823,20 @@ def _reachable_bfs(
         if not additions:
             break
         stack.extend(additions)
-    return seen, reasons
+    return _without_nameless_keys(seen), reasons
+
+
+#: `_reachable_bfs`' private key for a section's nameless leading paragraph
+#: (a NUL can be in no COBOL name). Callers see "" for it, as before.
+_NAMELESS_KEY_PREFIX = "\x00"
+
+
+def _without_nameless_keys(names: set[str]) -> set[str]:
+    """`names` with each per-section nameless key folded back to ""."""
+    nameless = {name for name in names if name.startswith(_NAMELESS_KEY_PREFIX)}
+    if not nameless:
+        return names
+    return (names - nameless) | {""}
 
 
 @_per_program

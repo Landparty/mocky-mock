@@ -29,7 +29,6 @@ from mockymock.dsl.generator.files import (
     _status_read_eof,
 )
 from mockymock.dsl.generator.ims import (
-    _DLI_CALL_INTERFACES,
     _call_loop_end_lines,
     _dli_function,
     _dli_loop_end_lines,
@@ -37,6 +36,7 @@ from mockymock.dsl.generator.ims import (
     _dli_success_reply,
     _row_already_ends,
     _without_loop_control,
+    dli_interfaces,
 )
 from mockymock.dsl.generator.keys import _directive_header, file_op_key
 from mockymock.dsl.generator.mq import _mq_success_reply
@@ -180,7 +180,7 @@ def _bundle_directive_for(
             call_count_override = CallCountOverride(count=1)
         else:
             body = _dli_success_reply(
-                _placeholder_body_for(category, fixture.key, site), site
+                _placeholder_body_for(category, fixture.key, site), site, source
             )
             end_lines = _call_loop_end_lines(site, source, None) + _cics_loop_end_lines(
                 site, source, None
@@ -225,7 +225,9 @@ def _bundle_directive_for(
             fixture, loop_todo = _without_loop_control(fixture, site, source)
         body = _single_row_body(fixture, source, pinned) + loop_todo
         if category is MockCategory.CALL:
-            body = _dli_success_reply(_mq_success_reply(body, site, pinned), site)
+            body = _dli_success_reply(
+                _mq_success_reply(body, site, pinned), site, source
+            )
         if category is MockCategory.DLI and registry.known(category, fixture.key):
             body = body + _dli_loop_end_lines(
                 site, source, registry.name(category, fixture.key)
@@ -304,7 +306,7 @@ def _dli_rows_directive(
     first = fixtures[0]
     if first.category != MockCategory.CALL.value:
         return None
-    if first.key.upper() not in _DLI_CALL_INTERFACES:
+    if first.key.upper() not in dli_interfaces(source):
         return None
     if any((f.category, f.key) in placeholder_keys for f in fixtures):
         return None
@@ -381,7 +383,7 @@ def _dli_rows_directive(
         )
         status_pinned = bool(source.names_under(pcb) & row_pinned) if pcb else False
         if not status_pinned:
-            row = _dli_success_reply(row, other)
+            row = _dli_success_reply(row, other, source)
         condition = f'{capture} = "{function}"'
         if len(pcbs_of.get(function, ())) > 1:
             condition += f' AND UT-PASSED-ARG-2 = "{pcb}"'

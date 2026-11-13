@@ -61,6 +61,9 @@ _STRING_KEYS = ("test_root", "source_root", _AI_MODE_KEY)
 # file, and the extensions a differently-cased file may carry.
 _ALIASES_KEY = "copybook_aliases"
 _EXTENSIONS_KEY = "copybook_extensions"
+# CALL names `generate` answers as DL/I calls (USING function, PCB, ...) on
+# top of CBLTDLI/CEETDLI: a site's own wrappers around the DL/I interface.
+_IMS_CALLS_KEY = "ims_call_names"
 # A COBOL text-name: letters, digits, hyphens, and the national characters a
 # PDS member name allows. Never a path, so an alias cannot name a member
 # like `../x`.
@@ -71,7 +74,14 @@ _MEMBER_NAME = re.compile(r"[A-Za-z0-9@#$][A-Za-z0-9@#$_-]*")
 # cli/_common.py) that quietly did nothing would be a config the user
 # believes is in effect and isn't.
 _KNOWN_KEYS = frozenset(
-    {_STRING_LIST_KEY, *_INT_KEYS, *_STRING_KEYS, _ALIASES_KEY, _EXTENSIONS_KEY}
+    {
+        _STRING_LIST_KEY,
+        *_INT_KEYS,
+        *_STRING_KEYS,
+        _ALIASES_KEY,
+        _EXTENSIONS_KEY,
+        _IMS_CALLS_KEY,
+    }
 )
 
 
@@ -117,6 +127,8 @@ class MockymockConfig:
     # None means "not configured": copybook_aliases.DEFAULT_COPYBOOK_EXTENSIONS.
     # An empty tuple turns the automatic matching off.
     copybook_extensions: tuple[str, ...] | None = None
+    # Upper-cased program names `generate` treats like CBLTDLI/CEETDLI.
+    ims_call_names: tuple[str, ...] = field(default_factory=tuple)
 
 
 def _read_toml(path: Path) -> dict:
@@ -205,6 +217,20 @@ def _normalize_copybook_extensions(value: object, source: Path) -> tuple[str, ..
     return tuple(extensions)
 
 
+def _normalize_ims_call_names(value: object, source: Path) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError(
+            f"mockymock: {source}: '{_IMS_CALLS_KEY}' must be a list of strings"
+        )
+    for name in value:
+        if not _MEMBER_NAME.fullmatch(name):
+            raise ConfigError(
+                f"mockymock: {source}: '{_IMS_CALLS_KEY}' entry {name!r} is "
+                f"not a program name"
+            )
+    return tuple(name.upper() for name in value)
+
+
 def _validated_values(data: dict, source: Path) -> dict[str, Any]:
     """Validate one config table and return only the keys it actually sets.
 
@@ -242,6 +268,10 @@ def _validated_values(data: dict, source: Path) -> dict[str, Any]:
     if _EXTENSIONS_KEY in data:
         values["copybook_extensions"] = _normalize_copybook_extensions(
             data[_EXTENSIONS_KEY], source
+        )
+    if _IMS_CALLS_KEY in data:
+        values["ims_call_names"] = _normalize_ims_call_names(
+            data[_IMS_CALLS_KEY], source
         )
     if _AI_MODE_KEY in data:
         ai_mode = data[_AI_MODE_KEY]

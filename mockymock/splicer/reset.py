@@ -135,6 +135,8 @@ def reset_lines_for_items(items) -> list[str]:
     by `mockymock.splicer.linkage`) get the identical VALUE-restoring
     treatment without duplicating this logic."""
     lines: list[str] = []
+    items = list(items)
+    index = _name_index(items[0]) if items else {}
     for item, ref in reset_targets(items):
         if getattr(item, "redefines", None):
             # A REDEFINES item shares the storage of the item it redefines,
@@ -149,7 +151,8 @@ def reset_lines_for_items(items) -> list[str]:
             odo_max, odo_restore = _odo_counter_lines(item)
             lines.extend(odo_max)
             filler = " WITH FILLER" if _has_filler_value(item) else ""
-            if filler or _has_occurs_value(item):
+            ambiguous = _has_ambiguous_value_child(item, ref, index)
+            if filler or _has_occurs_value(item) or ambiguous:
                 # A table element's VALUE needs a subscripted MOVE per
                 # occurrence; INITIALIZE's ALL TO VALUE phrase restores
                 # every occurrence (and every other child's VALUE) in one
@@ -157,7 +160,14 @@ def reset_lines_for_items(items) -> list[str]:
                 # A FILLER's VALUE cannot be restored by name at all, and a
                 # case that overwrote the whole group (MOVE SPACES TO
                 # a report line) changed it: WITH FILLER restores it too
-                # (issue #196).
+                # (issue #196). A child whose VALUE could only be restored
+                # through a reference that is still ambiguous fully
+                # qualified (the same name twice under one group) is
+                # restored the same way, by the group (2026-11-13
+                # benchmark, TTSIM26A: `MOVE +0 TO WS000-INDICE OF
+                # WS000-CONSTANTES` named two fields and cobc refused it).
+                if filler == "" and ambiguous and _has_filler(item):
+                    filler = " WITH FILLER"
                 if odo_max:
                     # ALL TO VALUE THEN TO DEFAULT works item by item, so an
                     # ODO counter inside the group drops to 0 before its
@@ -475,6 +485,31 @@ def _has_filler_value(group) -> bool:
         or _has_filler_value(child)
         for child in _data_children(group)
     )
+
+
+def _has_ambiguous_value_child(
+    group, qualifier: str, index: dict[str, list[list[str]]]
+) -> bool:
+    """True when some child `_child_value_restores` would restore (one with
+    its own VALUE, outside any table) cannot be named uniquely even fully
+    qualified through `qualifier`: COBOL allows the same name twice under
+    one group, and no reference can then pick either one."""
+    for child in _data_children(group):
+        if getattr(child, "occurs_clause", None) is not None:
+            continue
+        if _is_filler(child):
+            if _has_ambiguous_value_child(child, qualifier, index):
+                return True
+            continue
+        target = f"{child.name} OF {qualifier}"
+        if _is_group(child):
+            if _has_ambiguous_value_child(child, target, index):
+                return True
+        elif getattr(child, "value_clause", None) and not _unique_reference(
+            index, target.split(" OF ")
+        ):
+            return True
+    return False
 
 
 def _child_value_restores(group, qualifier: str) -> list[str]:

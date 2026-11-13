@@ -958,3 +958,37 @@ def test_147_local_storage_and_the_first_fd_record_are_reset() -> None:
     assert "MOVE 0 TO LS-COUNT" in lines
     assert "INITIALIZE LS-GRP" in lines
     assert 'MOVE "AB" TO LS-A OF LS-GRP' in lines
+
+
+DUPLICATE_CHILD_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DUPCHILD.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS000-CONSTANTES.
+           05  WS000-INDICE    PIC S9(4) COMP VALUE +0.
+           05  WS000-MAX       PIC 9(3) VALUE 100.
+           05  WS000-INDICE    PIC S9(4) COMP VALUE +0.
+       01  WS-OTHER.
+           05  WS-FLAG         PIC X VALUE "N".
+           05  WS-COUNT        PIC 9(3).
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           STOP RUN.
+"""
+
+
+def test_a_child_named_twice_under_one_group_is_restored_by_the_group():
+    # 2026-11-13 benchmark (TTSIM26A): even fully qualified, `WS000-INDICE
+    # OF WS000-CONSTANTES` names two fields and cobc refused the reset.
+    result = parse_cobol(DUPLICATE_CHILD_SOURCE, filename="dupchild.cbl")
+    assert result.success, result.errors
+    lines = reset_move_lines(result.ast)
+    assert "INITIALIZE WS000-CONSTANTES ALL TO VALUE THEN TO DEFAULT" in lines
+    assert not any("WS000-INDICE" in line for line in lines)
+    assert not any(line.endswith("TO WS000-MAX OF WS000-CONSTANTES") for line in lines)
+    # A group whose children are all unique keeps INITIALIZE + MOVEs.
+    assert "INITIALIZE WS-OTHER" in lines
+    assert 'MOVE "N" TO WS-FLAG OF WS-OTHER' in lines

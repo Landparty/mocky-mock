@@ -26,6 +26,9 @@ from mockymock.dsl.generator.keys import _read_mock_key, split_read_files
 from mockymock.dsl.model import MockCategory, MockTestCase, MockTestSuite
 from mockymock.report.record_rewrite import field_pictures
 
+#: CALL-level DL/I interfaces whose USING list is (function, PCB, ...).
+DEFAULT_DLI_CALL_INTERFACES = frozenset({"CBLTDLI", "CEETDLI"})
+
 if TYPE_CHECKING:
     from cobolparser.models.program import CobolProgram
 
@@ -233,9 +236,19 @@ class ProgramContext:
     #: Dynamic CALL identifier -> (the program names it can hold, whether
     #: that list is complete) -- see `_dynamic_call_targets`.
     dynamic_targets: dict[str, tuple[list[str], bool]] = field(default_factory=dict)
+    #: The CALL names taken for the DL/I call interface (USING function,
+    #: PCB, ...): CBLTDLI and CEETDLI plus the config's `ims_call_names`,
+    #: a site's own wrappers around them (CBLTBNC2, CBLTBNC3).
+    dli_interfaces: frozenset[str] = DEFAULT_DLI_CALL_INTERFACES
 
     @classmethod
-    def build(cls, program, lines: list[str], surface: MockSurface) -> ProgramContext:
+    def build(
+        cls,
+        program,
+        lines: list[str],
+        surface: MockSurface,
+        ims_call_names: tuple[str, ...] = (),
+    ) -> ProgramContext:
         from mockymock.analysis.refusal import neutralized_goto_targets
         from mockymock.splicer.source_map import collect_boundaries, collect_scope_map
 
@@ -260,6 +273,8 @@ class ProgramContext:
             decimal_comma=decimal_point_is_comma(program),
             setup_lines=_commarea_setup_lines(program, lines),
             dynamic_targets=_dynamic_call_targets(program, surface),
+            dli_interfaces=DEFAULT_DLI_CALL_INTERFACES
+            | {name.upper() for name in ims_call_names},
         )
 
     def names_under(self, name: str) -> set[str]:

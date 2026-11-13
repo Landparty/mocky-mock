@@ -381,3 +381,19 @@ def test_mpp_multi_segment_gn_loop_ends_on_qd(tmp_path) -> None:
     assert 'MOVE "QD" TO IOPCB(11:2)' in cut
     assert 'MOVE "GB" TO IOPCB(11:2)' not in cut
     assert 'MOVE "QC" TO IOPCB(11:2)' in cut
+
+
+# 2026-11-13 benchmark (20 programs): a site's own wrapper around the DL/I
+# interface (CBLTBNC2, CBLTBNC3) got no end-of-queue reply, since only
+# CBLTDLI/CEETDLI were known. `ims_call_names` lists such wrappers.
+def test_a_configured_ims_wrapper_ends_the_gu_loop_on_qc(tmp_path, monkeypatch) -> None:
+    program = MPP.replace("'CBLTDLI'", "'CBLTBNC3'")
+    monkeypatch.chdir(tmp_path)
+    unconfigured = _generate(tmp_path, "MPPQC", program)
+    assert 'MOVE "QC" TO IOPCB(11:2)' not in unconfigured
+
+    (tmp_path / "mockymock.toml").write_text('ims_call_names = ["cbltbnc3"]\n')
+    cut = _mpp_end_status(_generate(tmp_path, "MPPQC", program, "--force"))
+    assert 'MOCK CALL "CBLTBNC3"' in cut
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut
+    assert "MOVE SPACES TO IOPCB(11:2)" in cut
