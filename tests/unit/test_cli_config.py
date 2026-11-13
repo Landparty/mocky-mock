@@ -41,6 +41,23 @@ def test_load_config_test_root_resolved_relative_to_config_file(tmp_path):
     assert config.test_root == str(tmp_path / "tests")
 
 
+@pytest.mark.parametrize("prefix", ["~", "${HOME}"])
+def test_load_config_expands_home_in_test_and_source_roots(
+    tmp_path, monkeypatch, prefix
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # expanduser on Windows
+    project = tmp_path / "app"
+    project.mkdir()
+    (project / "mockymock.toml").write_text(
+        f'test_root = "{prefix}/tests"\nsource_root = "{prefix}/src"\n'
+    )
+    config = load_config(project)
+    assert config.test_root == str(home / "tests")
+    assert config.source_root == str(home / "src")
+
+
 def test_load_config_absolute_test_root_left_as_is(tmp_path):
     absolute = tmp_path / "elsewhere"
     (tmp_path / "mockymock.toml").write_text(f'test_root = "{absolute.as_posix()}"\n')

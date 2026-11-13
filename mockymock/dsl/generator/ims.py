@@ -155,7 +155,10 @@ def _dli_guard_end_status(
     ISRT that passes an MFS MOD name and a reply sent through an ALT PCB.
     The GU was then answered GE, which an `UNTIL IOPCB-STATUS = 'QC'` loop
     never sees, and the run spun until the timeout (2026-11-13 benchmark,
-    7 IMS MPPs)."""
+    7 IMS MPPs). A GN likewise accepts QD: a GN on the I/O PCB reads the
+    next segment of a multi-segment message, and `_is_message_pcb` takes
+    any PCB read with a get-next for a database PCB, so the GN was
+    answered GB and an `UNTIL IOPCB-STATUS = 'QD'` loop never ended."""
     watched = context.names_under(pcb)
     flags: set[str] = set()
     pairs: list[tuple[str, str]] = []
@@ -188,9 +191,10 @@ _STATUS_COMPARE_RE = re.compile(
 _DLI_NOT_FOUND = frozenset({"GE", "GB"})
 
 
-#: The status an IMS message GU reports on the I/O PCB once the queue is
-#: empty: QC (no more messages).
-_DLI_MESSAGE_END = {"GU": "QC"}
+#: The status a message call reports on the I/O PCB once nothing is left:
+#: QC for a GU (no more messages on the queue), QD for a GN (no more
+#: segments in this message, the end of a multi-segment input message).
+_DLI_MESSAGE_END = {"GU": "QC", "GN": "QD"}
 
 #: Get-next calls: a PCB read with one of them is taken for a database PCB
 #: (a GN loop over segments), even when the program also ISRTs through it.

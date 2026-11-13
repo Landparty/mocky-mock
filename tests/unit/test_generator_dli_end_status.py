@@ -359,3 +359,25 @@ def test_a_db_loop_on_an_88_of_the_pcb_status_ends_on_its_value(tmp_path) -> Non
     cut = _generate(tmp_path, "DLIGE", program)
     assert 'MOVE "GE" TO DB-PCB(11:2)' in cut
     assert 'MOVE "GB" TO DB-PCB(11:2)' not in cut
+
+
+def test_mpp_multi_segment_gn_loop_ends_on_qd(tmp_path) -> None:
+    # A GN on the I/O PCB reads the next segment of the message; it was
+    # answered GB (a database GN's end), which a `UNTIL ... = 'QD'` loop
+    # never sees.
+    program = MPP.replace(
+        "       01  DLI-ISRT ",
+        '       01  DLI-GN              PIC X(4) VALUE "GN  ".\n       01  DLI-ISRT ',
+    ).replace(
+        "           CALL 'CBLTDLI' USING DLI-GU IOPCB INQ-MSG.\n",
+        "           CALL 'CBLTDLI' USING DLI-GU IOPCB INQ-MSG\n"
+        "           IF IOPCB-STATUS = SPACES\n"
+        "               PERFORM 1100-NEXT-SEG UNTIL IOPCB-STATUS = 'QD'\n"
+        "           END-IF.\n"
+        "       1100-NEXT-SEG.\n"
+        "           CALL 'CBLTDLI' USING DLI-GN IOPCB INQ-MSG.\n",
+    )
+    cut = _mpp_end_status(_generate(tmp_path, "MPPQC", program))
+    assert 'MOVE "QD" TO IOPCB(11:2)' in cut
+    assert 'MOVE "GB" TO IOPCB(11:2)' not in cut
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut

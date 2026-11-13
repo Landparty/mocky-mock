@@ -5,6 +5,15 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- benchmark follow-ups: IMS QD, uv.lock in releases, ~ in roots
+
+[dsl](dsl.md): a GN on the I/O PCB (the next segment of a multi-segment
+message) ends on `QD` when the program's loop waits for it, instead of a
+database GN's `GB`. [publishing](publishing.md): release-please bumps
+`uv.lock`'s mockymock version, pinned by `test_smoke.py`. [cli](cli.md):
+`test_root` and `source_root` expand `~` and `${HOME}`. Tests:
+`test_generator_dli_end_status.py`, `test_cli_config.py`, `test_smoke.py`.
+
 ## 2026-11-13 -- benchmark fixes: EJECT/SKIP periods, IMS QC, ~ in aliases
 
 From a run against a real z/OS codebase under GnuCOBOL.
