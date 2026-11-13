@@ -1,7 +1,6 @@
 """report.unreachable: which coverage points no test can reach, from
 cobol-parser's InputDependenceAnalyzer and the measured outcomes."""
 
-import pytest
 from cobolparser import parse_cobol
 
 from mockymock._lines import split_source_lines
@@ -19,8 +18,6 @@ from mockymock.report.unreachable import (
     classify,
     suite_entries,
 )
-
-pytest.importorskip("cobolparser.analysis.input_dependence")
 
 # A is never changed by an input: `IF A = 1` always goes the same way, so
 # its THEN is unreachable. B is ACCEPTed: `IF B = 1` can go either way.

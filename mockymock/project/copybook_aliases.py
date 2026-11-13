@@ -61,7 +61,10 @@ DEFAULT_COPYBOOK_EXTENSIONS: tuple[str, ...] = (
 )
 
 #: What cobol-parser's search already matches when the stem is written
-#: exactly as the member (its `CopybookSearchPath.extensions` default).
+#: exactly as the member. Since 4.0 it also tries `.copy` / `.dcl` and
+#: falls back to another letter case (`case_fallback`), so some files staged
+#: here it would find unaided; staging them anyway is harmless (the staged
+#: copy has the same content) and keeps the search order mockymock chose.
 _RESOLVER_EXTENSIONS = frozenset({".cpy", ".CPY", ".cbl", ".CBL", ".cob", ".COB"})
 
 #: Where staging directories live. A module attribute so tests can point

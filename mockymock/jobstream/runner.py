@@ -37,13 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mockymock.jobstream.conditions import (
-    ConditionError,
-    if_blocks,
-    inside,
-    is_cond_parameter,
-    step_runs,
-)
+from mockymock.jobstream.conditions import ConditionError, step_runs
 from mockymock.jobstream.utilities import (
     COPY_PROGRAMS,
     NOOP_PROGRAMS,
@@ -338,17 +332,21 @@ class JobRun:
                     )
                 )
                 continue
+            runs = True
+            deciding = step.condition
             try:
-                self._check_cond_in_if(step, name, job.steps, text)
-                runs = step_runs(
-                    step.condition,
-                    self.rcs,
-                    self.abended,
-                    bypassed=self.bypassed,
-                    step=name,
-                )
+                for deciding in _conditions(step):
+                    runs = step_runs(
+                        deciding,
+                        self.rcs,
+                        self.abended,
+                        bypassed=self.bypassed,
+                        step=name,
+                    )
+                    if not runs:
+                        break
             except ConditionError as exc:
-                self.gaps.append(f"step {name}: condition {step.condition!r}: {exc}")
+                self.gaps.append(f"step {name}: condition {deciding!r}: {exc}")
                 steps.append(
                     StepResult(name, step.program, "none", "gap", detail=str(exc))
                 )
@@ -362,7 +360,7 @@ class JobRun:
                         step.program,
                         "none",
                         "bypassed",
-                        detail=f"condition {step.condition} bypasses it",
+                        detail=f"condition {deciding} bypasses it",
                     )
                 )
                 continue
@@ -384,61 +382,6 @@ class JobRun:
             steps, report["datasets"], self.gaps, self.options.record
         )
         return report
-
-    def _check_cond_in_if(
-        self, step: Any, name: str, steps: list[Any], text: str
-    ) -> None:
-        """Refuse a step that codes `COND=` inside an IF/THEN/ELSE.
-
-        cobol-parser (up to at least 3.6.0) gives such a step its `COND=`
-        alone and drops the enclosing IF, so both branches of the IF would
-        run. The IF can't be recovered from the parse, so the deck (and the
-        procedure member, for a procedure step) is scanned for the IF/ENDIF
-        cards around the step instead.
-        """
-        condition = step.condition
-        if not condition or not is_cond_parameter(condition):
-            return
-        line = getattr(step, "line", 0) or 0
-        procedure = getattr(step, "procedure", None)
-        member = self._procedure_member(procedure, text)
-        blocks = if_blocks(text)
-        if member is not None:
-            # A library procedure's lines are its member's own.
-            body = member.read_text(encoding="utf-8", errors="replace")
-            enclosed = bool(line) and inside(if_blocks(body), line)
-        else:
-            enclosed = bool(line) and inside(blocks, line)
-        if not enclosed and "." in name:
-            invocation = name.rpartition(".")[0]
-            for other in steps:
-                if other.program is None and (other.name or "").upper() == invocation:
-                    other_line = getattr(other, "line", 0) or 0
-                    enclosed = bool(other_line) and inside(blocks, other_line)
-                    break
-        if enclosed:
-            raise ConditionError(
-                "COND= inside an IF/THEN/ELSE: cobol-parser drops the IF for "
-                "such a step, so whether it runs cannot be decided"
-            )
-
-    def _procedure_member(self, procedure: str | None, text: str) -> Path | None:
-        """A procedure's library member, looked up as `parse_jcl` does (an
-        in-stream PROC first, then the first folder holding a file of that
-        stem); None for an in-stream procedure, whose lines are the deck's
-        own, or one found nowhere."""
-        if not procedure or re.search(
-            rf"^//{re.escape(procedure)}\s+PROC\b", text, re.IGNORECASE | re.MULTILINE
-        ):
-            return None
-        for folder in self.options.proc_paths:
-            base = Path(folder)
-            if not base.is_dir():
-                continue
-            for entry in sorted(base.iterdir()):
-                if entry.is_file() and entry.stem.upper() == procedure.upper():
-                    return entry
-        return None
 
     # -- steps -------------------------------------------------------------
 
@@ -1087,6 +1030,20 @@ def _assigns(ast: Any) -> dict[str, str | None]:
         if name:
             out[name] = getattr(select, "assign_to", None)
     return out
+
+
+def _conditions(step: Any) -> list[str | None]:
+    """What must allow `step` to run, in the order z/OS decides it: the
+    enclosing IF/ELSE (`JobStep.if_condition`), then the step's own `COND=`
+    (`JobStep.cond`). cobol-parser 4.0 keeps the two apart (#896); its
+    `condition` holds only the `COND=` when both are coded, so reading it
+    alone would run both branches of the IF. A step object without the two
+    fields (a hand-built one) is decided by `condition` alone."""
+    if_condition = getattr(step, "if_condition", None)
+    cond = getattr(step, "cond", None)
+    if if_condition is None and cond is None:
+        return [step.condition]
+    return [c for c in (if_condition, cond) if c is not None]
 
 
 def _verdict(

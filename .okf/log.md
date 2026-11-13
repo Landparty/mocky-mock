@@ -5,6 +5,17 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- cobol-parser 4.0.0
+
+[integration](integration.md): floor raised to `cobol-parser>=4.0.0,<5`.
+Fixture bundle version 2 is read (`fixture_bundle.inline_fixtures`),
+`mockymock fixtures` keeps printing version 1, FIXTUREDEMO's bundle and
+golden are regenerated, the `cobolparser.layout` and `input_dependence`
+fallbacks are gone. [cli](cli.md): the job runner decides a step by
+`JobStep.if_condition` and `JobStep.cond` together, replacing the
+fail-closed IF/ENDIF scan; IF operands past a decided AND/OR are not
+evaluated. Tests: `test_fixture_bundle.py`, `test_job_if_conditions.py`.
+
 ## 2026-11-13 -- cobol-parser 3.6.0, job IF fixes from the 2026-11-11 bug hunt
 
 [integration](integration.md): dependency floor raised to `cobol-parser>=3.6.0`;

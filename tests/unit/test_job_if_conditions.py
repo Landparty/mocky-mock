@@ -1,7 +1,7 @@
 """`mockymock job` IF conditions: the 2026-11-11 bug hunt (ABENDCC after an
-abend, `= TRUE` / `= FALSE` on ABEND and RUN) and the fail-closed guard for
-a step that codes `COND=` inside an IF/THEN/ELSE, whose IF cobol-parser
-drops (upstream issue, still present in cobol-parser 3.6.0)."""
+abend, `= TRUE` / `= FALSE` on ABEND and RUN) and a step that codes `COND=`
+inside an IF/THEN/ELSE, which runs only when both allow it (cobol-parser
+4.0 keeps the two apart in `JobStep.if_condition` / `JobStep.cond`)."""
 
 from __future__ import annotations
 
@@ -11,12 +11,7 @@ from types import SimpleNamespace
 import cobolparser.jcl as cj
 import pytest
 
-from mockymock.jobstream.conditions import (
-    ConditionError,
-    if_blocks,
-    inside,
-    step_runs,
-)
+from mockymock.jobstream.conditions import ConditionError, step_runs
 from mockymock.jobstream.runner import JobOptions, run_job_stream
 
 # -- ABENDCC (regression: 2026-11-11 bug hunt, finding 1) --------------------
@@ -80,25 +75,6 @@ def test_run_on_an_ambiguous_name_is_not_false():
 # -- COND= inside IF/THEN/ELSE ------------------------------------------------
 
 
-def test_if_blocks_nest_and_skip_comments():
-    text = "\n".join(
-        [
-            "//J JOB",
-            "//  IF (S1.RC = 0) THEN",  # 2
-            "//*  IF (X) THEN",
-            "//I2 IF (S2.RC = 0) THEN",  # 4
-            "//S3 EXEC PGM=IEFBR14",
-            "//  ENDIF",  # 6
-            "//  ELSE",
-            "//  ENDIF",  # 8
-            "//S9 EXEC PGM=IEFBR14",
-        ]
-    )
-    assert sorted(if_blocks(text)) == [(2, 8), (4, 6)]
-    assert inside(if_blocks(text), 5)
-    assert not inside(if_blocks(text), 9)
-
-
 _DECK = """\
 //JOB1  JOB (ACCT),'X'
 //MYP   PROC
@@ -129,32 +105,39 @@ _LIBP = """\
 //      ENDIF
 """
 
-# What cobol-parser 3.6.0's parse_jcl gives for _DECK (checked against the
-# real parser with jcl-parser 2.3.1): COND= replaces the IF on S2, S3,
-# A.PS2, B.L2, B.L3 and C.L3.
+# What cobol-parser 4.0.0's parse_jcl gives for _DECK (checked against the
+# real parser with jcl-parser 2.3.1): name, program, procedure, line,
+# condition, if_condition, cond.
 _STEPS = [
-    ("S1", "IEFBR14", None, 8, None),
-    ("S2", "IEFBR14", None, 10, "(8,LT)"),
-    ("S3", "IEFBR14", None, 12, "(8,LT)"),
-    ("A", None, "MYP", 14, None),
-    ("A.PS1", "IEFBR14", "MYP", 3, None),
-    ("A.PS2", "IEFBR14", "MYP", 5, "(8,LT)"),
-    ("B", None, "LIBP", 16, "(S1.RC = 0)"),
-    ("B.L1", "IEFBR14", "LIBP", 2, "(S1.RC = 0)"),
-    ("B.L2", "IEFBR14", "LIBP", 3, "(4,LT)"),
-    ("B.L3", "IEFBR14", "LIBP", 5, "(4,LT)"),
-    ("C", None, "LIBP", 18, None),
-    ("C.L1", "IEFBR14", "LIBP", 2, None),
-    ("C.L2", "IEFBR14", "LIBP", 3, "(4,LT)"),
-    ("C.L3", "IEFBR14", "LIBP", 5, "(4,LT)"),
+    ("S1", "IEFBR14", None, 8, None, None, None),
+    ("S2", "IEFBR14", None, 10, "(8,LT)", "(S1.RC = 0)", "(8,LT)"),
+    ("S3", "IEFBR14", None, 12, "(8,LT)", "NOT (S1.RC = 0)", "(8,LT)"),
+    ("A", None, "MYP", 14, None, None, None),
+    ("A.PS1", "IEFBR14", "MYP", 3, None, None, None),
+    ("A.PS2", "IEFBR14", "MYP", 5, "(8,LT)", "(A.PS1.RC = 0)", "(8,LT)"),
+    ("B", None, "LIBP", 16, "(S1.RC = 0)", "(S1.RC = 0)", None),
+    ("B.L1", "IEFBR14", "LIBP", 2, "(S1.RC = 0)", "(S1.RC = 0)", None),
+    ("B.L2", "IEFBR14", "LIBP", 3, "(4,LT)", "(S1.RC = 0)", "(4,LT)"),
+    (
+        "B.L3",
+        "IEFBR14",
+        "LIBP",
+        5,
+        "(4,LT)",
+        "(S1.RC = 0) AND (B.L1.RC = 0)",
+        "(4,LT)",
+    ),
+    ("C", None, "LIBP", 18, None, None, None),
+    ("C.L1", "IEFBR14", "LIBP", 2, None, None, None),
+    ("C.L2", "IEFBR14", "LIBP", 3, "(4,LT)", None, "(4,LT)"),
+    ("C.L3", "IEFBR14", "LIBP", 5, "(4,LT)", "(C.L1.RC = 0)", "(4,LT)"),
 ]
 
 
-def _check(tmp_path: Path, monkeypatch, only: list[str]):
-    """Run the job with just the named steps (plus the PROC invocations)."""
-    procs = tmp_path / "procs"
-    procs.mkdir()
-    (procs / "LIBP.prc").write_text(_LIBP)
+def _check(tmp_path: Path, monkeypatch, rcs=None):
+    """Run the whole job; `rcs` overrides the RC an IEFBR14 step returns."""
+    import mockymock.jobstream.runner as runner
+
     (tmp_path / "j.jcl").write_text(_DECK)
     data = tmp_path / "data"
     data.mkdir()
@@ -165,10 +148,11 @@ def _check(tmp_path: Path, monkeypatch, only: list[str]):
             procedure=procedure,
             line=line,
             condition=condition,
+            if_condition=if_condition,
+            cond=cond,
             dd_statements=[],
         )
-        for name, program, procedure, line, condition in _STEPS
-        if program is None or name in only
+        for name, program, procedure, line, condition, if_condition, cond in _STEPS
     ]
     monkeypatch.setattr(
         cj,
@@ -177,30 +161,44 @@ def _check(tmp_path: Path, monkeypatch, only: list[str]):
             errors=[], jobs=[SimpleNamespace(name="JOB1", steps=steps)], unresolved=[]
         ),
     )
-    return run_job_stream(
-        JobOptions(
-            jcl=tmp_path / "j.jcl",
-            sources=[],
-            data=data,
-            proc_paths=[procs],
-            work_dir=tmp_path,
-        )
+    original = runner.JobRun._run_step
+
+    def run_step(self, name, step):
+        result = original(self, name, step)
+        if rcs and name in rcs:
+            result.rc = rcs[name]
+        return result
+
+    monkeypatch.setattr(runner.JobRun, "_run_step", run_step)
+    report = run_job_stream(
+        JobOptions(jcl=tmp_path / "j.jcl", sources=[], data=data, work_dir=tmp_path)
     )
+    return {s["name"]: s["status"] for s in report["steps"]}
 
 
-@pytest.mark.parametrize("step", ["S2", "S3", "A.PS2", "B.L2", "B.L3", "C.L3"])
-def test_cond_inside_an_if_is_a_gap(tmp_path, monkeypatch, step):
-    report = _check(tmp_path, monkeypatch, ["S1", step])
-    assert report["verdict"] == "incomplete"
-    result = report["steps"][-1]
-    assert (result["name"], result["status"]) == (step, "gap")
-    assert "inside an IF" in result["detail"]
+def test_only_the_taken_branch_runs(tmp_path, monkeypatch):
+    status = _check(tmp_path, monkeypatch)
+    assert status["S2"] == "ran"
+    assert status["S3"] == "bypassed"
+    assert status["A.PS2"] == "ran"
+    assert status["B.L2"] == status["B.L3"] == status["C.L3"] == "ran"
 
 
-def test_cond_outside_any_if_still_runs(tmp_path, monkeypatch):
-    report = _check(tmp_path, monkeypatch, ["S1", "A.PS1", "B.L1", "C.L1", "C.L2"])
-    assert [s["status"] for s in report["steps"]] == ["ran"] * 5
-    assert report["verdict"] == "passed"
+def test_the_else_branch_runs_when_the_if_is_false(tmp_path, monkeypatch):
+    status = _check(tmp_path, monkeypatch, rcs={"S1": 4})
+    assert status["S2"] == "bypassed"
+    assert status["S3"] == "ran"
+    # The IF around the PROC call is false: none of its steps run.
+    assert status["B.L1"] == status["B.L2"] == status["B.L3"] == "bypassed"
+    assert status["C.L1"] == "ran"
+
+
+def test_cond_still_bypasses_inside_a_true_if(tmp_path, monkeypatch):
+    # S1 RC 0 takes THEN; C.L1 RC 5 makes C.L3's IF false and C.L2's
+    # COND=(4,LT) true (4 < 5): bypassed either way.
+    status = _check(tmp_path, monkeypatch, rcs={"C.L1": 5})
+    assert status["C.L2"] == "bypassed"
+    assert status["C.L3"] == "bypassed"
 
 
 def test_fake_steps_match_the_real_parser(tmp_path):
@@ -210,6 +208,6 @@ def test_fake_steps_match_the_real_parser(tmp_path):
     (procs / "LIBP.prc").write_text(_LIBP)
     parsed = cj.parse_jcl(_DECK, filename="j.jcl", proc_paths=[str(procs)])
     assert [
-        (s.name, s.program, s.procedure, s.line, s.condition)
+        (s.name, s.program, s.procedure, s.line, s.condition, s.if_condition, s.cond)
         for s in parsed.jobs[0].steps
     ] == _STEPS

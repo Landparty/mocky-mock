@@ -243,7 +243,7 @@ def test_explicit_copybook_path_is_aliased_too(tmp_path, capsys, monkeypatch):
 def test_matching_turned_off_falls_back_to_the_hint(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cbl, cut = _pair(tmp_path)
-    _write(tmp_path / "copylib" / "gttlbi0a.copy", _COPYBOOK)
+    _write(tmp_path / "copylib" / "gttlbi0a.inc", _COPYBOOK)
     _write(tmp_path / "mockymock.toml", "copybook_extensions = []\n")
     exit_code = main(["lint", str(cbl), "--cut", str(cut)])
     out = capsys.readouterr().out
@@ -274,7 +274,7 @@ def test_unstageable_copylib_leaves_the_search_unchanged(tmp_path, capsys, monke
     monkeypatch.setattr(copybook_aliases, "stage_copybook_aliases", fail)
     monkeypatch.chdir(tmp_path)
     cbl, cut = _pair(tmp_path)
-    _write(tmp_path / "copylib" / "gttlbi0a.copy", _COPYBOOK)
+    _write(tmp_path / "copylib" / "gttlbi0a.inc", _COPYBOOK)
     exit_code = main(["lint", str(cbl), "--cut", str(cut)])
     captured = capsys.readouterr()
     assert exit_code == 1

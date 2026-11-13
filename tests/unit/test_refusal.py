@@ -1540,10 +1540,11 @@ def test_whole_program_check_refuses_phantom_arithmetic_terminator_paragraph():
     _assert_phantom_terminator_handled(result, "END-ADD")
 
 
-# A paragraph really named END-ADD -- not an ADD's terminator at all, since
-# no ADD precedes it -- parses as a paragraph on every cobol-parser
-# release, so the guard itself stays under direct coverage even once the
-# upstream terminator fix means the fixtures above no longer trip it.
+# A paragraph header written END-ADD (no ADD precedes it). Up to 3.x
+# cobol-parser parsed it as a paragraph; 4.0 reads the reserved word as a
+# stray terminator and keeps its statements in MAIN-PARA. The guard is kept
+# for an AST that still carries such a paragraph, so the test below renames
+# a real paragraph to reach it.
 REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. PHANTOMNAME.
@@ -1555,7 +1556,7 @@ REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE = """\
        PROCEDURE DIVISION.
        MAIN-PARA.
            MOVE "START" TO WS-RESULT.
-       END-ADD.
+       OTHER-PARA.
            MOVE "DONE" TO WS-RESULT.
 """
 
@@ -1563,10 +1564,12 @@ REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE = """\
 def test_whole_program_check_refuses_paragraph_literally_named_after_terminator():
     result = parse_cobol(REAL_PHANTOM_NAMED_PARAGRAPH_SOURCE, filename="phn.cbl")
     assert result.success, result.errors
-    paragraph_names = {
-        p.paragraph_name for p in result.ast.procedure_division.paragraphs
-    }
-    assert "END-ADD" in paragraph_names  # precondition: the guard's trigger
+    [other] = [
+        p
+        for p in result.ast.procedure_division.paragraphs
+        if p.paragraph_name == "OTHER-PARA"
+    ]
+    other.paragraph_name = "END-ADD"
     reasons = check_whole_program(result)
     phantom = [r for r in reasons if r.code == "UNSUPPORTED_PHANTOM_PARAGRAPH"]
     assert len(phantom) == 1

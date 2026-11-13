@@ -184,7 +184,7 @@ got its own branch; `tests/unit/test_verb_coverage_fail_closed.py`'s corpus
 test pins that no `examples/**/*.cbl` yields a catch-all site, and
 `test_every_passthrough_name_is_a_real_cobolparser_statement_class` pins
 that the allowlist has no typos. The node classes are imported directly: every release the dependency floor
-allows (>= 3.6.0) ships them.
+allows (>= 4.0.0) ships them.
 
 The label -> refusal-code table for detected-unmockable sites lives in
 `refusal/_types.py`'s `_UNSUPPORTED_SITE_CODES` (INVOKE ->
