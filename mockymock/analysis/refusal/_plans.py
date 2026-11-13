@@ -1068,10 +1068,20 @@ def find_terminator_plans(
                     or _cics_resp_field(site.statement)[1]
                 )
 
-            if problem is not None and case.perform_thru == last_paragraph:
+            if (
+                problem is not None
+                and last_paragraph is not None
+                and case.perform_thru == last_paragraph
+            ):
                 # The case runs the main line to the end of the program
                 # (2026-11-02): a terminator it only falls or jumps into,
                 # never PERFORMs, can end it with GO TO UT-PROGRAM-END.
+                # Only when that end is known: a bare PERFORM's
+                # perform_thru is None too, and None == None picked this
+                # plan for a program whose last paragraph is unknown, so
+                # `program_end_thru` was None, no UT-PROGRAM-END paragraph
+                # was appended and the GO TO named an undefined label
+                # (2026-11-13 benchmark, 8 sectioned programs).
                 if perform_entered is None:
                     perform_entered = _perform_frame_reach(program, reach_cache)
                 end_problem = _main_line_end_problem(

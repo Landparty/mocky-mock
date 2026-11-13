@@ -5,6 +5,16 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- benchmark: unknown program end, duplicate child names in resets
+
+[analysis](analysis.md): a terminator never gets the `GO TO UT-PROGRAM-END`
+plan when the program's last paragraph is unknown (a bare PERFORM's
+`perform_thru` None matched it, leaving an undefined label in 8 sectioned
+programs). [splicer](splicer.md): a group whose VALUE child is named twice
+under it is reset with `INITIALIZE ... ALL TO VALUE THEN TO DEFAULT`, since
+no qualified MOVE can name either child. Tests: `test_main_line_cases.py`,
+`test_reset.py`.
+
 ## 2026-11-13 -- benchmark follow-ups: IMS QD, uv.lock in releases, ~ in roots
 
 [dsl](dsl.md): a GN on the I/O PCB (the next segment of a multi-segment
