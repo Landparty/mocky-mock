@@ -265,19 +265,22 @@ class _IfParser:
 
     def truth(self, name: str, value: bool) -> bool:
         """`value`, or its comparison with an explicit `= TRUE` / `= FALSE`
-        (`EQ` too), which IBM's IF syntax allows after `ABEND`,
+        (`EQ` too, and `¬=` / `NE` for the negation, #464), which IBM's IF syntax allows after `ABEND`,
         `stepname.ABEND` and `stepname.RUN`."""
-        if self.peek() not in ("=", "EQ"):
+        if self.peek() not in ("=", "EQ", "¬=", "^=", "NE"):
             if self.peek() in _OPS:
                 raise ConditionError(
                     f"{name} can only be compared with = TRUE or = FALSE"
                 )
             return value
-        self.take()
+        op = self.take()
         word = self.take()
         if word not in ("TRUE", "FALSE"):
-            raise ConditionError(f"expected TRUE or FALSE after {name} =, got {word!r}")
-        return value == (word == "TRUE")
+            raise ConditionError(
+                f"expected TRUE or FALSE after {name} {op}, got {word!r}"
+            )
+        equal = value == (word == "TRUE")
+        return equal if op in ("=", "EQ") else not equal
 
     def abend_code(self, name: str) -> bool:
         """`ABENDCC = Sxxx` / `stepname.ABENDCC = Uxxxx`. The run does not keep
