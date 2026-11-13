@@ -342,7 +342,14 @@ def find_flow_mock_plans(
                 for p in target.paragraphs
                 if p.paragraph_name.strip(".")
             ]
-            entry_names = member_names[:1]
+            # The section is entered at its first paragraph, named or not:
+            # statements coded before the first paragraph header form an
+            # unnamed paragraph, and a fall-in is recorded under '' (#457).
+            # A GO TO cannot name it, so the GO-TO-target check below never
+            # matches ''; the fall-through check does. '' is shared by every
+            # unnamed paragraph, so this errs toward refusing, like the rest
+            # of the entry-hazard checks.
+            entry_names = [p.paragraph_name for p in target.paragraphs[:1]]
         else:
             matches = paragraphs_by_name.get(key, [])
             if not matches:

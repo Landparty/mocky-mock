@@ -29,6 +29,26 @@ skipping its steps, and `ABENDCC` of a step that did not abend is false;
 a gap, because cobol-parser still drops that IF. Test:
 `test_job_if_conditions.py`.
 
+## 2026-11-12 -- hunt issues #453-#460, nightly integration
+
+- #453: dialect risk looks for SEARCH ALL only in the statement's own
+  `metadata.is_search_all` and strips nested statements before scanning
+  text, so `WS-SMALL-K` or a nested `DISPLAY 'ALLOWED'` no longer reads as
+  SEARCH ALL.
+- #454: a clause body that shares its line with the header (`AT END MOVE
+  ...`) is exported with its header columns blanked, not at column 1.
+- #457: MOCK SECTION's entry is the section's first paragraph even when it
+  is the unnamed one before the first header, so control falling into a
+  section that opens with statements is refused (`find_flow_mock_plans`).
+- #458: real programs PERFORMed from BEFORE-ALL / AFTER-ALL are checked
+  against those hooks' mocks (`_checked_runs`).
+- #460: `mockymock job` SORT splits in-stream SORTIN cards by SORTIN's own
+  LRECL and then refits them to SORTOUT's (`refit_records`).
+- Nightly integration: the integration job installs `--extra jcl`. The
+  nightly-failing tests pass locally on GnuCOBOL 3.1.2, except the
+  `--coverage` one, which needs 3.2. (#461, version 2 bundles, landed on
+  main with the cobol-parser 4.0.0 move.)
+
 ## 2026-11-11 -- smaller job runner notes from the bug hunts
 
 [cli](cli.md): after an abend, a step whose IF names a step like `ABENDCHK`

@@ -502,7 +502,7 @@ Flow (`_cmd_generate`):
    `bundle` stays `None` if neither flag is given, giving the original
    bundle-less scaffold below): `--fixtures PATH` loads a pre-generated
    bundle JSON via `load_fixture_bundle_file` (fails closed with a printed
-   message on an unsupported `bundle_version` or malformed JSON);
+   message on a `bundle_version` other than 1 or 2, or on malformed JSON);
    `--with-data` instead calls cobol-parser's
    `ProgramFixtureGenerator(DataGeneratorOptions(rows=args.rows))` when
    `args.rows is not None` (else the plain, default-options

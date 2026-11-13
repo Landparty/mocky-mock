@@ -101,8 +101,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
+      # The job tests read JCL through cobol-parser's [jcl] extra.
       - name: Install (locked)
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --extra jcl
       # ubuntu-latest ships a Linux Docker daemon; the tier builds the
       # mockymock-gnucobol image on first use (~1 min).
       - name: Integration tests

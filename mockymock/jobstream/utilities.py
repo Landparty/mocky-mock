@@ -195,6 +195,18 @@ def _without_newline(key: Callable[[bytes], tuple]) -> Callable[[bytes], tuple]:
     return stripped
 
 
+def refit_records(data: bytes, from_length: int, to_length: int) -> bytes:
+    """*data*'s fixed *from_length* records, each padded with blanks or cut
+    to *to_length* (DFSORT's PAD=RC0 / TRUNC=RC0, #460). Line-sequential
+    data keeps its lines as they are."""
+    if not data or line_framed(data, from_length):
+        return data
+    return b"".join(
+        record[:to_length].ljust(to_length, b" ")
+        for record in split_records(data, from_length)
+    )
+
+
 def sort_data(
     data: bytes, statements: list[tuple[str, str]], record_length: int | None
 ) -> bytes:

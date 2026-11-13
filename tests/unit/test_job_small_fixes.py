@@ -94,6 +94,38 @@ def test_instream_sortin_without_lrecl_sorts_80_byte_cards(monkeypatch, tmp_path
     assert report["datasets"] == [{"name": "OUT.SORTED", "status": "same"}]
 
 
+@pytest.mark.parametrize(
+    ("out_lrecl", "width"), [(40, 40), (160, 160)], ids=["shorter", "longer"]
+)
+def test_instream_sortin_is_split_as_cards_then_fitted_to_sortout(
+    monkeypatch, tmp_path, out_lrecl, width
+):
+    """#460: SORTOUT's LRECL does not re-split 80-byte in-stream cards."""
+    expected = tmp_path / "expected"
+    expected.mkdir()
+    (expected / "OUT.DS").write_bytes(
+        b"AAAAA RECORD TWO".ljust(width) + b"BBBBB RECORD ONE".ljust(width)
+    )
+    report = _run(
+        monkeypatch,
+        tmp_path,
+        [
+            _step(
+                "S1",
+                "SORT",
+                [
+                    _dd("SORTIN", instream=["BBBBB RECORD ONE", "AAAAA RECORD TWO"]),
+                    _dd("SORTOUT", "OUT.DS", "(NEW,CATLG)", lrecl=out_lrecl),
+                    _dd("SYSIN", instream=["  SORT FIELDS=(1,5,CH,A)"]),
+                ],
+            )
+        ],
+        expected=expected,
+    )
+    assert report["steps"][0]["status"] == "ran", report
+    assert report["datasets"] == [{"name": "OUT.DS", "status": "same"}]
+
+
 def test_fixed_records_holding_x0a_are_compared_as_fixed(monkeypatch, tmp_path):
     # 8-byte fixed records; the second holds X'0A'. Read as lines, the
     # trailing blanks GnuCOBOL drops from a LINE SEQUENTIAL record would hide
