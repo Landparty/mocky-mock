@@ -5,14 +5,32 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
-## 2026-11-12 -- hunt issues #453-#461, cobol-parser 4 bundles, nightly integration
+## 2026-11-13 -- cobol-parser 4.0.0
 
-- #461: `dsl/fixture_bundle.py` reads `bundle_version` 2, inlining
-  `shared_fixtures` (`expand_shared_fixtures`). `generate --with-data` and
-  `fixtures` go through `bundle_dict()`, so a version-2 bundle object from
-  cobol-parser main reads like version 1. Against cobol-parser main the unit
-  suite went from 197 failures to none, and it still passes on 3.6.0 and on
-  the 3.1.1 floor.
+[integration](integration.md): floor raised to `cobol-parser>=4.0.0,<5`.
+Fixture bundle version 2 is read (`fixture_bundle.inline_fixtures`),
+`mockymock fixtures` keeps printing version 1, FIXTUREDEMO's bundle and
+golden are regenerated, the `cobolparser.layout` and `input_dependence`
+fallbacks are gone. [cli](cli.md): the job runner decides a step by
+`JobStep.if_condition` and `JobStep.cond` together, replacing the
+fail-closed IF/ENDIF scan; IF operands past a decided AND/OR are not
+evaluated. Tests: `test_fixture_bundle.py`, `test_job_if_conditions.py`.
+
+## 2026-11-13 -- cobol-parser 3.6.0, job IF fixes from the 2026-11-11 bug hunt
+
+[integration](integration.md): dependency floor raised to `cobol-parser>=3.6.0`;
+the test capability probes for screen DISPLAY, file-status scenarios, OPEN
+modes and copybook source maps are gone, since every release in range has
+them. [cli](cli.md): after an abend, `IF (S1.ABENDCC = S0C4)` reaches the
+parser again (a gap, as the abend code is not kept) instead of silently
+skipping its steps, and `ABENDCC` of a step that did not abend is false;
+`ABEND = TRUE` / `stepname.RUN = FALSE` parse instead of gapping
+"unbalanced parentheses"; a step coding `COND=` inside an IF/THEN/ELSE is
+a gap, because cobol-parser still drops that IF. Test:
+`test_job_if_conditions.py`.
+
+## 2026-11-12 -- hunt issues #453-#460, nightly integration
+
 - #453: dialect risk looks for SEARCH ALL only in the statement's own
   `metadata.is_search_all` and strips nested statements before scanning
   text, so `WS-SMALL-K` or a nested `DISPLAY 'ALLOWED'` no longer reads as
@@ -26,9 +44,10 @@ prevent.
   against those hooks' mocks (`_checked_runs`).
 - #460: `mockymock job` SORT splits in-stream SORTIN cards by SORTIN's own
   LRECL and then refits them to SORTOUT's (`refit_records`).
-- Nightly integration: `uv.lock` moves cobol-parser from 3.1.1 to 3.6.0 and
-  the integration job installs `--extra jcl`. The nightly-failing tests pass
-  locally on GnuCOBOL 3.1.2, except the `--coverage` one, which needs 3.2.
+- Nightly integration: the integration job installs `--extra jcl`. The
+  nightly-failing tests pass locally on GnuCOBOL 3.1.2, except the
+  `--coverage` one, which needs 3.2. (#461, version 2 bundles, landed on
+  main with the cobol-parser 4.0.0 move.)
 
 ## 2026-11-11 -- smaller job runner notes from the bug hunts
 

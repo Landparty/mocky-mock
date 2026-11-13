@@ -373,11 +373,11 @@ print a path inside the sibling `cobol-parser` checkout, not
 `site-packages`.
 
 *(Historical, from the git-SHA-pin era: since cobol-parser moved to PyPI,
-`pyproject.toml` declares a version floor (`cobol-parser>=3.1.1,<4`) and
+`pyproject.toml` declares a version floor (`cobol-parser>=4.0.0,<5`) and
 `requirements-dev.txt` is just `-e .[dev]`, so a fresh dev install resolves
 the newest published release, not a sibling checkout. The same lesson
 holds with "the floor" in place of "the pin": to check behaviour at the
-floor, `uv pip install "cobol-parser==3.1.1"` into a throwaway venv, which
+floor, `uv pip install "cobol-parser==4.0.0"` into a throwaway venv, which
 is what the nightly `cobol-parser-range` job does.)*
 
 **Fixing the above isn't the same as verifying against the pin.** After
@@ -480,7 +480,7 @@ table; the matrix is `cobol-parser/docs/enterprise-program-types.md`.
 
 That corpus exercises what cobol-parser's 2026-09-15 release added (OO
 units, DECLARATIVES modelling, the 6.x data clauses); every release the
->= 3.1.1 floor allows has it, so the module runs unconditionally.
+>= 4.0.0 floor allows has it, so the module runs unconditionally.
 
 # See Also
 

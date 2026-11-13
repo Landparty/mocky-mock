@@ -1,9 +1,10 @@
 """Whether a JCL step runs: `COND=` and `IF` conditions on return codes.
 
-`cobolparser.jcl` gives each step one `condition` string: the coded
-`COND=` (`(4,LE)`, `((4,LT),(8,GT,STEP1))`, `EVEN`, `ONLY`), or else the
-enclosing `IF` conditions (`(S1.RC = 0)`, `NOT (...)` in an ELSE, nested
-ones joined with ` AND `). `step_runs` evaluates either against the return
+`cobolparser.jcl` gives each step its coded `COND=` (`JobStep.cond`:
+`(4,LE)`, `((4,LT),(8,GT,STEP1))`, `EVEN`, `ONLY`) and its enclosing `IF`
+conditions (`JobStep.if_condition`: `(S1.RC = 0)`, `NOT (...)` in an ELSE,
+nested ones joined with ` AND `); a step coding both runs only when both
+allow it (the runner's `_conditions`). `step_runs` evaluates either against the return
 codes of the steps that ran so far. Anything it cannot read raises
 `ConditionError`: the job runner then stops and reports the step as a gap,
 since guessing would run (or skip) steps the real job would not.
@@ -12,7 +13,7 @@ since guessing would run (or skip) steps the real job would not.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 
 #: Return code standing for an abended step.
 ABEND = None
@@ -24,6 +25,10 @@ class ConditionError(Exception):
 
 class _StepBypassed(ConditionError):
     """The step a test names was bypassed: it has no return code."""
+
+
+class _Ambiguous(ConditionError):
+    """The step name a test uses matches several steps."""
 
 
 _COND_TEST_RE = re.compile(
@@ -87,9 +92,7 @@ def _step_rc(
     if name in bypassed or len(_matches(bypassed, name)) == 1:
         raise _StepBypassed(f"step {step} was bypassed")
     if len(matches) > 1:
-        raise ConditionError(
-            f"step name {step} is ambiguous: {', '.join(sorted(matches))}"
-        )
+        raise _Ambiguous(f"step name {step} is ambiguous: {', '.join(sorted(matches))}")
     raise ConditionError(f"no earlier step named {step} ran")
 
 
@@ -201,13 +204,26 @@ class _IfParser:
         self.abended = abended
         self.step = step
         self.bypassed = bypassed
+        #: Inside an operand whose value can no longer matter (the right of
+        #: an AND already false, of an OR already true): it is read but not
+        #: evaluated, as on z/OS, so a step there that did not run is no gap.
+        self.skipping = False
 
     def rc_of(self, name: str) -> int | None:
+        if self.skipping:
+            return 0
         # `bypassed` stops the lookup at a bypassed step of the procedure's
         # own invocation (`_StepBypassed`, a ConditionError): without it an
         # unqualified name falls through to a job-level step or another call
         # of the procedure that happens to share the name.
         return _step_rc(self.rcs, name, self.bypassed, current=self.step)
+
+    def skipped(self, operand: Callable[[], bool]) -> bool:
+        skipping, self.skipping = self.skipping, True
+        try:
+            return operand()
+        finally:
+            self.skipping = skipping
 
     def peek(self) -> str | None:
         return self.tokens[self.index] if self.index < len(self.tokens) else None
@@ -229,7 +245,7 @@ class _IfParser:
         value = self.and_expr()
         while self.peek() in ("OR", "|"):
             self.take()
-            right = self.and_expr()
+            right = self.skipped(self.and_expr) if value else self.and_expr()
             value = value or right
         return value
 
@@ -237,7 +253,7 @@ class _IfParser:
         value = self.not_expr()
         while self.peek() in ("AND", "&"):
             self.take()
-            right = self.not_expr()
+            right = self.not_expr() if value else self.skipped(self.not_expr)
             value = value and right
         return value
 
@@ -246,6 +262,42 @@ class _IfParser:
             self.take()
             return not self.not_expr()
         return self.atom()
+
+    def truth(self, name: str, value: bool) -> bool:
+        """`value`, or its comparison with an explicit `= TRUE` / `= FALSE`
+        (`EQ` too), which IBM's IF syntax allows after `ABEND`,
+        `stepname.ABEND` and `stepname.RUN`."""
+        if self.peek() not in ("=", "EQ"):
+            if self.peek() in _OPS:
+                raise ConditionError(
+                    f"{name} can only be compared with = TRUE or = FALSE"
+                )
+            return value
+        self.take()
+        word = self.take()
+        if word not in ("TRUE", "FALSE"):
+            raise ConditionError(f"expected TRUE or FALSE after {name} =, got {word!r}")
+        return value == (word == "TRUE")
+
+    def abend_code(self, name: str) -> bool:
+        """`ABENDCC = Sxxx` / `stepname.ABENDCC = Uxxxx`. The run does not keep
+        the abend code, so the test is decided only when the step (or, bare,
+        every step) did not abend: then it is false."""
+        op = self.take()
+        if op not in _OPS:
+            raise ConditionError(f"expected an operator after {name}, got {op!r}")
+        self.take()  # the code
+        if self.skipping:
+            return False
+        if name == "ABENDCC":
+            abended = self.abended
+        else:
+            abended = self.rc_of(name[: -len(".ABENDCC")]) is ABEND
+        if abended or op not in ("=", "EQ"):
+            raise ConditionError(
+                f"cannot evaluate {name}: the run does not record abend codes"
+            )
+        return False
 
     def atom(self) -> bool:
         token = self.take()
@@ -257,15 +309,21 @@ class _IfParser:
         name = token
         if name.endswith(".ABEND") or name == "ABEND":
             if name == "ABEND":
-                return self.abended
-            return self.rc_of(name[: -len(".ABEND")]) is ABEND
+                return self.truth(name, self.abended)
+            return self.truth(name, self.rc_of(name[: -len(".ABEND")]) is ABEND)
+        if name == "ABENDCC" or name.endswith(".ABENDCC"):
+            return self.abend_code(name)
         if name.endswith(".RUN"):
             step = name[: -len(".RUN")]
             try:
                 self.rc_of(step)
-            except ConditionError:
-                return False
-            return True
+            except _Ambiguous:
+                raise
+            except ConditionError:  # bypassed, or never reached
+                executed = False
+            else:
+                executed = True
+            return self.truth(name, executed)
         if name == "RC" or name.endswith(".RC"):
             if name == "RC":
                 ran = [rc for rc in self.rcs.values() if rc is not None]
@@ -283,6 +341,10 @@ class _IfParser:
                 raise ConditionError(f"expected a number after {name} {op}")
             return _OPS[op](rc, int(number))
         raise ConditionError(f"cannot evaluate {name!r} in an IF condition")
+
+
+def _is_abend_test(token: str) -> bool:
+    return token in ("ABEND", "ABENDCC") or token.endswith((".ABEND", ".ABENDCC"))
 
 
 def if_true(
@@ -316,8 +378,9 @@ def step_runs(
     if is_cond_parameter(condition):
         return not cond_bypasses(condition, rcs, abended, bypassed, step)
     tokens = _tokens(condition)
-    # After an abend only an IF that tests ABEND runs its steps. A token
-    # test, not a substring one: a step named e.g. ABENDCHK is not a test.
-    if abended and not any(t == "ABEND" or t.endswith(".ABEND") for t in tokens):
+    # After an abend only an IF that tests ABEND (or an abend code,
+    # ABENDCC) runs its steps. A token test, not a substring one: a step
+    # named e.g. ABENDCHK is not a test.
+    if abended and not any(_is_abend_test(t) for t in tokens):
         return False
     return _IfParser(tokens, rcs, abended, step, bypassed).parse()

@@ -9,45 +9,45 @@ TESTCASE "happy path"
     MOCK CLOSE ORDER-FILE
     END-MOCK
     MOCK SQL "SELECT"
-        MOVE "CHARLES GARCIA" TO WS-CUST-NAME
+        MOVE "ROBERT RODRIGUEZ" TO WS-CUST-NAME
         MOVE 0 TO SQLCODE
     END-MOCK
     MOCK CALL "LOGALERT"
         CAPTURE ARG 1 INTO UT-CAP-LOGALERT-1
-        MOVE "UJ" TO WS-ALERT-STATUS
+        MOVE "T9" TO WS-ALERT-STATUS
     END-MOCK
     MOCK READ ORDER-FILE
         EVALUATE TRUE
             WHEN UT-READ-ORDER-FILE-TALLY = 1
                 MOVE "ORD001" TO ORDER-ID
-                MOVE 447 TO ORDER-QTY
+                MOVE 206 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 2
                 MOVE "ORD002" TO ORDER-ID
-                MOVE 732 TO ORDER-QTY
+                MOVE 998 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 3
                 MOVE "ORD003" TO ORDER-ID
-                MOVE 648 TO ORDER-QTY
+                MOVE 241 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 4
                 MOVE "ORD004" TO ORDER-ID
-                MOVE 341 TO ORDER-QTY
+                MOVE 510 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 5
                 MOVE "ORD005" TO ORDER-ID
-                MOVE 738 TO ORDER-QTY
+                MOVE 632 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 6
                 MOVE "ORD006" TO ORDER-ID
-                MOVE 673 TO ORDER-QTY
+                MOVE 345 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 7
                 MOVE "ORD007" TO ORDER-ID
-                MOVE 110 TO ORDER-QTY
+                MOVE 143 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 8
                 MOVE "ORD008" TO ORDER-ID
-                MOVE 568 TO ORDER-QTY
+                MOVE 671 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 9
                 MOVE "ORD009" TO ORDER-ID
-                MOVE 74 TO ORDER-QTY
+                MOVE 115 TO ORDER-QTY
             WHEN UT-READ-ORDER-FILE-TALLY = 10
                 MOVE "ORD010" TO ORDER-ID
-                MOVE 271 TO ORDER-QTY
+                MOVE 626 TO ORDER-QTY
             WHEN OTHER
                 MOVE "10" TO WS-ORDER-STATUS
                 *> end of file: the splice runs this READ's own AT END clause (line 56) after the mock

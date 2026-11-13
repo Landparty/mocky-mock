@@ -2,7 +2,7 @@
 
 A coverage gap means one of two things: a test has not reached the code
 yet, or nothing ever will. cobol-parser's `InputDependenceAnalyzer`
-(cobol-parser 3.7+) tells them apart. It finds every IF / EVALUATE whose
+(cobol-parser 4.0+) tells them apart. It finds every IF / EVALUATE whose
 answer no input can change -- nothing a mock returns, no FILE STATUS, no
 ACCEPT, no LINKAGE item, no setup MOVE reaches its operands or the
 decisions it runs under -- so every run from the program's entry point
@@ -110,11 +110,9 @@ def reused_storage(suite: Any) -> str | None:
 
 def classify(ast: Any, points: ProgramPoints, suite: Any) -> Unreachable | None:
     """The unreachable points of the program `points` measured, or None when
-    cobol-parser cannot tell (too old, or the analysis gave up)."""
-    try:
-        from cobolparser.analysis.input_dependence import InputDependenceAnalyzer
-    except ImportError:
-        return None
+    cobol-parser cannot tell (the analysis gave up)."""
+    from cobolparser.analysis.input_dependence import InputDependenceAnalyzer
+
     performs, moves, flow = suite_entries(suite)
     try:
         report = InputDependenceAnalyzer().analyze(ast, extra_inputs=sorted(moves))

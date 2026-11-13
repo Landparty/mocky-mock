@@ -10,7 +10,6 @@ throughout: the checked-in bundle already covers a multi-row READ boundary
 and a single-row EXEC SQL boundary in one program, and its .cut is the
 project's own canonical --with-data golden."""
 
-import json
 from pathlib import Path
 
 from mockymock.cli.main import main
@@ -52,12 +51,7 @@ def test_generate_with_fixtures_no_new_flags_matches_checked_in_golden(tmp_path)
 def test_generate_with_data_no_new_flags_matches_checked_in_golden(tmp_path):
     """Same golden, reached via the self-generating --with-data path
     (--seed 42 reproduces the exact bundle FIXTUREDEMO.bundle.json was
-    itself generated with -- see that file's own header comment).
-
-    The values a seed draws belong to the installed cobol-parser, and a
-    newer one may draw others (cobol-parser main does). The golden is then
-    replaced by what ``--fixtures`` makes of the bundle this cobol-parser
-    generates for the same seed: the two paths must still agree."""
+    itself generated with -- see that file's own header comment)."""
     out = tmp_path / "o.cut"
     rc = main(
         [
@@ -71,38 +65,9 @@ def test_generate_with_data_no_new_flags_matches_checked_in_golden(tmp_path):
         ]
     )
     assert rc == 0
-    assert out.read_text(encoding="utf-8") == _expected_with_data_cut(tmp_path)
-
-
-def _expected_with_data_cut(tmp_path: Path) -> str:
-    golden = _FIXTUREDEMO_CUT_GOLDEN.read_text(encoding="utf-8")
-    bundle_out = tmp_path / "fresh.bundle.json"
-    import contextlib
-    import io
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        assert main(["fixtures", str(_FIXTUREDEMO_CBL), "--seed", "42"]) == 0
-    fresh = json.loads(buf.getvalue())
-    committed = json.loads(_FIXTUREDEMO_BUNDLE.read_text(encoding="utf-8"))
-    if fresh == committed:
-        return golden
-    bundle_out.write_text(json.dumps(fresh), encoding="utf-8")
-    fresh_cut = tmp_path / "fresh.cut"
-    assert (
-        main(
-            [
-                "generate",
-                str(_FIXTUREDEMO_CBL),
-                "--fixtures",
-                str(bundle_out),
-                "-o",
-                str(fresh_cut),
-            ]
-        )
-        == 0
+    assert out.read_text(encoding="utf-8") == _FIXTUREDEMO_CUT_GOLDEN.read_text(
+        encoding="utf-8"
     )
-    return fresh_cut.read_text(encoding="utf-8")
 
 
 # --- --rows -------------------------------------------------------------
@@ -342,7 +307,7 @@ def test_placeholder_downgrades_exec_sql_boundary_via_cli(tmp_path):
     assert rc == 0
     text = out.read_text(encoding="utf-8")
     assert 'MOCK SQL "SELECT"' in text  # still mocked
-    assert "CHARLES GARCIA" not in text
+    assert "ROBERT RODRIGUEZ" not in text
     assert "MOVE 0 TO SQLCODE" in text
 
 

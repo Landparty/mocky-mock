@@ -3,16 +3,15 @@ JSON into mockymock-local dataclasses. See
 docs/plans/2026-08-02-program-data-generation-implementation.md's Phase 8
 and cobol-parser's docs/fixture-bundle-schema.md."""
 
-import copy
 import json
 
 import pytest
 
 from mockymock.dsl.fixture_bundle import (
-    SUPPORTED_BUNDLE_VERSION,
+    SUPPORTED_BUNDLE_VERSIONS,
     MalformedBundleError,
     UnsupportedBundleVersionError,
-    expand_shared_fixtures,
+    inline_fixtures,
     load_fixture_bundle,
     load_fixture_bundle_file,
     parse_fixture_bundle,
@@ -158,40 +157,50 @@ def test_unsupported_bundle_version_raises():
         load_fixture_bundle(bad)
 
 
-def _as_version_2(bundle: dict) -> dict:
-    """*bundle* in cobol-parser main's version 2 shape: fixtures shared in a
-    top-level table, scenarios listing ids."""
-    v2 = copy.deepcopy(bundle)
-    table = {}
-    for scenario in v2["scenarios"]:
-        ids = []
-        for n, fixture in enumerate(scenario["fixtures"]):
-            fixture_id = f"{scenario['name']}#{n}"
-            table[fixture_id] = fixture
-            ids.append(fixture_id)
-        scenario["fixtures"] = ids
-    v2["fixtures"] = table
-    v2["bundle_version"] = 2
-    return v2
+def _version_2(bundle):
+    """MINIMAL_BUNDLE in cobol-parser 4.0's shape: a shared `fixtures` table."""
+    [scenario] = bundle["scenarios"]
+    [fixture] = scenario["fixtures"]
+    return dict(
+        bundle,
+        bundle_version=2,
+        fixtures={"READ:ORDER-FILE": fixture},
+        scenarios=[
+            dict(scenario, fixtures=["READ:ORDER-FILE"]),
+            dict(scenario, name="again", fixtures=["READ:ORDER-FILE"]),
+        ],
+    )
 
 
-def test_version_2_bundle_is_read_as_version_1():
-    """#461: cobol-parser main writes bundle_version 2."""
-    v2 = _as_version_2(MINIMAL_BUNDLE)
-    assert expand_shared_fixtures(v2) == MINIMAL_BUNDLE
-    assert load_fixture_bundle(v2) == load_fixture_bundle(MINIMAL_BUNDLE)
+def test_version_2_bundle_loads_with_its_fixtures_inlined():
+    bundle = load_fixture_bundle(_version_2(MINIMAL_BUNDLE))
+    assert bundle.bundle_version == 1
+    assert [s.name for s in bundle.scenarios] == ["happy path", "again"]
+    for scenario in bundle.scenarios:
+        [fixture] = scenario.fixtures
+        assert (fixture.category, fixture.key) == ("READ", "ORDER-FILE")
+        assert fixture.sequence == [{"ORDER-QTY": "50"}]
+
+
+def test_inline_fixtures_copies_each_fixture():
+    data = inline_fixtures(_version_2(MINIMAL_BUNDLE))
+    assert "fixtures" not in data
+    first, second = (s["fixtures"][0] for s in data["scenarios"])
+    assert first == second and first is not second
 
 
 def test_version_2_with_an_unknown_fixture_id_is_malformed():
-    v2 = _as_version_2(MINIMAL_BUNDLE)
-    v2["scenarios"][0]["fixtures"].append("no-such-id")
-    with pytest.raises(MalformedBundleError, match="no-such-id"):
-        load_fixture_bundle(v2)
+    bad = _version_2(MINIMAL_BUNDLE)
+    bad["scenarios"][0]["fixtures"] = ["READ:NOPE"]
+    with pytest.raises(MalformedBundleError, match="READ:NOPE"):
+        load_fixture_bundle(bad)
 
 
-def test_expand_refuses_a_future_version_before_walking_scenarios():
-    with pytest.raises(UnsupportedBundleVersionError):
-        expand_shared_fixtures(dict(MINIMAL_BUNDLE, bundle_version=3))
+def test_version_2_without_a_fixtures_table_is_malformed():
+    bad = dict(_version_2(MINIMAL_BUNDLE))
+    del bad["fixtures"]
+    with pytest.raises(MalformedBundleError, match="fixtures"):
+        load_fixture_bundle(bad)
 
 
 @pytest.mark.parametrize("version", [True, 1.0, "1"])
@@ -213,7 +222,7 @@ def test_missing_bundle_version_raises():
 
 
 def test_supported_bundle_version_constant_matches_current_schema():
-    assert SUPPORTED_BUNDLE_VERSION == 1
+    assert SUPPORTED_BUNDLE_VERSIONS == (1, 2)
 
 
 # 2026-08-12 audit Finding 15: every required-field access was a bare

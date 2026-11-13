@@ -31,11 +31,11 @@ dependencies = [
     # `cobol-parser-range` job runs the unit tier against it and against the
     # newest release in range (CI reads the floor from this line). Raise it
     # when adopting new cobol-parser work; never add a compatibility shim
-    # for a release below it. The <4 cap guards
+    # for a release below it. The <5 cap guards
     # against an unreviewed major; review a new major against the unit tier
     # before lifting it. Version-by-version review notes are in
     # .okf/integration.md.
-    "cobol-parser>=3.1.1,<4",
+    "cobol-parser>=4.0.0,<5",
 ]
 
 [project.optional-dependencies]

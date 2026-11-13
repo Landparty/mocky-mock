@@ -1,5 +1,5 @@
 {
-  "bundle_version": 1,
+  "bundle_version": 2,
   "program_name": "FIXTUREDEMO",
   "seed": 42,
   "scenarios": [
@@ -8,290 +8,12 @@
       "intent": "layout-valid values for every boundary, no branch targeting",
       "entry": "MAIN-PROCESS",
       "fixtures": [
-        {
-          "category": "ACCEPT",
-          "key": "WS-CUSTOMER-ID",
-          "paragraph": "MAIN-PROCESS",
-          "line": 44,
-          "direction": "IN",
-          "layout": [
-            {
-              "name": "WS-CUSTOMER-ID",
-              "column": "WS-CUSTOMER-ID",
-              "qualified_name": "WS-CUSTOMER-ID",
-              "level": 1,
-              "picture": "X(6)",
-              "usage": "DISPLAY",
-              "category": "alphanumeric",
-              "size": 6,
-              "storage_size": 6,
-              "integer_digits": 0,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            }
-          ],
-          "sequence": [
-            {
-              "WS-CUSTOMER-ID": "WS001"
-            }
-          ],
-          "terminal": null,
-          "status": {},
-          "provenance": "picture-random",
-          "unresolved": []
-        },
-        {
-          "category": "OPEN",
-          "key": "ORDER-FILE",
-          "paragraph": "MAIN-PROCESS",
-          "line": 45,
-          "direction": "STATUS_ONLY",
-          "layout": [],
-          "sequence": [],
-          "terminal": null,
-          "status": {
-            "WS-ORDER-STATUS": "00"
-          },
-          "provenance": "picture-random",
-          "unresolved": []
-        },
-        {
-          "category": "CLOSE",
-          "key": "ORDER-FILE",
-          "paragraph": "MAIN-PROCESS",
-          "line": 47,
-          "direction": "STATUS_ONLY",
-          "layout": [],
-          "sequence": [],
-          "terminal": null,
-          "status": {
-            "WS-ORDER-STATUS": "00"
-          },
-          "provenance": "picture-random",
-          "unresolved": []
-        },
-        {
-          "category": "SQL",
-          "key": "SELECT",
-          "paragraph": "MAIN-PROCESS",
-          "line": 48,
-          "direction": "IN",
-          "layout": [
-            {
-              "name": "WS-CUST-NAME",
-              "column": "WS-CUST-NAME",
-              "qualified_name": "WS-CUST-NAME",
-              "level": 1,
-              "picture": "X(30)",
-              "usage": "DISPLAY",
-              "category": "alphanumeric",
-              "size": 30,
-              "storage_size": 30,
-              "integer_digits": 0,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            },
-            {
-              "name": "WS-CUSTOMER-ID",
-              "column": "WS-CUSTOMER-ID",
-              "qualified_name": "WS-CUSTOMER-ID",
-              "level": 1,
-              "picture": "X(6)",
-              "usage": "DISPLAY",
-              "category": "alphanumeric",
-              "size": 6,
-              "storage_size": 6,
-              "integer_digits": 0,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            }
-          ],
-          "sequence": [
-            {
-              "WS-CUST-NAME": "CHARLES GARCIA",
-              "WS-CUSTOMER-ID": "WS001"
-            }
-          ],
-          "terminal": null,
-          "status": {
-            "SQLCODE": "0"
-          },
-          "provenance": "picture-random",
-          "unresolved": []
-        },
-        {
-          "category": "CALL",
-          "key": "LOGALERT",
-          "paragraph": "MAIN-PROCESS",
-          "line": 52,
-          "direction": "BIDIRECTIONAL",
-          "layout": [
-            {
-              "name": "WS-ALERT-STATUS",
-              "column": "WS-ALERT-STATUS",
-              "qualified_name": "WS-ALERT-STATUS",
-              "level": 1,
-              "picture": "X(2)",
-              "usage": "DISPLAY",
-              "category": "alphanumeric",
-              "size": 2,
-              "storage_size": 2,
-              "integer_digits": 0,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            }
-          ],
-          "sequence": [
-            {
-              "WS-ALERT-STATUS": "UJ"
-            }
-          ],
-          "terminal": null,
-          "status": {},
-          "provenance": "picture-random",
-          "unresolved": []
-        },
-        {
-          "category": "READ",
-          "key": "ORDER-FILE",
-          "paragraph": "READ-ORDERS",
-          "line": 56,
-          "direction": "IN",
-          "layout": [
-            {
-              "name": "ORDER-ID",
-              "column": "ORDER-ID",
-              "qualified_name": "ORDER-RECORD.ORDER-ID",
-              "level": 5,
-              "picture": "X(6)",
-              "usage": "DISPLAY",
-              "category": "alphanumeric",
-              "size": 6,
-              "storage_size": 6,
-              "integer_digits": 0,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            },
-            {
-              "name": "ORDER-QTY",
-              "column": "ORDER-QTY",
-              "qualified_name": "ORDER-RECORD.ORDER-QTY",
-              "level": 5,
-              "picture": "9(4)",
-              "usage": "DISPLAY",
-              "category": "numeric",
-              "size": 4,
-              "storage_size": 4,
-              "integer_digits": 4,
-              "decimal_digits": 0,
-              "is_signed": false,
-              "value_clause": null,
-              "condition_values": [],
-              "subscripts": [],
-              "redefines": null,
-              "sign_clause": null,
-              "synchronized": false,
-              "occurs_depending_on": null,
-              "odo_controls": [],
-              "odo_counter_bounds": null
-            }
-          ],
-          "sequence": [
-            {
-              "ORDER-ID": "ORD001",
-              "ORDER-QTY": "447"
-            },
-            {
-              "ORDER-ID": "ORD002",
-              "ORDER-QTY": "732"
-            },
-            {
-              "ORDER-ID": "ORD003",
-              "ORDER-QTY": "648"
-            },
-            {
-              "ORDER-ID": "ORD004",
-              "ORDER-QTY": "341"
-            },
-            {
-              "ORDER-ID": "ORD005",
-              "ORDER-QTY": "738"
-            },
-            {
-              "ORDER-ID": "ORD006",
-              "ORDER-QTY": "673"
-            },
-            {
-              "ORDER-ID": "ORD007",
-              "ORDER-QTY": "110"
-            },
-            {
-              "ORDER-ID": "ORD008",
-              "ORDER-QTY": "568"
-            },
-            {
-              "ORDER-ID": "ORD009",
-              "ORDER-QTY": "74"
-            },
-            {
-              "ORDER-ID": "ORD010",
-              "ORDER-QTY": "271"
-            }
-          ],
-          "terminal": {
-            "WS-ORDER-STATUS": "10"
-          },
-          "status": {
-            "WS-ORDER-STATUS": "00"
-          },
-          "provenance": "picture-random",
-          "unresolved": []
-        }
+        "ACCEPT:WS-CUSTOMER-ID",
+        "OPEN:ORDER-FILE",
+        "CLOSE:ORDER-FILE",
+        "SQL:SELECT",
+        "CALL:LOGALERT",
+        "READ:ORDER-FILE"
       ],
       "expectations": [
         {
@@ -340,6 +62,292 @@
       "unconstrained": []
     }
   ],
+  "fixtures": {
+    "ACCEPT:WS-CUSTOMER-ID": {
+      "category": "ACCEPT",
+      "key": "WS-CUSTOMER-ID",
+      "paragraph": "MAIN-PROCESS",
+      "line": 44,
+      "direction": "IN",
+      "layout": [
+        {
+          "name": "WS-CUSTOMER-ID",
+          "column": "WS-CUSTOMER-ID",
+          "qualified_name": "WS-CUSTOMER-ID",
+          "level": 1,
+          "picture": "X(6)",
+          "usage": "DISPLAY",
+          "category": "alphanumeric",
+          "size": 6,
+          "storage_size": 6,
+          "integer_digits": 0,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        }
+      ],
+      "sequence": [
+        {
+          "WS-CUSTOMER-ID": "WS001"
+        }
+      ],
+      "terminal": null,
+      "status": {},
+      "provenance": "picture-random",
+      "unresolved": []
+    },
+    "OPEN:ORDER-FILE": {
+      "category": "OPEN",
+      "key": "ORDER-FILE",
+      "paragraph": "MAIN-PROCESS",
+      "line": 45,
+      "direction": "STATUS_ONLY",
+      "layout": [],
+      "sequence": [],
+      "terminal": null,
+      "status": {
+        "WS-ORDER-STATUS": "00"
+      },
+      "provenance": "picture-random",
+      "unresolved": []
+    },
+    "CLOSE:ORDER-FILE": {
+      "category": "CLOSE",
+      "key": "ORDER-FILE",
+      "paragraph": "MAIN-PROCESS",
+      "line": 47,
+      "direction": "STATUS_ONLY",
+      "layout": [],
+      "sequence": [],
+      "terminal": null,
+      "status": {
+        "WS-ORDER-STATUS": "00"
+      },
+      "provenance": "picture-random",
+      "unresolved": []
+    },
+    "SQL:SELECT": {
+      "category": "SQL",
+      "key": "SELECT",
+      "paragraph": "MAIN-PROCESS",
+      "line": 48,
+      "direction": "IN",
+      "layout": [
+        {
+          "name": "WS-CUST-NAME",
+          "column": "WS-CUST-NAME",
+          "qualified_name": "WS-CUST-NAME",
+          "level": 1,
+          "picture": "X(30)",
+          "usage": "DISPLAY",
+          "category": "alphanumeric",
+          "size": 30,
+          "storage_size": 30,
+          "integer_digits": 0,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        },
+        {
+          "name": "WS-CUSTOMER-ID",
+          "column": "WS-CUSTOMER-ID",
+          "qualified_name": "WS-CUSTOMER-ID",
+          "level": 1,
+          "picture": "X(6)",
+          "usage": "DISPLAY",
+          "category": "alphanumeric",
+          "size": 6,
+          "storage_size": 6,
+          "integer_digits": 0,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        }
+      ],
+      "sequence": [
+        {
+          "WS-CUST-NAME": "ROBERT RODRIGUEZ",
+          "WS-CUSTOMER-ID": "WS001"
+        }
+      ],
+      "terminal": null,
+      "status": {
+        "SQLCODE": "0"
+      },
+      "provenance": "picture-random",
+      "unresolved": []
+    },
+    "CALL:LOGALERT": {
+      "category": "CALL",
+      "key": "LOGALERT",
+      "paragraph": "MAIN-PROCESS",
+      "line": 52,
+      "direction": "BIDIRECTIONAL",
+      "layout": [
+        {
+          "name": "WS-ALERT-STATUS",
+          "column": "WS-ALERT-STATUS",
+          "qualified_name": "WS-ALERT-STATUS",
+          "level": 1,
+          "picture": "X(2)",
+          "usage": "DISPLAY",
+          "category": "alphanumeric",
+          "size": 2,
+          "storage_size": 2,
+          "integer_digits": 0,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        }
+      ],
+      "sequence": [
+        {
+          "WS-ALERT-STATUS": "T9"
+        }
+      ],
+      "terminal": null,
+      "status": {},
+      "provenance": "picture-random",
+      "unresolved": []
+    },
+    "READ:ORDER-FILE": {
+      "category": "READ",
+      "key": "ORDER-FILE",
+      "paragraph": "READ-ORDERS",
+      "line": 56,
+      "direction": "IN",
+      "layout": [
+        {
+          "name": "ORDER-ID",
+          "column": "ORDER-ID",
+          "qualified_name": "ORDER-RECORD.ORDER-ID",
+          "level": 5,
+          "picture": "X(6)",
+          "usage": "DISPLAY",
+          "category": "alphanumeric",
+          "size": 6,
+          "storage_size": 6,
+          "integer_digits": 0,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        },
+        {
+          "name": "ORDER-QTY",
+          "column": "ORDER-QTY",
+          "qualified_name": "ORDER-RECORD.ORDER-QTY",
+          "level": 5,
+          "picture": "9(4)",
+          "usage": "DISPLAY",
+          "category": "numeric",
+          "size": 4,
+          "storage_size": 4,
+          "integer_digits": 4,
+          "decimal_digits": 0,
+          "is_signed": false,
+          "value_clause": null,
+          "condition_values": [],
+          "subscripts": [],
+          "redefines": null,
+          "sign_clause": null,
+          "synchronized": false,
+          "occurs_depending_on": null,
+          "odo_controls": [],
+          "odo_counter_bounds": null
+        }
+      ],
+      "sequence": [
+        {
+          "ORDER-ID": "ORD001",
+          "ORDER-QTY": "206"
+        },
+        {
+          "ORDER-ID": "ORD002",
+          "ORDER-QTY": "998"
+        },
+        {
+          "ORDER-ID": "ORD003",
+          "ORDER-QTY": "241"
+        },
+        {
+          "ORDER-ID": "ORD004",
+          "ORDER-QTY": "510"
+        },
+        {
+          "ORDER-ID": "ORD005",
+          "ORDER-QTY": "632"
+        },
+        {
+          "ORDER-ID": "ORD006",
+          "ORDER-QTY": "345"
+        },
+        {
+          "ORDER-ID": "ORD007",
+          "ORDER-QTY": "143"
+        },
+        {
+          "ORDER-ID": "ORD008",
+          "ORDER-QTY": "671"
+        },
+        {
+          "ORDER-ID": "ORD009",
+          "ORDER-QTY": "115"
+        },
+        {
+          "ORDER-ID": "ORD010",
+          "ORDER-QTY": "626"
+        }
+      ],
+      "terminal": {
+        "WS-ORDER-STATUS": "10"
+      },
+      "status": {
+        "WS-ORDER-STATUS": "00"
+      },
+      "provenance": "picture-random",
+      "unresolved": []
+    }
+  },
   "layouts": {
     "WS-CUSTOMER-ID": [
       {

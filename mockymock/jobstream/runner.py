@@ -333,16 +333,21 @@ class JobRun:
                     )
                 )
                 continue
+            runs = True
+            deciding = step.condition
             try:
-                runs = step_runs(
-                    step.condition,
-                    self.rcs,
-                    self.abended,
-                    bypassed=self.bypassed,
-                    step=name,
-                )
+                for deciding in _conditions(step):
+                    runs = step_runs(
+                        deciding,
+                        self.rcs,
+                        self.abended,
+                        bypassed=self.bypassed,
+                        step=name,
+                    )
+                    if not runs:
+                        break
             except ConditionError as exc:
-                self.gaps.append(f"step {name}: condition {step.condition!r}: {exc}")
+                self.gaps.append(f"step {name}: condition {deciding!r}: {exc}")
                 steps.append(
                     StepResult(name, step.program, "none", "gap", detail=str(exc))
                 )
@@ -356,7 +361,7 @@ class JobRun:
                         step.program,
                         "none",
                         "bypassed",
-                        detail=f"condition {step.condition} bypasses it",
+                        detail=f"condition {deciding} bypasses it",
                     )
                 )
                 continue
@@ -1044,6 +1049,20 @@ def _assigns(ast: Any) -> dict[str, str | None]:
         if name:
             out[name] = getattr(select, "assign_to", None)
     return out
+
+
+def _conditions(step: Any) -> list[str | None]:
+    """What must allow `step` to run, in the order z/OS decides it: the
+    enclosing IF/ELSE (`JobStep.if_condition`), then the step's own `COND=`
+    (`JobStep.cond`). cobol-parser 4.0 keeps the two apart (#896); its
+    `condition` holds only the `COND=` when both are coded, so reading it
+    alone would run both branches of the IF. A step object without the two
+    fields (a hand-built one) is decided by `condition` alone."""
+    if_condition = getattr(step, "if_condition", None)
+    cond = getattr(step, "cond", None)
+    if if_condition is None and cond is None:
+        return [step.condition]
+    return [c for c in (if_condition, cond) if c is not None]
 
 
 def _verdict(

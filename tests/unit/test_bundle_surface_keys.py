@@ -62,7 +62,7 @@ from cobolparser.preprocess import (
 )
 
 from mockymock.analysis.mock_surface import analyze
-from mockymock.dsl.fixture_bundle import bundle_dict
+from mockymock.dsl.fixture_bundle import inline_fixtures
 from mockymock.dsl.model import EXEC_CATEGORIES
 from mockymock.splicer.source_map import annotate_nested_sites, collect_scope_map
 
@@ -127,10 +127,12 @@ def test_surface_and_bundle_agree_on_keys(path):
         if (path.parent / "copybooks").exists()
         else None
     )
-    bundle = bundle_dict(
-        ProgramFixtureGenerator().generate_with_scenarios_from_file(
+    bundle = inline_fixtures(
+        ProgramFixtureGenerator()
+        .generate_with_scenarios_from_file(
             str(path), copybook_paths=copybooks, mode="happy", seed=1
         )
+        .to_dict()
     )
 
     source = path.read_text(encoding="utf-8")

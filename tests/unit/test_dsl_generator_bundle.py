@@ -826,7 +826,7 @@ def test_placeholder_downgrades_read_boundary_to_an_immediately_at_end_body():
     assert 'MOVE "10" TO WS-ORDER-STATUS' in text  # fixture.terminal
     assert 'MOVE "Y" TO WS-EOF' in text  # replicated AT END clause
     # every other boundary stays data-driven -- only the named pair downgrades
-    assert "CHARLES GARCIA" in text
+    assert "ROBERT RODRIGUEZ" in text
 
 
 def test_placeholder_downgrades_sql_single_row_boundary():
@@ -838,7 +838,7 @@ def test_placeholder_downgrades_sql_single_row_boundary():
         placeholder_keys=frozenset({("SQL", "SELECT")}),
     )
     assert 'MOCK SQL "SELECT"' in text
-    assert "CHARLES GARCIA" not in text
+    assert "ROBERT RODRIGUEZ" not in text
     assert "MOVE 0 TO SQLCODE" in text  # SQL's own ordinary placeholder body
     # the READ boundary stays data-driven -- only the named pair downgrades
     assert "ORD001" in text
