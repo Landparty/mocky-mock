@@ -277,3 +277,85 @@ def test_each_dli_call_gets_its_own_row(tmp_path):
     assert 'MOVE "QC" TO IO-PCB(11:2)' in body
     assert 'MOVE "GE" TO DB-PCB(11:2)' not in body
     assert 'MOVE "GE" TO DB-STATUS' in cut  # the not-found case's own row
+
+
+# 2026-11-13 benchmark: 7 IMS MPPs timed out because their GU was answered
+# GE. `_is_message_pcb` only knows an I/O PCB by a three-argument ISRT
+# through it, so an ISRT passing an MFS MOD name, or a reply sent through an
+# ALT PCB, left the GU looking like a database GU.
+MPP = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. MPPQC.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DLI-GU              PIC X(4) VALUE "GU  ".
+       01  DLI-ISRT            PIC X(4) VALUE "ISRT".
+       01  WS-MOD              PIC X(8) VALUE "MPPQCO".
+       01  INQ-MSG.
+           05  INQ-LL          PIC S9(4) COMP.
+           05  INQ-ZZ          PIC S9(4) COMP.
+           05  INQ-PART        PIC X(8).
+       01  REPLY-MSG.
+           05  REPLY-LL        PIC S9(4) COMP VALUE 12.
+           05  REPLY-ZZ        PIC S9(4) COMP VALUE 0.
+           05  REPLY-PART      PIC X(8).
+       LINKAGE SECTION.
+       01  IOPCB.
+           05  IOPCB-LTERM     PIC X(8).
+           05  FILLER          PIC XX.
+           05  IOPCB-STATUS    PIC XX.
+           05  FILLER          PIC X(20).
+       01  ALTPCB              PIC X(32).
+       PROCEDURE DIVISION.
+       ENTRY 'DLITCBL' USING IOPCB ALTPCB.
+       0000-MAIN.
+           PERFORM 1000-GET-MSG
+           PERFORM 2000-PROCESS UNTIL IOPCB-STATUS = 'QC'
+           GOBACK.
+       1000-GET-MSG.
+           CALL 'CBLTDLI' USING DLI-GU IOPCB INQ-MSG.
+       2000-PROCESS.
+           MOVE INQ-PART TO REPLY-PART
+           CALL 'CBLTDLI' USING DLI-ISRT IOPCB REPLY-MSG WS-MOD
+           PERFORM 1000-GET-MSG.
+"""
+
+
+def _mpp_end_status(cut: str) -> str:
+    assert 'MOVE "GE" TO IOPCB(11:2)' not in cut
+    return cut
+
+
+def test_mpp_isrt_with_a_mod_name_ends_the_gu_loop_on_qc(tmp_path) -> None:
+    cut = _mpp_end_status(_generate(tmp_path, "MPPQC", MPP))
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut
+
+
+def test_mpp_replying_through_an_alt_pcb_ends_the_gu_loop_on_qc(tmp_path) -> None:
+    program = MPP.replace(
+        "DLI-ISRT IOPCB REPLY-MSG WS-MOD", "DLI-ISRT ALTPCB REPLY-MSG"
+    )
+    cut = _mpp_end_status(_generate(tmp_path, "MPPQC", program))
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut
+
+
+def test_mpp_loop_on_an_88_of_the_pcb_status_ends_on_its_value(tmp_path) -> None:
+    program = MPP.replace(
+        "           05  IOPCB-STATUS    PIC XX.\n",
+        "           05  IOPCB-STATUS    PIC XX.\n"
+        "               88  NO-MORE-MSGS VALUE 'QC'.\n",
+    ).replace("UNTIL IOPCB-STATUS = 'QC'", "UNTIL NO-MORE-MSGS")
+    cut = _mpp_end_status(_generate(tmp_path, "MPPQC", program))
+    assert 'MOVE "QC" TO IOPCB(11:2)' in cut
+
+
+def test_a_db_loop_on_an_88_of_the_pcb_status_ends_on_its_value(tmp_path) -> None:
+    program = PROGRAM.replace(
+        "           05  PCB-STATUS  PIC XX.\n",
+        "           05  PCB-STATUS  PIC XX.\n               88  PCB-NOT-FOUND VALUE 'GE'.\n",
+    ).replace(
+        "           LOOP", UNTIL_STATUS.replace("PCB-STATUS = 'GE'", "PCB-NOT-FOUND")
+    )
+    cut = _generate(tmp_path, "DLIGE", program)
+    assert 'MOVE "GE" TO DB-PCB(11:2)' in cut
+    assert 'MOVE "GB" TO DB-PCB(11:2)' not in cut

@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-11-13T18:00:00Z
 ---
 
 # Overview
@@ -99,6 +99,15 @@ begins with `>>` or `REPLACE\b`, then trims blank lines. Before this a
 directive directly after a mocked statement was commented out with it: a lost
 `REPLACE OFF.` silently kept the REPLACE active over later code, a lost
 `>>END-IF` failed cobc after a clean lint.
+
+**Listing-control lines are walked back over (2026-11-13 benchmark):**
+`EJECT`, `SKIP1/2/3` and `TITLE '...'` also survive normalization and are no
+AST statement. The trim walks the span's end back past them like blank lines
+(not a cut: IBM allows them anywhere, even mid-statement), so the replaced
+statement's own last line decides `_span_ends_sentence`. Before this the span
+ran through the `EJECT` between two paragraphs, its "last code line" had no
+period, and the replacement left the sentence open before the next header
+(46 of a real codebase's programs failed cobc).
 
 **SECTION headers are boundaries (2026-07-07 fix, audit finding 2.2):**
 before this fix `collect_boundaries` collected only paragraph headers and

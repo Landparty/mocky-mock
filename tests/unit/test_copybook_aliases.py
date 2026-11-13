@@ -194,6 +194,27 @@ def test_cobol_yml_mockymock_section_carries_aliases(tmp_path):
     }
 
 
+@pytest.mark.parametrize("prefix", ["~", "${HOME}", "$HOME"])
+def test_cobol_yml_alias_expands_home_like_copybook_path(tmp_path, monkeypatch, prefix):
+    # 2026-11-13 benchmark: `project.copybook_path` (cobol-parser) expanded
+    # `~` and `${HOME}`, the `mockymock:` aliases joined them onto the
+    # config folder and refused the path as "not a file".
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # expanduser on Windows
+    target = _write(home / "shared" / "PDCONTROL.cpy")
+    project = tmp_path / "app"
+    _write(
+        project / "cobol.yml",
+        "mockymock:\n"
+        f"  copybook_aliases:\n    PDCONTRO: '{prefix}/shared/PDCONTROL.cpy'\n"
+        f"  copybook_path: ['{prefix}/shared']\n",
+    )
+    config = load_config(project)
+    assert config.copybook_aliases == {"PDCONTRO": str(target)}
+    assert config.copybook_path == (str(home / "shared"),)
+
+
 # -- end to end through the CLI ----------------------------------------------
 
 
