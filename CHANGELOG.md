@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.17.0](https://github.com/Landparty/mocky-mock/compare/v0.16.1...v0.17.0) (2026-11-13)
+
+
+### Features
+
+* indexed/relative round-trip files and a real-calls case ([f00ebbf](https://github.com/Landparty/mocky-mock/commit/f00ebbfd66664bc7daf84f413e3a894ad876c627))
+* indexed/relative round-trip files and a real-calls case ([0c6b558](https://github.com/Landparty/mocky-mock/commit/0c6b55827c2ac96b9b2166f1c81737e5cd5ebb35))
+* move to cobol-parser 4.0.0 ([9fb71c7](https://github.com/Landparty/mocky-mock/commit/9fb71c700ada29f66734590431e9f503ae01e4af))
+* unreachable points in branch coverage, round-trip real-file case ([fa451c2](https://github.com/Landparty/mocky-mock/commit/fa451c2062432b2699a5cb7c2ee70821a1d00ae0))
+* unreachable points in branch coverage, round-trip real-file case ([86ede94](https://github.com/Landparty/mocky-mock/commit/86ede94a11c4bb8a86abd5963ebecf4c369c190d))
+
+
+### Bug Fixes
+
+* address review findings on the tech-debt PR ([2bbe8ab](https://github.com/Landparty/mocky-mock/commit/2bbe8abd1428c4addc6c78466f4eaf4d0fa832b4))
+* cobol-parser layout imports, job COND/IF and SORT framing, round-trip groups, unreachable scope, GO TO. into sections, GO TO loops ([#452](https://github.com/Landparty/mocky-mock/issues/452)) ([dbad229](https://github.com/Landparty/mocky-mock/commit/dbad2298345f968d8d2143070aec9a743c8f2146))
+* job --generate-inputs on EXTEND files, IF on a bypassed PROC step, DISP=MOD with OUTPUT+EXTEND ([750b7c8](https://github.com/Landparty/mocky-mock/commit/750b7c8c5ea7bcaa3baa6fc211218c16279f3999))
+* job --generate-inputs on EXTEND files, IF on a bypassed PROC step, DISP=MOD with OUTPUT+EXTEND ([fcb495f](https://github.com/Landparty/mocky-mock/commit/fcb495f8d15753ace9abdaccffb67471ac0631b0))
+* job ABENDCC / = TRUE IF tests, fail closed on COND= inside IF; cobol-parser 3.6.0 ([2410415](https://github.com/Landparty/mocky-mock/commit/24104155132594a8746231957324b0ede3eb48da))
+* job EXTEND staging, PROC step names in COND/IF, temporary dispositions, PROVIDER step MOVEs ([#455](https://github.com/Landparty/mocky-mock/issues/455)) ([ab39cc2](https://github.com/Landparty/mocky-mock/commit/ab39cc2a7923f185128be7f30b7d1840158a0c3c))
+* job post-abend IF guard, in-stream SORTIN framing, X'0A' in fixed records, early JobOptions.command check ([c77e0a2](https://github.com/Landparty/mocky-mock/commit/c77e0a263b772853da92a62e7e17e01969001e2f))
+* read bundle_version 2, hunt fixes [#453](https://github.com/Landparty/mocky-mock/issues/453)-[#460](https://github.com/Landparty/mocky-mock/issues/460), nightly integration lock ([2594233](https://github.com/Landparty/mocky-mock/commit/25942335cc45b08025ba7a545bf11f1506a2f588))
+* real-calls case mocks the subprograms' own boundaries ([a42b185](https://github.com/Landparty/mocky-mock/commit/a42b185bea79652bc7b2ff8339e56f501b5977c6))
+* round-trip case keeps files one statement names together ([51c0f90](https://github.com/Landparty/mocky-mock/commit/51c0f90bd00c3ebd2f657c55aa771705482a50c6))
+
+
+### Documentation
+
+* index every design and audit with its real status; archive shipped plans ([85db0da](https://github.com/Landparty/mocky-mock/commit/85db0da23b814bf7e5fdddc3b01c79d84bd5251c))
+* record the tech-debt remediation outcome ([cdf2901](https://github.com/Landparty/mocky-mock/commit/cdf2901e469f0a0f660e5a8bbc62cb362d5b2f93))
+
 ## [0.16.1](https://github.com/Landparty/mocky-mock/compare/v0.16.0...v0.16.1) (2026-11-06)
 
 
