@@ -31,6 +31,7 @@ universal layer.
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -128,6 +129,14 @@ def _read_toml(path: Path) -> dict:
         raise ConfigError(f"mockymock: could not parse {path}: {exc}") from exc
 
 
+def _expanded(entry: str) -> Path:
+    """`entry` with `~` and `$VAR` / `${VAR}` expanded, as cobol-parser does
+    for `project.copybook_path`: without it a `${HOME}/...` alias in
+    cobol.yml's `mockymock:` section was joined onto the config folder and
+    refused as "not a file", while the same path worked one section up."""
+    return Path(os.path.expandvars(os.path.expanduser(entry)))
+
+
 def _normalize_copybook_path(value: object, source: Path) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -141,7 +150,7 @@ def _normalize_copybook_path(value: object, source: Path) -> tuple[str, ...]:
     base = source.parent
     resolved = []
     for entry in value:
-        entry_path = Path(entry)
+        entry_path = _expanded(entry)
         resolved.append(
             str(entry_path if entry_path.is_absolute() else base / entry_path)
         )
@@ -166,7 +175,7 @@ def _normalize_copybook_aliases(value: object, source: Path) -> dict[str, str]:
                 f"mockymock: {source}: '{_ALIASES_KEY}.{member}' must be a "
                 f"file path string"
             )
-        path = Path(file_name)
+        path = _expanded(file_name)
         if not path.is_absolute():
             path = source.parent / path
         if not path.is_file():

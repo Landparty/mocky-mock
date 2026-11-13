@@ -137,14 +137,28 @@ _DIRECTIVE_LINE = re.compile(
 )
 
 
+#: IBM listing-control statements (EJECT, SKIP1/2/3, TITLE): kept by
+#: normalize_fixed_format and never AST statements, so a span used to run
+#: on through one, and `_span_ends_sentence` then read `EJECT` as the
+#: statement's last code line and dropped its period (2026-11-13 benchmark,
+#: 46 programs). Walked back over like a blank line rather than cut at like
+#: `_DIRECTIVE_LINE`: they are legal anywhere, even inside a statement.
+_LISTING_CONTROL_LINE = re.compile(
+    r"\s*(EJECT|SKIP[123]|TITLE\s+(['\"]).*\2)\s*\.?\s*$", re.IGNORECASE
+)
+
+
 def _trim_trailing_blank_lines(start: int, end: int, lines: list[str]) -> int:
     """Cut `end` before the first compiler-directing line after `start`,
-    then walk it back to the last non-blank line, never past `start`."""
+    then walk it back past blank and listing-control lines, never past
+    `start`."""
     for line_no in range(start + 1, end + 1):
         if _DIRECTIVE_LINE.match(lines[line_no - 1]):
             end = line_no - 1
             break
-    while end > start and not lines[end - 1].strip():
+    while end > start and (
+        not lines[end - 1].strip() or _LISTING_CONTROL_LINE.match(lines[end - 1])
+    ):
         end -= 1
     return end
 

@@ -127,7 +127,8 @@ def _call_end_reply(
             end_status = _DLI_CALL_END.get(function)
             if end_status is not None:
                 end_status = (
-                    _dli_guard_end_status(site, names[1], context) or end_status
+                    _dli_guard_end_status(site, names[1], function, context)
+                    or end_status
                 )
         if end_status is None:
             return None
@@ -136,7 +137,7 @@ def _call_end_reply(
 
 
 def _dli_guard_end_status(
-    site: BoundarySite, pcb: str, context: ProgramContext
+    site: BoundarySite, pcb: str, function: str, context: ProgramContext
 ) -> str | None:
     """The not-found status a loop of the program waits for on `pcb`'s
     status field (`PERFORM UNTIL ORD-PCB-STATUS = 'GE'`), when every such
@@ -146,22 +147,35 @@ def _dli_guard_end_status(
     that guard and the run spun until the timeout (2026-11-03, IMSORDER).
     A loop on a flag (`UNTIL AT-END-OF-DB`) set in a branch on the status
     (`IF PCB-STATUS-CODE = 'GE'  MOVE 'Y' TO WS-EOF`) counts too
-    (IMSPATIE)."""
+    (IMSPATIE), and so does a loop on a level-88 of the status field
+    itself (`88 IO-NO-MORE VALUE 'QC'`, `UNTIL IO-NO-MORE`).
+
+    A GU also accepts QC, the message queue's end: `_is_message_pcb` only
+    knows an I/O PCB by a three-argument ISRT through it, which misses an
+    ISRT that passes an MFS MOD name and a reply sent through an ALT PCB.
+    The GU was then answered GE, which an `UNTIL IOPCB-STATUS = 'QC'` loop
+    never sees, and the run spun until the timeout (2026-11-13 benchmark,
+    7 IMS MPPs)."""
     watched = context.names_under(pcb)
     flags: set[str] = set()
     pairs: list[tuple[str, str]] = []
     for guard in context.guards:
         pairs += _STATUS_COMPARE_RE.findall(guard.until_text.upper())
         for word in guard.words:
-            flags |= {word} | context.condition_owners(word)
+            owners = context.condition_owners(word)
+            flags |= {word} | owners
+            value = context.literal_value(word) if owners & watched else None
+            if value is not None:
+                pairs += [(owner, value.strip()) for owner in owners & watched]
     statements = context.paragraph_statements(site.paragraph_name)
     pairs += [
         (name, literal.strip("'\""))
         for name, literal in flag_branch_comparisons(statements, watched, flags)
     ]
-    found = {
-        status for name, status in pairs if name in watched and status in _DLI_NOT_FOUND
-    }
+    accepted = _DLI_NOT_FOUND | (
+        {_DLI_MESSAGE_END[function]} if function in _DLI_MESSAGE_END else set()
+    )
+    found = {status for name, status in pairs if name in watched and status in accepted}
     return found.pop() if len(found) == 1 else None
 
 

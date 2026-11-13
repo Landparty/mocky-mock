@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-11-13T18:00:00Z
 ---
 
 # Overview
@@ -1471,7 +1471,13 @@ All in the `dsl/generator/` package; `ProgramContext` now also carries `looped`,
   through an I/O PCB ends with `QC` (no more messages) instead of `GE`:
   `_is_message_pcb` takes a PCB for the I/O PCB when the program sends
   through it (a three-argument ISRT, PURG or CHNG) and never reads it with
-  a get-next. One MOCK answers every site of its key, so when the key's
+  a get-next. That test misses an ISRT passing an MFS MOD name (four
+  arguments, like a database ISRT with one SSA) and a reply sent through an
+  ALT PCB, so `_dli_guard_end_status` also takes `QC` for a GU whenever a
+  loop guard or a branch compares that PCB's status to it; a guard on an
+  88 of the status field itself (`UNTIL NO-MORE-MSGS`, `88 ... VALUE 'QC'`
+  under `IOPCB-STATUS`) counts by its VALUE, for GE/GB too (2026-11-13
+  benchmark, 7 IMS MPPs spun until the timeout). One MOCK answers every site of its key, so when the key's
   sites need different replies (an IMS MPP's GU loop plus its ISRT through
   the same CBLTDLI, or a GN loop plus an ISRT) the end reply is gated on
   the function code the call passed, read from the key's scaffolded

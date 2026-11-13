@@ -5,6 +5,19 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- benchmark fixes: EJECT/SKIP periods, IMS QC, ~ in aliases
+
+From a run against a real z/OS codebase under GnuCOBOL.
+[splicer](splicer.md): a mocked statement's span no longer runs through a
+following `EJECT`/`SKIPn`/`TITLE` line, which dropped the replacement's
+sentence period (46 programs failed cobc). [dsl](dsl.md): a GU whose loop
+waits on `QC` gets `QC` even when `_is_message_pcb` misses the I/O PCB (ISRT
+with a MOD name, reply through an ALT PCB), and a loop on an 88 of the PCB
+status field counts by its VALUE (7 IMS MPPs timed out). [cli](cli.md): `~`
+and `${HOME}` are expanded in `copybook_aliases` and mockymock's own
+`copybook_path`. Tests: `test_orchestrator.py`,
+`test_generator_dli_end_status.py`, `test_copybook_aliases.py`.
+
 ## 2026-11-13 -- cobol-parser 4.0.0
 
 [integration](integration.md): floor raised to `cobol-parser>=4.0.0,<5`.

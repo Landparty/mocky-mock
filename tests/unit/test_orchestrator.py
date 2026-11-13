@@ -840,3 +840,77 @@ def test_span_sentence_end_is_judged_on_code_not_comment_text():
     # `*>` inside a literal is not a comment.
     assert not _span_ends_sentence(['CALL "X*>." USING WS-A'], 1, 1)
     assert not _span_ends_sentence(['CALL "X" *> note.'], 1, 1)
+
+
+# 2026-11-13 benchmark (46 programs): IBM listing-control lines (EJECT,
+# SKIP1/2/3, TITLE) survive normalize_fixed_format but are no AST
+# statement, so a mocked statement's span ran on through them. The span's
+# last code line was then `EJECT`, which has no period, and the
+# replacement left its sentence unterminated before the next paragraph.
+LISTING_CONTROL_SOURCE = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. EJ.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-A                PIC X(3).
+       PROCEDURE DIVISION.
+       P0.
+           PERFORM P1
+           PERFORM P2
+           PERFORM P3
+           GOBACK.
+       P1.
+           CALL "SUB1" USING WS-A.
+           EJECT
+       P2.
+           CALL "SUB2" USING WS-A.
+       SKIP2
+       P3.
+           CALL "SUB3" USING WS-A
+           .
+           TITLE 'NEXT PART'
+       P4.
+           CALL "SUB4" USING WS-A.
+"""
+
+LISTING_CONTROL_CUT = """\
+TESTSUITE "S"
+
+TESTCASE "one"
+    MOCK CALL "SUB1"
+        MOVE "A" TO WS-A
+    END-MOCK
+    MOCK CALL "SUB2"
+        MOVE "B" TO WS-A
+    END-MOCK
+    MOCK CALL "SUB3"
+        MOVE "C" TO WS-A
+    END-MOCK
+    PERFORM P0
+    EXPECT WS-A TO BE "C"
+"""
+
+
+def test_replacement_keeps_its_period_before_a_listing_control_line():
+    source = LISTING_CONTROL_SOURCE
+    result = parse_cobol(source, filename="ej.cbl")
+    assert result.success, result.errors
+    lines = normalize_fixed_format(source.splitlines()).splitlines()
+    surface = analyze(result.ast)
+    annotate_nested_sites(surface, collect_scope_map(result.ast, lines), lines)
+    suite = parse_cut(LISTING_CONTROL_CUT)
+
+    spliced = splice_program(
+        lines,
+        collect_boundaries(result.ast),
+        surface,
+        suite,
+        TallyRegistry(suite),
+    )
+
+    for header, directive in (("P2.", "EJECT"), ("P3.", "SKIP2"), ("P4.", "TITLE")):
+        at = next(i for i, line in enumerate(spliced) if line.strip() == header)
+        # The directive is kept as live code, not commented out with the CALL...
+        assert spliced[at - 1].strip().startswith(directive), spliced[at - 3 : at + 1]
+        # ...and the replacement before it still ends its sentence.
+        assert spliced[at - 2].strip().endswith("."), spliced[at - 3 : at + 1]
