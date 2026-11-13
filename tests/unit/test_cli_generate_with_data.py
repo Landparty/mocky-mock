@@ -307,7 +307,7 @@ def test_placeholder_downgrades_exec_sql_boundary_via_cli(tmp_path):
     assert rc == 0
     text = out.read_text(encoding="utf-8")
     assert 'MOCK SQL "SELECT"' in text  # still mocked
-    assert "CHARLES GARCIA" not in text
+    assert "ROBERT RODRIGUEZ" not in text
     assert "MOVE 0 TO SQLCODE" in text
 
 

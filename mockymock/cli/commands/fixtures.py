@@ -137,7 +137,9 @@ def _cmd_fixtures(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 -- surfaced verbatim to the caller
         print(f"mockymock fixtures: {exc}", file=sys.stderr)
         return 1
-    print(bundle.to_json())
+    # Version 1's shape (each scenario's fixtures inline), which the VS Code
+    # tree view reads; cobol-parser 4.0 defaults to version 2's shared table.
+    print(bundle.to_json(bundle_version=1))
     return 0
 
 

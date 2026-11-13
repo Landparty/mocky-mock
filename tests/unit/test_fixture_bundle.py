@@ -8,9 +8,10 @@ import json
 import pytest
 
 from mockymock.dsl.fixture_bundle import (
-    SUPPORTED_BUNDLE_VERSION,
+    SUPPORTED_BUNDLE_VERSIONS,
     MalformedBundleError,
     UnsupportedBundleVersionError,
+    inline_fixtures,
     load_fixture_bundle,
     load_fixture_bundle_file,
     parse_fixture_bundle,
@@ -151,8 +152,54 @@ def test_loads_layouts_map():
 
 
 def test_unsupported_bundle_version_raises():
-    bad = dict(MINIMAL_BUNDLE, bundle_version=2)
-    with pytest.raises(UnsupportedBundleVersionError, match="2"):
+    bad = dict(MINIMAL_BUNDLE, bundle_version=3)
+    with pytest.raises(UnsupportedBundleVersionError, match="3"):
+        load_fixture_bundle(bad)
+
+
+def _version_2(bundle):
+    """MINIMAL_BUNDLE in cobol-parser 4.0's shape: a shared `fixtures` table."""
+    [scenario] = bundle["scenarios"]
+    [fixture] = scenario["fixtures"]
+    return dict(
+        bundle,
+        bundle_version=2,
+        fixtures={"READ:ORDER-FILE": fixture},
+        scenarios=[
+            dict(scenario, fixtures=["READ:ORDER-FILE"]),
+            dict(scenario, name="again", fixtures=["READ:ORDER-FILE"]),
+        ],
+    )
+
+
+def test_version_2_bundle_loads_with_its_fixtures_inlined():
+    bundle = load_fixture_bundle(_version_2(MINIMAL_BUNDLE))
+    assert bundle.bundle_version == 1
+    assert [s.name for s in bundle.scenarios] == ["happy path", "again"]
+    for scenario in bundle.scenarios:
+        [fixture] = scenario.fixtures
+        assert (fixture.category, fixture.key) == ("READ", "ORDER-FILE")
+        assert fixture.sequence == [{"ORDER-QTY": "50"}]
+
+
+def test_inline_fixtures_copies_each_fixture():
+    data = inline_fixtures(_version_2(MINIMAL_BUNDLE))
+    assert "fixtures" not in data
+    first, second = (s["fixtures"][0] for s in data["scenarios"])
+    assert first == second and first is not second
+
+
+def test_version_2_with_an_unknown_fixture_id_is_malformed():
+    bad = _version_2(MINIMAL_BUNDLE)
+    bad["scenarios"][0]["fixtures"] = ["READ:NOPE"]
+    with pytest.raises(MalformedBundleError, match="READ:NOPE"):
+        load_fixture_bundle(bad)
+
+
+def test_version_2_without_a_fixtures_table_is_malformed():
+    bad = dict(_version_2(MINIMAL_BUNDLE))
+    del bad["fixtures"]
+    with pytest.raises(MalformedBundleError, match="fixtures"):
         load_fixture_bundle(bad)
 
 
@@ -175,7 +222,7 @@ def test_missing_bundle_version_raises():
 
 
 def test_supported_bundle_version_constant_matches_current_schema():
-    assert SUPPORTED_BUNDLE_VERSION == 1
+    assert SUPPORTED_BUNDLE_VERSIONS == (1, 2)
 
 
 # 2026-08-12 audit Finding 15: every required-field access was a bare

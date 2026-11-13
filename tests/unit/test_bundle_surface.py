@@ -4,6 +4,8 @@ import json
 
 from cobolparser.generators import DataGeneratorOptions, ProgramFixtureGenerator
 
+from mockymock.dsl.fixture_bundle import inline_fixtures
+
 SOURCE = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. BSMOKE.
@@ -24,8 +26,10 @@ def test_bundle_shape_is_what_with_data_consumes(tmp_path):
     bundle = ProgramFixtureGenerator(
         DataGeneratorOptions(rows=3)
     ).generate_with_scenarios_from_file(str(cbl), mode="happy", seed=7)
-    d = bundle.to_dict()
-    assert json.loads(bundle.to_json()) == d
+    raw = bundle.to_dict()
+    assert json.loads(bundle.to_json()) == raw
+    assert raw["bundle_version"] == 2
+    d = inline_fixtures(raw)
     assert d["bundle_version"] == 1
     assert d["program_name"] == "BSMOKE"
     assert d["seed"] == 7

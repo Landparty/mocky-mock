@@ -23,8 +23,11 @@ from typing import Any
 #: key's type/meaning changed under an unchanged name) -- see the schema
 #: doc's "Versioning and compatibility policy". This loader fails closed
 #: on anything else rather than guess at a schema that changed underneath
-#: it.
-SUPPORTED_BUNDLE_VERSION = 1
+#: it. Version 2 (cobol-parser 4.0) writes each distinct fixture once in a
+#: top-level `fixtures` table and has each scenario list fixture ids;
+#: `inline_fixtures` turns it back into version 1's shape, which is what
+#: every consumer in mockymock reads.
+SUPPORTED_BUNDLE_VERSIONS = (1, 2)
 
 
 class UnsupportedBundleVersionError(Exception):
@@ -190,6 +193,62 @@ def _load_scenario(data: dict[str, Any]) -> Scenario:
     )
 
 
+def _check_version(version: Any) -> None:
+    # `type(...) is int`, not `in` alone: JSON `true` and `1.0` both
+    # compare equal to 1 in Python, so a bundle declaring either used to
+    # be accepted as version 1 -- and then carried `True`/`1.0` into
+    # `FixtureBundle.bundle_version`.
+    if type(version) is not int or version not in SUPPORTED_BUNDLE_VERSIONS:
+        supported = ", ".join(str(v) for v in SUPPORTED_BUNDLE_VERSIONS)
+        raise UnsupportedBundleVersionError(
+            f"unsupported fixture bundle_version {version!r} -- this "
+            f"mockymock understands {supported}. "
+            f"Regenerate the bundle with a compatible cobol-parser, or "
+            f"upgrade mockymock."
+        )
+
+
+def inline_fixtures(data: dict[str, Any]) -> dict[str, Any]:
+    """A bundle dict in the version 1 shape: each scenario's fixtures in
+    full. A version 2 bundle's scenarios list ids into its top-level
+    `fixtures` table; each id is replaced by (a copy of) its fixture, and
+    the table is dropped. A version 1 bundle comes back unchanged.
+
+    Raises `UnsupportedBundleVersionError` for any other version and
+    `MalformedBundleError` for an id the table does not hold."""
+    if not isinstance(data, dict):
+        raise MalformedBundleError(
+            f"fixture bundle must be a JSON object, got {type(data).__name__}"
+        )
+    version = data.get("bundle_version")
+    _check_version(version)
+    if version == 1:
+        return data
+    table = data.get("fixtures")
+    if not isinstance(table, dict):
+        raise MalformedBundleError(
+            "fixture bundle version 2 has no `fixtures` table (an object)"
+        )
+    out = {key: value for key, value in data.items() if key != "fixtures"}
+    scenarios = []
+    for scenario in data.get("scenarios") or []:
+        scenario = dict(_object(scenario, "scenario"))
+        fixtures = []
+        for fixture_id in scenario.get("fixtures") or []:
+            if not isinstance(fixture_id, str) or fixture_id not in table:
+                raise MalformedBundleError(
+                    f"scenario {scenario.get('name')!r} names fixture "
+                    f"{fixture_id!r}, which the bundle's `fixtures` table "
+                    "does not hold"
+                )
+            fixtures.append(json.loads(json.dumps(table[fixture_id])))
+        scenario["fixtures"] = fixtures
+        scenarios.append(scenario)
+    out["scenarios"] = scenarios
+    out["bundle_version"] = 1
+    return out
+
+
 def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
     """Parse an already-decoded bundle dict (e.g. `json.loads(text)`) into
     a `FixtureBundle` of mockymock-local dataclasses.
@@ -213,18 +272,9 @@ def load_fixture_bundle(data: dict[str, Any]) -> FixtureBundle:
         raise MalformedBundleError(
             f"fixture bundle must be a JSON object, got {type(data).__name__}"
         )
-    version = data.get("bundle_version")
-    # `type(...) is int`, not `==` alone: JSON `true` and `1.0` both
-    # compare equal to 1 in Python, so a bundle declaring either used to
-    # be accepted as version 1 -- and then carried `True`/`1.0` into
-    # `FixtureBundle.bundle_version`.
-    if type(version) is not int or version != SUPPORTED_BUNDLE_VERSION:
-        raise UnsupportedBundleVersionError(
-            f"unsupported fixture bundle_version {version!r} -- this "
-            f"mockymock only understands {SUPPORTED_BUNDLE_VERSION!r}. "
-            f"Regenerate the bundle with a compatible cobol-parser, or "
-            f"upgrade mockymock."
-        )
+    _check_version(data.get("bundle_version"))
+    data = inline_fixtures(data)
+    version = data["bundle_version"]
     try:
         return FixtureBundle(
             bundle_version=version,

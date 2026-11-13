@@ -1,11 +1,10 @@
 """Whether a JCL step runs: `COND=` and `IF` conditions on return codes.
 
-`cobolparser.jcl` gives each step one `condition` string: the coded
-`COND=` (`(4,LE)`, `((4,LT),(8,GT,STEP1))`, `EVEN`, `ONLY`), or else the
-enclosing `IF` conditions (`(S1.RC = 0)`, `NOT (...)` in an ELSE, nested
-ones joined with ` AND `). A step coding both loses its IF there (still
-so in cobol-parser 3.6.0); the job runner refuses such a step, see
-`if_blocks`. `step_runs` evaluates either against the return
+`cobolparser.jcl` gives each step its coded `COND=` (`JobStep.cond`:
+`(4,LE)`, `((4,LT),(8,GT,STEP1))`, `EVEN`, `ONLY`) and its enclosing `IF`
+conditions (`JobStep.if_condition`: `(S1.RC = 0)`, `NOT (...)` in an ELSE,
+nested ones joined with ` AND `); a step coding both runs only when both
+allow it (the runner's `_conditions`). `step_runs` evaluates either against the return
 codes of the steps that ran so far. Anything it cannot read raises
 `ConditionError`: the job runner then stops and reports the step as a gap,
 since guessing would run (or skip) steps the real job would not.
@@ -14,7 +13,7 @@ since guessing would run (or skip) steps the real job would not.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 
 #: Return code standing for an abended step.
 ABEND = None
@@ -52,36 +51,6 @@ _OPS = {
     "^=": lambda a, b: a != b,
     "¬=": lambda a, b: a != b,
 }
-
-
-_IF_CARD_RE = re.compile(
-    r"^//[A-Z0-9@#$]*\s+(?P<verb>IF|ENDIF)(?:\s|\(|$)", re.IGNORECASE
-)
-
-
-def if_blocks(text: str) -> list[tuple[int, int]]:
-    """The (IF line, ENDIF line) of every IF/THEN/ELSE/ENDIF construct in a
-    JCL deck or procedure member, 1-based. An IF with no ENDIF runs to the
-    end of the text."""
-    blocks: list[tuple[int, int]] = []
-    open_ifs: list[int] = []
-    lines = text.splitlines()
-    for number, line in enumerate(lines, start=1):
-        if line.startswith("//*"):
-            continue
-        match = _IF_CARD_RE.match(line)
-        if match is None:
-            continue
-        if match.group("verb").upper() == "IF":
-            open_ifs.append(number)
-        elif open_ifs:
-            blocks.append((open_ifs.pop(), number))
-    blocks.extend((start, len(lines) + 1) for start in open_ifs)
-    return blocks
-
-
-def inside(blocks: Iterable[tuple[int, int]], line: int) -> bool:
-    return any(start < line < end for start, end in blocks)
 
 
 def is_cond_parameter(condition: str) -> bool:
@@ -235,13 +204,26 @@ class _IfParser:
         self.abended = abended
         self.step = step
         self.bypassed = bypassed
+        #: Inside an operand whose value can no longer matter (the right of
+        #: an AND already false, of an OR already true): it is read but not
+        #: evaluated, as on z/OS, so a step there that did not run is no gap.
+        self.skipping = False
 
     def rc_of(self, name: str) -> int | None:
+        if self.skipping:
+            return 0
         # `bypassed` stops the lookup at a bypassed step of the procedure's
         # own invocation (`_StepBypassed`, a ConditionError): without it an
         # unqualified name falls through to a job-level step or another call
         # of the procedure that happens to share the name.
         return _step_rc(self.rcs, name, self.bypassed, current=self.step)
+
+    def skipped(self, operand: Callable[[], bool]) -> bool:
+        skipping, self.skipping = self.skipping, True
+        try:
+            return operand()
+        finally:
+            self.skipping = skipping
 
     def peek(self) -> str | None:
         return self.tokens[self.index] if self.index < len(self.tokens) else None
@@ -263,7 +245,7 @@ class _IfParser:
         value = self.and_expr()
         while self.peek() in ("OR", "|"):
             self.take()
-            right = self.and_expr()
+            right = self.skipped(self.and_expr) if value else self.and_expr()
             value = value or right
         return value
 
@@ -271,7 +253,7 @@ class _IfParser:
         value = self.not_expr()
         while self.peek() in ("AND", "&"):
             self.take()
-            right = self.not_expr()
+            right = self.not_expr() if value else self.skipped(self.not_expr)
             value = value and right
         return value
 
@@ -305,6 +287,8 @@ class _IfParser:
         if op not in _OPS:
             raise ConditionError(f"expected an operator after {name}, got {op!r}")
         self.take()  # the code
+        if self.skipping:
+            return False
         if name == "ABENDCC":
             abended = self.abended
         else:

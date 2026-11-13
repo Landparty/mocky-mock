@@ -34,6 +34,11 @@ If `FIXTUREDEMO.cbl`/`FIXTUREDEMO.bundle.json` change upstream in
 cobol-parser, re-copy both files here and regenerate `FIXTUREDEMO.cut` in
 the same change.
 
+The bundle was last regenerated with cobol-parser 4.0.0 (seed 42,
+`mode="happy"`, `FixtureBundle.to_json()`), so it is in bundle version 2's
+shape: a shared top-level `fixtures` table that each scenario lists by id.
+cobol-parser 4.0's random values differ from 3.x's at the same seed.
+
 Run it:
 
 ```bash
