@@ -3,7 +3,7 @@ type: Runbook
 title: Publishing
 description: mockymock (AGPL-3.0-or-later) publishes a plain (source-visible) sdist+wheel to PyPI on every release-please release, mirroring cobol-parser's PyPI pipeline; the Nuitka executable path for mocky-mock-vscode is separate and unaffected.
 tags: [ci, release, publishing, pypi]
-timestamp: 2026-10-04T00:00:00Z
+timestamp: 2026-11-13T19:00:00Z
 ---
 
 # Overview
@@ -66,6 +66,15 @@ which was already there and simply never ran in CI (see
 [testing.md](testing.md)'s CI section for why). Any future rename of the
 distribution or the import package must re-check that `extra-files` path
 in the same commit.
+
+**uv.lock follows the version too (2026-11-13).** release-please's python
+strategy never touches `uv.lock`, so 0.17.0 shipped with the lock's
+`mockymock` entry still at 0.16.1 and `uv sync --locked` failed every CI
+job on main. A `toml` `extra-files` entry now bumps
+`$.package[?(@.name.value=='mockymock')].version`, and
+`test_smoke.test_uv_lock_records_the_pyproject_version` pins the two
+together. Release PRs opened with the default token do not trigger CI, so
+the test catches a drift only on the next push after the release.
 
 # Python API
 

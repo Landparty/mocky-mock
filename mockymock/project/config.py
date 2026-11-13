@@ -252,12 +252,12 @@ def _validated_values(data: dict, source: Path) -> dict[str, Any]:
             )
         values["ai_mode"] = ai_mode
     if "test_root" in data:
-        test_root = Path(data["test_root"])
+        test_root = _expanded(data["test_root"])
         if not test_root.is_absolute():
             test_root = source.parent / test_root
         values["test_root"] = str(test_root)
     if "source_root" in data:
-        source_root = Path(data["source_root"])
+        source_root = _expanded(data["source_root"])
         if not source_root.is_absolute():
             source_root = source.parent / source_root
         values["source_root"] = str(source_root)
