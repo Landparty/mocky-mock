@@ -241,27 +241,36 @@ def compare_case(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
 def compare(
     baseline: dict[str, Any], suite_result: TestSuiteResult, inputs: dict[str, str]
 ) -> BaselineComparison:
-    """Compare a run with a baseline, case by case (matched by name)."""
-    recorded = {case.get("name"): case for case in baseline.get("cases", [])}
+    """Compare a run with a baseline, case by case.
+
+    Cases are matched by name and, among namesakes (duplicate TESTCASE
+    names are legal), by occurrence: the n-th "valid input" of the run
+    against the n-th one recorded (#477). A surplus namesake on either side
+    is "new" / "not-run"."""
+    recorded: dict[str, list[dict[str, Any]]] = {}
+    for case in baseline.get("cases", []):
+        recorded.setdefault(str(case.get("name")), []).append(case)
     version = baseline.get("version")
-    seen: set[str] = set()
+    used: dict[str, int] = {}
     cases: list[CaseComparison] = []
     for result in suite_result.results:
-        seen.add(result.case_name)
-        expected = recorded.get(result.case_name)
-        if expected is None:
-            cases.append(CaseComparison(result.case_name, "new"))
+        name = result.case_name
+        occurrence = used.get(name, 0)
+        used[name] = occurrence + 1
+        namesakes = recorded.get(name, [])
+        if occurrence >= len(namesakes):
+            cases.append(CaseComparison(name, "new"))
             continue
         actual = _as_version(_case_document(result), version)
-        differences = compare_case(expected, actual)
+        differences = compare_case(namesakes[occurrence], actual)
         cases.append(
-            CaseComparison(
-                result.case_name, "differs" if differences else "same", differences
-            )
+            CaseComparison(name, "differs" if differences else "same", differences)
         )
-    for name in recorded:
-        if name not in seen:
-            cases.append(CaseComparison(str(name), "not-run"))
+    for name, namesakes in recorded.items():
+        cases.extend(
+            CaseComparison(name, "not-run")
+            for _ in range(len(namesakes) - used.get(name, 0))
+        )
     old_inputs = baseline.get("inputs") or {}
     changed = sorted(
         role

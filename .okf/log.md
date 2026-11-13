@@ -5,6 +5,12 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- baseline namesakes (#477)
+
+[report](report.md): `run --baseline` matches two cases with the same name by
+occurrence, so an unchanged suite with duplicate case names no longer
+compares every namesake against the last recorded one and fails.
+
 ## 2026-11-13 -- table-element entry stubs (#474)
 
 [cli](cli.md): entry-parameter stubs for a field under an OCCURS name each

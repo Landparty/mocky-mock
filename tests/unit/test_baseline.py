@@ -433,3 +433,52 @@ def test_a_version_2_baseline_ignores_the_cics_key_and_resource_events():
     assert len(comparison.notes) == 2
     comparison = compare(_baseline(), parse_stdout(newer), {"cut": "a"})
     assert not comparison.matches
+
+
+def _namesake(case_id: str, rc: str, data: str):
+    from mockymock.report.results import BehaviourEvent, TestResult
+
+    return TestResult(
+        case_id=case_id,
+        case_name="valid input",
+        ended=True,
+        events=[BehaviourEvent("CALL 'ACCTVAL'", [data])],
+        return_code=rc,
+        output=[],
+    )
+
+
+def test_namesakes_match_by_occurrence() -> None:
+    # #477: two cases named alike compare each with its own recording.
+    from mockymock.report.results import TestSuiteResult
+
+    run = TestSuiteResult(
+        "S",
+        [_namesake("001", "0000", "C1C2"), _namesake("002", "0004", "C3C4")],
+        tests_run=2,
+    )
+    doc = build_baseline(run, {"cut": "x"}, "t")
+    comparison = compare(doc, run, {"cut": "x"})
+    assert [c.verdict for c in comparison.cases] == ["same", "same"]
+    assert comparison.matches
+
+
+def test_surplus_namesakes_are_new_or_not_run() -> None:
+    from mockymock.report.results import TestSuiteResult
+
+    two = TestSuiteResult(
+        "S",
+        [_namesake("001", "0000", "C1C2"), _namesake("002", "0004", "C3C4")],
+        tests_run=2,
+    )
+    one = TestSuiteResult("S", [_namesake("001", "0000", "C1C2")], tests_run=1)
+    doc_two = build_baseline(two, {"cut": "x"}, "t")
+    assert [c.verdict for c in compare(doc_two, one, {"cut": "x"}).cases] == [
+        "same",
+        "not-run",
+    ]
+    doc_one = build_baseline(one, {"cut": "x"}, "t")
+    assert [c.verdict for c in compare(doc_one, two, {"cut": "x"}).cases] == [
+        "same",
+        "new",
+    ]
