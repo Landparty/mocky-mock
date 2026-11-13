@@ -5,6 +5,13 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-13 -- table-element entry stubs (#474)
+
+[cli](cli.md): entry-parameter stubs for a field under an OCCURS name each
+occurrence (`LK-AMT(2)`), replacing cobol-parser's bare one, and `run
+--record-expectations` skips a bare stub on a table element instead of
+splicing a DISPLAY that does not compile.
+
 ## 2026-11-13 -- issue sweep: SORT record limits, IF NE TRUE, found-record mock, mock-body inputs
 
 [cli](cli.md): job SORT applies `SKIPREC=` / `STOPAFT=` from SORT or OPTION
