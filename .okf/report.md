@@ -186,7 +186,10 @@ output line(s) not kept, sha256 ...)` line, so a looping DISPLAY no longer
 costs a string per line while a baseline still tells two outputs apart
 (2026-11-05). `parse_stdout` walks the lines one at a time (`_lines`). `run --baseline FILE` reads it with `load_baseline`
 (`BaselineError` on a bad file, exit 2) and `compare()` matches cases by
-name: `same` / `differs` / `new` / `not-run`. `compare_case` reports the
+name and, among namesakes (duplicate TESTCASE names are legal), by
+occurrence: the n-th case of a name against the n-th recorded one, a surplus
+namesake being `new` / `not-run` (#477): `same` / `differs` / `new` /
+`not-run`. `compare_case` reports the
 first differing event (which value, with the text when both are printable
 ASCII), the first differing output line, and RETURN-CODE or status changes.
 Only `differs` fails the run (`BaselineComparison.matches`).

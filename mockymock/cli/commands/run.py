@@ -616,7 +616,10 @@ def _merge_rerun_reports(
 def _cmd_run_suite(args: argparse.Namespace) -> int:
 
     from mockymock._decimal import decimal_point_is_comma
-    from mockymock.analysis.stub_expectations import scan_stub_expectations
+    from mockymock.analysis.stub_expectations import (
+        scan_stub_expectations,
+        skip_unsubscripted_table_stubs,
+    )
     from mockymock.dsl.model import MockCategory
     from mockymock.engine.checks import (
         run_static_checks,
@@ -644,6 +647,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
         clock_value_fields,
         field_pictures,
         rewrite_cut_text,
+        table_fields,
     )
     from mockymock.report.results import parse_stdout
     from mockymock.runtime.executor import TIMEOUT_EXIT_CODE
@@ -760,6 +764,8 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
     stub_scan = (
         scan_stub_expectations(cut_text, suite) if args.record_expectations else None
     )
+    if stub_scan is not None:
+        stub_scan = skip_unsubscripted_table_stubs(stub_scan, table_fields(result.ast))
     record_targets: dict[int, list[str]] = {}
     if stub_scan is not None:
         for stub in stub_scan.stubs:

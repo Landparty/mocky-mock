@@ -240,3 +240,32 @@ def scan_stub_expectations(cut_text: str, suite: MockTestSuite) -> StubScanResul
         stubs.append(StubExpectation(line_no, name, note, case_index))
 
     return StubScanResult(stubs=stubs, skipped=skipped)
+
+
+def skip_unsubscripted_table_stubs(
+    scan: StubScanResult, table_names: set[str] | frozenset[str]
+) -> StubScanResult:
+    """Move every stub naming a table element with no subscript
+    (`*> STUB EXPECT LK-AMT` for `LK-AMT` under an OCCURS) from `stubs` to
+    `skipped`: the driver would splice `DISPLAY LK-AMT`, which does not
+    compile, and the whole run would fail (issue #474). `table_names` are
+    the uppercased names declared only inside a table
+    (`record_rewrite.table_fields`)."""
+    kept: list[StubExpectation] = []
+    skipped = list(scan.skipped)
+    for stub in scan.stubs:
+        base, paren, _ = stub.data_name.partition("(")
+        leaf = base.strip().split()[0].upper() if base.strip() else ""
+        if not paren and leaf in table_names:
+            skipped.append(
+                SkippedStub(
+                    stub.line,
+                    stub.data_name,
+                    "it is an element of an OCCURS table and names no "
+                    "occurrence -- add a subscript (e.g. "
+                    f"`*> STUB EXPECT {stub.data_name}(1)`)",
+                )
+            )
+        else:
+            kept.append(stub)
+    return StubScanResult(stubs=kept, skipped=skipped)

@@ -434,7 +434,13 @@ xref files as written -- `SET LK-NEG TO TRUE` -- counts for its
 conditional variable, resolved through the layout index), without the
 branch targeting. It runs on a native bundle too, adding only the stubs it
 lacks: cobol-parser 3.1's own list misses a field written only through its
-88s. A CICS program's DFHCOMMAREA and the EIB fields its branch paths test
+88s. A field under an OCCURS gets one stub per occurrence
+(`LK-TAB.LK-ENT.LK-AMT(2)`, `_stub_ref`), and a native bundle's bare stub
+on a table element is replaced by those (#474); `run --record-expectations`
+also skips any bare `*> STUB EXPECT` on an item declared only inside a table
+(`stub_expectations.skip_unsubscripted_table_stubs` over
+`record_rewrite.table_fields`) before the driver is built, since an
+unsubscripted DISPLAY does not compile. A CICS program's DFHCOMMAREA and the EIB fields its branch paths test
 are kept (since 2026-11-02; cobol-parser makes them inputs of a CICS
 program): `without_cics_parameters` is gone, and `add_entry_parameters`
 still leaves both out of a USING list it builds itself. A byte no source

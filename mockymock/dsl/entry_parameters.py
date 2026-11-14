@@ -52,11 +52,21 @@ def add_entry_parameters(
     if parameters is None:
         return bundle
     program, line, fields, outputs = parameters
+    # A field under an OCCURS has one stub per occurrence (`LK-AMT(2)`):
+    # a bare table element, as cobol-parser's own stubs name it, splices
+    # an unsubscripted DISPLAY that does not compile (issue #474).
+    tables = {spec.qualified_name for spec in fields if spec.subscripts}
     from cobolparser.generators.data import DataGeneratorOptions, ValueFactory
 
     seed = int(bundle.get("seed") or 0)
     for scenario in bundle.get("scenarios") or []:
         if scenario.get("entry_parameters") is not None:
+            if tables:
+                scenario["expectations"] = [
+                    e
+                    for e in scenario.get("expectations") or []
+                    if not (e.get("kind") == "stub" and e.get("ref") in tables)
+                ]
             stubbed = {
                 e.get("ref")
                 for e in scenario.get("expectations") or []
@@ -97,6 +107,15 @@ def _output_stub(qualified_name: str, program: str) -> dict[str, Any]:
         "value": None,
         "note": f"returned to the caller of {program}",
     }
+
+
+def _stub_ref(spec: Any) -> str:
+    """`spec`'s stub ref: its qualified name, subscripted for an
+    occurrence of a table element (`LK-TAB.LK-ENT.LK-AMT(2)`)."""
+    subscripts = tuple(spec.subscripts or ())
+    if not subscripts:
+        return str(spec.qualified_name)
+    return f"{spec.qualified_name}({', '.join(str(s) for s in subscripts)})"
 
 
 def _written_through_redefines(
@@ -142,8 +161,8 @@ def _entry_parameter_layout(
     program_path: str, copybook_paths: list[str] | None
 ) -> tuple[str, int | None, list[Any], list[str]] | None:
     """(PROGRAM-ID, PROCEDURE DIVISION line, the USING items' elementary
-    fields, the qualified names of those the program writes), or None when
-    the program takes no parameters."""
+    fields, the stub refs of those the program writes -- one per occurrence
+    of a table element), or None when the program takes no parameters."""
     from cobolparser.analysis.xref import XrefAnalyzer
     from cobolparser.generators.data import (
         DataGeneratorOptions,
@@ -198,7 +217,7 @@ def _entry_parameter_layout(
     written |= _written_through_redefines(index, names, written)
     outputs = list(
         dict.fromkeys(
-            spec.qualified_name
+            _stub_ref(spec)
             for spec in fields
             if any(part.upper() in written for part in spec.path)
         )

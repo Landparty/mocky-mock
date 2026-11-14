@@ -527,6 +527,38 @@ def address_fields(program) -> set[str]:
     }
 
 
+def table_fields(program) -> set[str]:
+    """Names (uppercased, unqualified) of the items declared only inside
+    an OCCURS table (the item or a group above it carries the OCCURS):
+    `DISPLAY LK-AMT` with no subscript does not compile, so a bare stub on
+    one must be skipped before the driver is built (issue #474). A name
+    also declared outside any table is left out. Best-effort like
+    `field_pictures`."""
+    from mockymock._cobol_layout import compute_program_data_items
+
+    try:
+        items = compute_program_data_items(program).get("items", [])
+    except Exception:  # pragma: no cover - never break a run over this
+        return set()
+    tables = {
+        str(item.get("qualified_name") or "")
+        for item in items
+        if item.get("occurs") and item.get("qualified_name")
+    }
+    inside: set[str] = set()
+    outside: set[str] = set()
+    for item in items:
+        name = str(item.get("name") or "").upper()
+        if not name or name == "FILLER" or item.get("level") == 88:
+            continue
+        qualified = str(item.get("qualified_name") or "")
+        in_table = any(
+            qualified == table or qualified.startswith(table + ".") for table in tables
+        )
+        (inside if in_table else outside).add(name)
+    return inside - outside
+
+
 def condition_names(program) -> set[str]:
     """Names (uppercased, unqualified) of every level-88 condition-name in
     `program`, declared once or under several parents alike (none of them
