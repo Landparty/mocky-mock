@@ -3,7 +3,7 @@ type: Module
 title: Coverage Reporting
 description: GnuCOBOL --coverage/gcov instrumentation wired into `mockymock run`, reporting per-line coverage of the ORIGINAL .cbl (with the instrumented copy as a labelled secondary figure) and gating CI on it via --coverage-fail-under.
 tags: [coverage, gcov, cli, runtime]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-11-14T12:00:00Z
 ---
 # Overview
 
@@ -32,6 +32,9 @@ runtime/docker_toolchain.py
 report/coverage.py
   parse_gcov(gcov_text) -> CoverageReport   -- per-line hit counts -> totals + uncovered lines
                                                (`#####` and `=====` both count as executable, never hit)
+                                               (a blank, `*>` comment, EJECT / SKIPn / TITLE line is never
+                                               executable, whatever gcov counts on it: ORUBR's blank line and
+                                               EJECT after the spliced GOBACK read `#####`)
   map_coverage_to_original(...)             -- instrumented lines -> ORIGINAL .cbl lines
   summarize_original(mapped, original)      -> OriginalCoverage (totals + uncovered, with text)
   format_coverage_console(report, name, original=, program_name=)

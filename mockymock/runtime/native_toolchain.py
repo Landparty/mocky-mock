@@ -349,6 +349,7 @@ def compile_source(
     success = result.returncode == 0 and binary_path.exists()
     return CompileResult(
         success=success,
+        returncode=result.returncode,
         binary_path=binary_path if success else None,
         stdout=result.stdout,
         stderr=result.stderr,

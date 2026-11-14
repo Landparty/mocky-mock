@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean, runner) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-11-13T21:00:00Z
+timestamp: 2026-11-14T12:00:00Z
 ---
 
 # Overview
@@ -70,7 +70,9 @@ mockymock runner    -> runner.jobs.serve (claims LegacyLens oracle and integrati
   `_cmd_run_suite` and its stages `_imply_run_flags`, `_report_checks`,
   `_stage_real_files`, `_report_coverage`, `_print_trace`; `_run_directory`,
   the crash-isolation reruns, baseline, branch coverage,
-  `_compile_failure_diagnosis`), `debug`, `lint`, `mutate`, `export`,
+  `_compile_failure_diagnosis`, which reports a compiler killed for memory
+  -- exit 137, or gcc's "Killed signal terminated program cc1" -- before it
+  probes, since the probe compiling then proves nothing), `debug`, `lint`, `mutate`, `export`,
   `collect` (collect, explain, and `_print_command_error`, which compares
   `args.func` against `_cmd_collect` / `_cmd_fixtures`), `skills`, `report`,
   `journal`, `clean`, `runner`, `analyze`, `job`.
@@ -421,6 +423,15 @@ stub. Literal / figurative / `OMITTED` / `LENGTH OF` / `ADDRESS OF` /
 cobol-parser 3.1); reference modification, several subscripts, a table
 nested in the element, or a column clash keep the note. Each fill prints a
 `note:` line on stderr.
+
+A group whose every field is FILLER (IDATE8's 12-byte `TPI-DATE`,
+PDBRP16A's 9-byte `WSSSA-PDS205RU`) flattens to no field at all, so it
+kept the misleading "not resolvable in layout index" note and a placeholder
+mock. `_opaque_group_spec` now gives it one alphanumeric spec of the
+group's own size, MOVEd by the group's name (never to FILLER); its value is
+each FILLER's generated characters end to end, numeric FILLERs as zeros. A
+group holding a binary or packed FILLER has no character image: its note
+says so instead (`_reword_notes`).
 
 **A subprogram's USING parameters are its interface (2026-10-21, issue
 #275).** `dsl/entry_parameters.py`: `fixture_generator()` builds

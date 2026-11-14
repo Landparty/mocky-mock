@@ -31,6 +31,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mockymock.splicer.source_map import _LISTING_CONTROL_LINE
+
 
 @dataclass
 class UncoveredLine:
@@ -56,6 +58,20 @@ class CoverageReport:
         return 100.0 * self.total_covered / self.total_executable
 
 
+def _not_executable(text: str) -> bool:
+    """A line gcov may still count that runs nothing: blank, a comment, or
+    a listing-control statement (EJECT, SKIP1-3, TITLE). gcc attributes a
+    block to whatever line it ends near, so after a spliced GOBACK the
+    blank line and EJECT that follow were reported uncovered (ORUBR,
+    2026-11-14 benchmark)."""
+    stripped = text.strip()
+    return (
+        not stripped
+        or stripped.startswith("*>")
+        or bool(_LISTING_CONTROL_LINE.match(text))
+    )
+
+
 def parse_gcov(gcov_text: str) -> CoverageReport:
     total_executable = 0
     total_covered = 0
@@ -73,7 +89,7 @@ def parse_gcov(gcov_text: str) -> CoverageReport:
         line_number = int(line_field)
         if line_number == 0:
             continue  # header lines: Source:/Graph:/Data:/Runs:
-        if count_field == "-":
+        if count_field == "-" or _not_executable(text):
             continue  # not executable
         if count_field in ("#####", "====="):
             total_executable += 1

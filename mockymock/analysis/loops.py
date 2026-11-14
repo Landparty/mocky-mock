@@ -57,6 +57,11 @@ class LoopGuard:
     words: frozenset[str]
     varying: frozenset[str] = frozenset()
     until_text: str = ""
+    #: Whether one pass of the loop can end the run (a GOBACK / STOP RUN /
+    #: EXIT PROGRAM / CICS RETURN in its body or in a paragraph it
+    #: reaches): a read loop then stops on a row value, not only at end of
+    #: file, so the rows it is fed are not its read count.
+    stops: bool = False
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
@@ -107,7 +112,20 @@ def loop_guards(program) -> list[LoopGuard]:
     procedure = program.get_division("PROCEDURE") if program is not None else None
     if procedure is None:
         return []
+    from mockymock.analysis.exact_counts import _stops_run
+
     guards: list[LoopGuard] = []
+    by_name: dict[str, object] = {}
+    for paragraph in _all_paragraphs(procedure):
+        by_name.setdefault(paragraph.paragraph_name, paragraph)
+
+    def stops_in(paragraphs: set[str], body: list) -> bool:
+        statements = list(_walk(body))
+        for name in paragraphs:
+            paragraph = by_name.get(name)
+            if paragraph is not None:
+                statements.extend(_walk(getattr(paragraph, "statements", [])))
+        return any(_stops_run(statement) for statement in statements)
 
     def reachable(target: str | None, thru: str | None) -> set[str]:
         if not target:
@@ -132,6 +150,7 @@ def loop_guards(program) -> list[LoopGuard]:
                     _condition_words(statement),
                     _varying_words(statement),
                     _until_text(statement),
+                    stops_in(paragraphs, body),
                 )
             )
     return guards

@@ -40,6 +40,60 @@ def _is_failure_path_scenario(name: str) -> bool:
 _UNKNOWN_READ_KEY_NOTE = "the record key it reads by has no value known"
 
 
+def _with_site_lines(bundle: FixtureBundle, surface: MockSurface) -> FixtureBundle:
+    """`bundle` with each fixture's `line` moved onto the line mockymock
+    sees for the same site, when the two disagree.
+
+    The passes below find a fixture's site by line (`site.line ==
+    fixture.line`: the AT END that adds the end-of-file read, the READ
+    form, the OPEN mode, the DL/I function). A bundle built from another
+    copybook expansion (`--fixtures` from a separate cobol-parser run, a
+    copylib laid out differently) numbers every line after a COPY
+    differently, so no site matched and a READ ... AT END loop got the row
+    count without its end-of-file read (10 where the program reads 11).
+    The sites of one (category, key) keep their order in both numberings,
+    so a fixture whose line is no site of its key takes the site of the
+    same rank among that key's lines, or the only site when there is one."""
+    site_lines: dict[tuple[str, str], list[int]] = {}
+    for site in surface.boundary_sites:
+        if site.category is None:
+            continue
+        for key in site.keys:
+            site_lines.setdefault((site.category.value, key.upper()), []).append(
+                site.line
+            )
+    site_lines = {pair: sorted(set(lines)) for pair, lines in site_lines.items()}
+    bundle_lines: dict[tuple[str, str], set[int]] = {}
+    for scenario in bundle.scenarios:
+        for fixture in scenario.fixtures:
+            if fixture.line is not None:
+                bundle_lines.setdefault(
+                    (fixture.category, fixture.key.upper()), set()
+                ).add(fixture.line)
+    moved: dict[tuple[str, str], dict[int, int]] = {}
+    for pair, lines in bundle_lines.items():
+        known = site_lines.get(pair)
+        if not known or lines <= set(known):
+            continue
+        ordered = sorted(lines)
+        if len(known) == 1:
+            moved[pair] = dict.fromkeys(ordered, known[0])
+        elif len(ordered) == len(known):
+            moved[pair] = dict(zip(ordered, known, strict=True))
+    if not moved:
+        return bundle
+    scenarios = []
+    for scenario in bundle.scenarios:
+        fixtures = []
+        for fixture in scenario.fixtures:
+            to_site = moved.get((fixture.category, fixture.key.upper()))
+            if to_site is not None and fixture.line in to_site:
+                fixture = replace(fixture, line=to_site[fixture.line])
+            fixtures.append(fixture)
+        scenarios.append(replace(scenario, fixtures=fixtures))
+    return replace(bundle, scenarios=scenarios)
+
+
 def _with_read_forms(bundle: FixtureBundle, surface: MockSurface) -> FixtureBundle:
     """`bundle` with each READ fixture fitted to the form of its READ site.
 

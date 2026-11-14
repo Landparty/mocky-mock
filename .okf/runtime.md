@@ -3,7 +3,7 @@ type: Module
 title: Docker Runtime
 description: mockymock-cobc container lifecycle, docker exec-based compile/run, the Docker sandbox model, and the opt-in native backend that runs a bundled GnuCOBOL tree instead.
 tags: [runtime, docker, gnucobol, native]
-timestamp: 2026-10-25T00:00:00Z
+timestamp: 2026-11-14T12:00:00Z
 ---
 
 # Overview
@@ -322,7 +322,7 @@ implementations that used to live there were deleted wholesale, not adapted:
 
 | Module | Contents kept |
 |--------|---------------|
-| `runtime/compiler.py` | `CompileResult` dataclass: `success: bool`, `binary_path: Path \| None`, `stdout: str`, `stderr: str` |
+| `runtime/compiler.py` | `CompileResult` dataclass: `success: bool`, `binary_path: Path \| None`, `stdout: str`, `stderr: str`, `returncode: int \| None` (cobc's exit status; 137 = SIGKILL, the container's OOM killer) |
 | `runtime/executor.py` | `ExecutionResult` dataclass, `TIMEOUT_EXIT_CODE = 124`, `NOT_FOUND_EXIT_CODE = 127`, `_coerce_output()` |
 | `runtime/status.py` | The read-only counterpart: `probe() -> ToolchainStatus` (four `Check` records — `daemon`, `image`, `container`, `cobc`) mirroring the lifecycle table above using pure reads only. Documented in [dashboard](dashboard.md), not here, because both its consumers (`dashboard`, `doctor`) live there. |
 

@@ -131,3 +131,38 @@ def test_an_unrecognized_cobc_option_is_not_blamed_on_mockymock(tmp_path):
     assert diagnosis is not None
     assert "does not support --coverage" in diagnosis
     assert "mockymock bug" not in diagnosis
+
+
+def test_an_oom_killed_compile_is_not_blamed_on_mockymock(tmp_path: Path):
+    """2026-11-14 benchmark: cobc was OOM-killed at the container's 1 GiB
+    limit (oom_kill 14 -> 15); the probe compiled, so the run reported
+    "the code mockymock added broke the compile"."""
+    toolchain, calls = _toolchain(True)
+    message = _compile_failure_diagnosis(toolchain, tmp_path, LINES, "", returncode=137)
+    assert message is not None
+    assert "mockymock bug" not in message
+    assert "killed" in message and "out of memory" in message
+    assert "1 GiB" in message
+    assert calls == []  # the probe would prove nothing
+
+
+def test_gcc_reporting_its_cc1_killed_is_an_oom_kill(tmp_path: Path):
+    toolchain, _ = _toolchain(True)
+    stderr = (
+        "gcc: fatal error: Killed signal terminated program cc1\n"
+        "compilation terminated.\n"
+    )
+    message = _compile_failure_diagnosis(
+        toolchain, tmp_path, LINES, stderr, returncode=1
+    )
+    assert message is not None and "out of memory" in message
+
+
+def test_a_probe_killed_for_memory_is_no_verdict_on_the_program(tmp_path: Path):
+    toolchain, _ = _toolchain(False, "cobc: Killed signal terminated program cc1\n")
+    message = _compile_failure_diagnosis(
+        toolchain, tmp_path, LINES, "PROG.cbl:9: error: something\n", returncode=1
+    )
+    assert message is not None
+    assert "does not compile under GnuCOBOL" not in message
+    assert "out of memory" in message

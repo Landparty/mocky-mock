@@ -534,7 +534,11 @@ def test_compile_source_failure_carries_cobc_stderr(tmp_path):
     ):
         result = compile_source(source)
     assert result == CompileResult(
-        success=False, binary_path=None, stdout="", stderr="PROG.cbl:7: syntax error"
+        success=False,
+        binary_path=None,
+        stdout="",
+        stderr="PROG.cbl:7: syntax error",
+        returncode=1,
     )
 
 

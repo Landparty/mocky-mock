@@ -847,6 +847,7 @@ def _cmd_run_suite(args: argparse.Namespace) -> int:
                 tmp,
                 normalized_lines,
                 compiled.stderr,
+                returncode=getattr(compiled, "returncode", None),
                 real_programs=[
                     (
                         f"real_{prepared.program_id.upper()}.cbl",
@@ -1490,6 +1491,52 @@ _EXEC_RE = re.compile(r"\bEXEC\s+(SQL|CICS|DLI|SQLIMS)\b", re.IGNORECASE)
 
 _UNRECOGNIZED_OPTION_RE = re.compile(r"unrecognized option '(?P<option>--?[\w-]+)'")
 
+#: What a compile killed for memory leaves behind: gcc's own report when
+#: its cc1 is killed under cobc, or an allocator giving up.
+_KILLED_COMPILE_RE = re.compile(
+    r"Killed signal terminated program|terminated by signal 9|"
+    r"virtual memory exhausted|out of memory|cannot allocate memory|"
+    r"^\s*Killed\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+#: SIGKILL as an exit status (128 + 9), and as Python reports a child
+#: killed by it.
+_SIGKILL_STATUSES = frozenset({137, -9})
+
+
+def _compile_was_killed(stderr: str, returncode: int | None) -> bool:
+    """Whether the compiler was killed (in the memory-capped container,
+    by the kernel's out-of-memory killer) rather than rejecting the
+    source."""
+    return returncode in _SIGKILL_STATUSES or bool(_KILLED_COMPILE_RE.search(stderr))
+
+
+def _killed_compile_diagnosis(returncode: int | None) -> str:
+    sign = (
+        f"exit {returncode}"
+        if returncode in _SIGKILL_STATUSES
+        else "the compiler reported it was killed"
+    )
+    return (
+        f"the compiler was killed before it finished ({sign}), most likely "
+        f"out of memory: the mockymock-cobc container is capped at "
+        f"{_container_memory_limit()} and a large program's generated C can "
+        f"need more. This says nothing about the program or mockymock's "
+        f"changes -- run it again with fewer compiles at once, and check "
+        f"`docker inspect mockymock-cobc` / the container's oom_kill count"
+    )
+
+
+def _container_memory_limit() -> str:
+    try:
+        from mockymock.runtime.docker_toolchain import MEMORY_LIMIT
+    except Exception:  # noqa: BLE001 -- only wording
+        return "a fixed memory limit"
+    units = {"g": "GiB", "m": "MiB"}
+    unit = units.get(MEMORY_LIMIT[-1:].lower())
+    return f"{MEMORY_LIMIT[:-1]} {unit}" if unit else MEMORY_LIMIT
+
 
 def _compile_failure_diagnosis(
     toolchain: ModuleType,
@@ -1497,6 +1544,7 @@ def _compile_failure_diagnosis(
     normalized_lines: list[str],
     stderr: str = "",
     real_programs: Sequence[tuple[str, str, list[str]]] = (),
+    returncode: int | None = None,
 ) -> str | None:
     """Whose compile failure this is, when that can be told: the program
     as mockymock read it (copybooks expanded, nothing spliced) is compiled
@@ -1516,6 +1564,8 @@ def _compile_failure_diagnosis(
     they are compiled with the probe, unchanged. A real program that does
     not compile was reported as "the program compiles on its own, so ... a
     mockymock bug" (2026-11-05): only the program under test was probed."""
+    if _compile_was_killed(stderr, returncode):
+        return _killed_compile_diagnosis(returncode)
     option = _UNRECOGNIZED_OPTION_RE.search(stderr)
     if option is not None:
         return (
@@ -1547,6 +1597,9 @@ def _compile_failure_diagnosis(
         )
     except Exception:  # noqa: BLE001 -- a diagnosis must never hide the failure
         return None
+    probe_status = getattr(result, "returncode", None)
+    if not result.success and _compile_was_killed(result.stderr, probe_status):
+        return _killed_compile_diagnosis(probe_status)
     if not result.success:
         for name, program_id, _ in reals:
             first = next(

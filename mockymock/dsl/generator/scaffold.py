@@ -18,12 +18,14 @@ from mockymock.dsl.generator.bundle import _bundle_mock_directives
 from mockymock.dsl.generator.counts import (
     _AFTER_STOP_REASON,
     _CONDITIONAL_SITE_REASON,
+    _EARLY_EXIT_READ_REASON,
     _NO_END_READ_REASON,
     _UNREACHED_SITE_REASON,
     _USE_PROCEDURE_REASON,
     _after_possible_stop,
     _conditional_call_count_keys,
     _count_keys,
+    _early_exit_read_keys,
     _endless_read_keys,
     _merged_call_counts,
     _once_per_site_counts,
@@ -47,6 +49,7 @@ from mockymock.dsl.generator.normalize import (
     _with_open_modes,
     _with_read_forms,
     _with_site_call_counts,
+    _with_site_lines,
 )
 from mockymock.dsl.generator.rows import _row_move_lines
 from mockymock.dsl.model import MockCategory, MockDirective, MockTestCase, MockTestSuite
@@ -489,7 +492,11 @@ def _scaffold_with_bundle(
 ) -> str:
     bundle = _with_accept_keys(
         _with_site_call_counts(
-            _with_open_modes(_with_read_forms(bundle, surface), surface), surface
+            _with_open_modes(
+                _with_read_forms(_with_site_lines(bundle, surface), surface),
+                surface,
+            ),
+            surface,
         )
     )
     mockymock_keys = _mockymock_boundary_keys(surface)
@@ -652,6 +659,20 @@ def _scaffold_with_bundle(
                         demote_reason=_NO_END_READ_REASON, from_placeholder=False
                     ),
                 )
+            for key_pair in _early_exit_read_keys(
+                expectations, surface, reachable, source
+            ):
+                # Wins over an end-of-file count (`_status_read_eof`): a
+                # row that takes the exit stops the reads before it. A
+                # placeholder READ ends on its first call, before any row.
+                existing = call_count_overrides.get(key_pair)
+                if existing is None or (
+                    existing.demote_reason is None and not existing.from_placeholder
+                ):
+                    call_count_overrides[key_pair] = CallCountOverride(
+                        demote_reason=_EARLY_EXIT_READ_REASON,
+                        from_placeholder=False,
+                    )
             for key_pair, count in _unlooped_read_counts(
                 expectations, surface, reachable, source
             ).items():
