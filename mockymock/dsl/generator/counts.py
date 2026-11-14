@@ -347,6 +347,11 @@ _NO_END_READ_REASON = (
     "END clause: a keyed/random READ, or a loop run a fixed number of "
     "TIMES), so the number of generated rows is not the number of reads"
 )
+_EARLY_EXIT_READ_REASON = (
+    "read inside a loop that can end the run before end of file (a GOBACK "
+    "/ STOP RUN in the loop body, taken on a row value), so the number of "
+    "generated rows is not the number of reads"
+)
 _UNREACHED_SITE_REASON = (
     "also called from a paragraph this case's PERFORM never reaches (a CICS "
     "HANDLE CONDITION target, or code nothing PERFORMs), which the bundle's "
@@ -601,6 +606,39 @@ def _endless_read_keys(
             (site.nested or site_in_loop(site, source.looped))
             and not getattr(site.statement, "at_end_clause", None)
             for site in sites
+        ):
+            keys.append((MockCategory.READ, key))
+    return keys
+
+
+def _early_exit_read_keys(
+    expectations: list[Expectation],
+    surface: MockSurface,
+    reachable: set[str] | None,
+    source: ProgramContext,
+) -> list[tuple[MockCategory, str]]:
+    """READ keys read inside a loop whose body can end the run (a GOBACK /
+    STOP RUN, `analysis.loops.LoopGuard.stops`). The bundle counts the rows
+    plus the end-of-file read, which holds only when no row takes that
+    exit: PDBRP16A's first generated row selects its V9 branch, which
+    GOBACKs after one READ."""
+    keys: list[tuple[MockCategory, str]] = []
+    stopping = [guard for guard in source.guards if guard.stops]
+    if not stopping:
+        return keys
+    among = _count_keys(expectations).get(MockCategory.READ, ())
+    for expectation in expectations:
+        if expectation.kind != "call_count":
+            continue
+        category_str, _, key = expectation.ref.partition(":")
+        if category_str != MockCategory.READ.value:
+            continue
+        sites = _sites_for_key(MockCategory.READ, key, surface, reachable, among)
+        if any(
+            site.paragraph_name in guard.paragraphs
+            or id(site.statement) in guard.statement_ids
+            for site in sites
+            for guard in stopping
         ):
             keys.append((MockCategory.READ, key))
     return keys

@@ -283,3 +283,56 @@ def test_filled_call_fixture_gets_a_direction(monkeypatch):
     # ... and an argument going the other way makes it BIDIRECTIONAL.
     assert _add_fields(bundle, "CALL", "PAYCALC", "C", [_spec("C")], 1, "IN")
     assert fixture["direction"] == "BIDIRECTIONAL"
+
+
+FILLER_GROUPS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FILLGRP.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-AREA.
+           05  TPI-DATE.
+               10  FILLER     PIC X(4).
+               10  FILLER     PIC X(8).
+           05  WS-OTHER       PIC X(2).
+       01  WSSSA-PDS205RU.
+           05  FILLER         PIC X(5).
+           05  FILLER         PIC 9(4).
+       01  WS-PACKED.
+           05  FILLER         PIC S9(5) COMP-3.
+       PROCEDURE DIVISION.
+       MAIN-PROCESS.
+           CALL 'IDATE8' USING TPI-DATE
+           CALL 'PDS205RU' USING WSSSA-PDS205RU
+           CALL 'PACKPGM' USING WS-PACKED
+           GOBACK.
+"""
+
+
+def test_an_all_filler_group_is_set_by_its_own_name(tmp_path, monkeypatch, capsys):
+    """IDATE8's 12-byte TPI-DATE and PDBRP16A's 9-byte WSSSA-PDS205RU hold
+    only FILLER: flattening found no field, so the CALL got a placeholder
+    and a misleading "not resolvable in layout index" note. The group now
+    gets one value of its own size, never a MOVE to FILLER; a numeric
+    FILLER's bytes are zeros."""
+    (tmp_path / "FILLGRP.cbl").write_text(FILLER_GROUPS, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["generate", "FILLGRP.cbl", "-o", "FILLGRP.cut"]) == 0
+    text = (tmp_path / "FILLGRP.cut").read_text(encoding="utf-8")
+    err = capsys.readouterr().err
+    assert "argument TPI-DATE not resolvable" not in text + err
+    assert "argument WSSSA-PDS205RU not resolvable" not in text + err
+    assert "TO FILLER" not in text
+    idate = text[text.index('MOCK CALL "IDATE8"') :]
+    idate = idate[: idate.index("END-MOCK")]
+    value = idate.split('MOVE "', 1)[1].split('" TO TPI-DATE', 1)[0]
+    assert len(value) == 12
+    pds = text[text.index('MOCK CALL "PDS205RU"') :]
+    pds = pds[: pds.index("END-MOCK")]
+    value = pds.split('MOVE "', 1)[1].split('" TO WSSSA-PDS205RU', 1)[0]
+    assert len(value) == 9 and value.endswith("0000")
+    # A packed FILLER has no character image: no value, and a note that
+    # says why.
+    assert "argument WS-PACKED not resolvable" not in text
+    assert "argument WS-PACKED holds only FILLER fields" in text
+    assert main(["lint", "FILLGRP.cbl", "--cut", "FILLGRP.cut"]) == 0

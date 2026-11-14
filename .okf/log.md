@@ -5,6 +5,20 @@ line -- several 2026-09 entries were once appended at the bottom by
 branch merges and had to be moved back, which is what this note exists to
 prevent.
 
+## 2026-11-14 -- benchmark: READ counts, FILLER-only groups, OOM-killed compiles, gcov blank lines
+
+[dsl](dsl.md): bundle fixture lines are moved onto mockymock's own sites
+before any line match (`_with_site_lines`), so a bundle from another
+copybook expansion keeps the AT END read; a READ in a loop that can GOBACK
+/ STOP RUN gets no exact count (`_early_exit_read_keys`, PDBRP16A).
+[cli](cli.md): an all-FILLER CALL argument is set as one opaque value by
+its group name; a compile the kernel killed for memory is reported as
+that, not as a mockymock bug (`CompileResult.returncode`).
+[coverage](coverage.md): `parse_gcov` drops blank, comment and
+listing-control lines. Tests: `test_benchmark_read_counts.py`,
+`test_call_argument_resolution.py`, `test_compile_diagnosis.py`,
+`test_coverage.py`.
+
 ## 2026-11-13 -- baseline namesakes (#477)
 
 [report](report.md): `run --baseline` matches two cases with the same name by

@@ -362,3 +362,19 @@ def test_format_coverage_json_carries_the_original_percentage():
     )
     assert payload["original"]["percentage"] == 50.0
     assert payload["instrumented"]["percentage"] == 75.0
+
+
+def test_parse_gcov_drops_lines_that_run_nothing():
+    """ORUBR (2026-11-14 benchmark): gcov put the blank line and the EJECT
+    after the spliced GOBACK on `#####`; they are not program lines."""
+    gcov = (
+        "        1:   10:    GOBACK.\n"
+        "    #####:   11:\n"
+        "    #####:   12:    EJECT\n"
+        "    #####:   13:    SKIP2.\n"
+        "    #####:   14:    *> a comment\n"
+        "    #####:   15:    MOVE 1 TO WS-A.\n"
+    )
+    report = parse_gcov(gcov)
+    assert report.total_executable == 2
+    assert [u.line_number for u in report.uncovered_lines] == [15]

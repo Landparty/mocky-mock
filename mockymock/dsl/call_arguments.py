@@ -107,6 +107,7 @@ def fill_call_arguments(
         return bundle, []
     seed = int(bundle.get("seed") or 0)
     dropped: set[str] = set()
+    reworded: dict[str, str] = {}
     filled: list[str] = []
     for note, (category, key, arg_text) in notes.items():
         if is_non_data_argument(arg_text):
@@ -123,6 +124,15 @@ def fill_call_arguments(
             specs = argument_fields(index, arg_text)
         except Exception:  # noqa: BLE001 -- one odd argument never fails the rest
             specs = None
+        if specs == []:
+            # Found, but nothing a MOVE can set: say so, not "not
+            # resolvable" (a packed or binary all-FILLER group).
+            reworded[note] = (
+                f"{category} {key}: argument {arg_text} holds only FILLER "
+                "fields with no character image (binary or packed), so no "
+                "value is generated for it"
+            )
+            continue
         if not specs:
             continue
         direction = (
@@ -139,6 +149,7 @@ def fill_call_arguments(
                 "program's DATA DIVISION"
             )
     _drop_notes(bundle, dropped)
+    _reword_notes(bundle, reworded)
     return bundle, filled
 
 
@@ -227,7 +238,88 @@ def argument_fields(index: Any, text: str) -> list[Any] | None:
             spec.column = f"{spec.name}({subscript})"
         spec.path = (*prefix, *spec.path)
         specs.append(spec)
+    if not specs:
+        opaque = _opaque_group_spec(item, prefix, subscript)
+        if opaque is not None:
+            specs.append(opaque)
     return specs
+
+
+#: The FILLER fields an opaque group spec stands for (`_opaque_group_spec`),
+#: kept on the spec so `_add_fields` can build its value field by field.
+_OPAQUE_PARTS = "_mockymock_opaque_parts"
+
+
+def _opaque_group_spec(item: Any, prefix: tuple[str, ...], subscript: str | None):
+    """One alphanumeric spec for a group whose every field is FILLER
+    (`01 WSSSA-PDS205RU. 05 FILLER PIC X(5). 05 FILLER PIC 9(4).`), which
+    `flatten_record` leaves with no field at all. The group is set by its
+    own name, as one value the size of the group: no MOVE can name a
+    FILLER. None for an elementary item, or a group holding a field that
+    is not DISPLAY (a binary or packed FILLER has no character image to
+    write)."""
+    from dataclasses import replace
+
+    from cobolparser.generators.data import DataGeneratorOptions, flatten_record
+    from cobolparser.layout.fields import FieldCategory
+
+    if not list(getattr(item, "children", None) or []):
+        return None
+    parts = list(flatten_record(item, DataGeneratorOptions(include_filler=True)))
+    if not parts or any(
+        str(part.usage).upper() != "DISPLAY"
+        or part.storage_size != part.size
+        or (subscript is not None and len(part.subscripts) > 1)
+        for part in parts
+    ):
+        return None
+    if subscript is not None:
+        parts = [part for part in parts if list(part.subscripts) in ([], [1])]
+    total = sum(part.size for part in parts)
+    name = str(item.name).upper()
+    spec = replace(
+        parts[0],
+        name=name,
+        path=(*prefix, name),
+        column=f"{name}({subscript})" if subscript is not None else name,
+        level=int(getattr(item, "level", parts[0].level) or parts[0].level),
+        picture=f"X({total})",
+        category=FieldCategory.ALPHANUMERIC,
+        size=total,
+        integer_digits=0,
+        decimal_digits=0,
+        is_signed=False,
+        value_clause=None,
+        condition_values=[],
+        subscripts=(),
+        is_filler=False,
+        sign_clause=None,
+        blank_when_zero=False,
+        justified=False,
+    )
+    setattr(spec, _OPAQUE_PARTS, parts)
+    return spec
+
+
+def _opaque_value(spec: Any, factory: Any, row_number: int) -> str | None:
+    """The value of an opaque group spec: each FILLER's own generated
+    characters, numeric ones zero (a valid DISPLAY number of any
+    PICTURE), laid end to end. None for any other spec."""
+    from dataclasses import replace
+
+    parts = getattr(spec, _OPAQUE_PARTS, None)
+    if parts is None:
+        return None
+    pieces = []
+    for part in parts:
+        if part.category in ("numeric", "numeric-edited"):
+            pieces.append("0" * part.size)
+        else:
+            # A FILLER generates as blanks: draw it as a named field.
+            named = replace(part, is_filler=False, name=spec.name)
+            text = str(factory.value_for(named, row_number))
+            pieces.append(text[: part.size].ljust(part.size))
+    return "".join(pieces)
 
 
 def _occurs(item: Any) -> bool:
@@ -334,7 +426,12 @@ def _add_fields(
             rows.append({})
         for row_number, row in enumerate(rows):
             for spec in specs:
-                row[spec.column] = factory.value_for(spec, row_number)
+                opaque = _opaque_value(spec, factory, row_number)
+                row[spec.column] = (
+                    opaque
+                    if opaque is not None
+                    else factory.value_for(spec, row_number)
+                )
     return True
 
 
@@ -374,6 +471,17 @@ def _add_stub(
         expectations.append(
             {"kind": "stub", "ref": argument.name, "value": None, "note": note}
         )
+
+
+def _reword_notes(bundle: dict[str, Any], reworded: dict[str, str]) -> None:
+    if not reworded:
+        return
+    bundle["unresolved"] = [reworded.get(n, n) for n in bundle.get("unresolved") or []]
+    for scenario in bundle.get("scenarios") or []:
+        for fixture in scenario.get("fixtures") or []:
+            fixture["unresolved"] = [
+                reworded.get(n, n) for n in fixture.get("unresolved") or []
+            ]
 
 
 def _drop_notes(bundle: dict[str, Any], dropped: set[str]) -> None:

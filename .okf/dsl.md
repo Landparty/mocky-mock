@@ -3,7 +3,7 @@ type: Module
 title: DSL (.cut test files)
 description: MockTestSuite/MockTestCase/MockDirective model, the parser that reads .cut text into it, and the generator that scaffolds .cut files from a MockSurface.
 tags: [dsl, parser, cut-file]
-timestamp: 2026-11-13T21:00:00Z
+timestamp: 2026-11-14T12:00:00Z
 ---
 
 # Overview
@@ -725,7 +725,7 @@ layer first (each imports only from modules above it in this list):
 | `directives.py` | bundle-less placeholder directives: `_directive_for`, `directive_snippet` |
 | `bundle.py` | bundle-driven directives: `_bundle_directive_for(_group)`, `_dli_rows_directive`, `_sql_rows_directive`, `_bundle_mock_directives` |
 | `counts.py` | EXPECT/VERIFY rendering (`_render_expectation`) and the call-count site analysis (`_conditional_call_count_keys`, `_once_per_site_counts`, ...) |
-| `normalize.py` | bundle normalization passes (`_with_read_forms`, `_with_open_modes`, `_with_site_call_counts`, `_with_accept_keys`) |
+| `normalize.py` | bundle normalization passes (`_with_site_lines`, `_with_read_forms`, `_with_open_modes`, `_with_site_call_counts`, `_with_accept_keys`) |
 | `scaffold.py` | `scaffold_cut`, `_scaffold_placeholder`, `_scaffold_with_bundle`, `_first_paragraph`, entry-parameter and CANCEL-cover lines |
 
 A test that monkeypatches a generator function must patch the submodule
@@ -773,6 +773,20 @@ Rules:
 - Exact counts (`analysis.exact_counts`): a site after a branch holding a GO
   TO (`READ F AT END GO TO P-END`) gets no exact VERIFY count, like one
   after a branch holding a STOP RUN (NIST RW301M).
+- Bundle lines are moved onto mockymock's own (`normalize._with_site_lines`,
+  first pass) before any pass matches a fixture to its site by line: a
+  bundle numbered by another copybook expansion (`--fixtures` from a
+  separate cobol-parser run) matched no READ site, so the AT END that adds
+  the end-of-file read was never seen (`11 TIMES` written as 10). The
+  sites of one (category, key) keep their order in both numberings, so a
+  fixture whose line is none of its key's sites takes the site of the same
+  rank, or the only one.
+- A READ inside a loop that can end the run (`analysis.loops.LoopGuard.stops`:
+  a GOBACK / STOP RUN / EXIT PROGRAM / CICS RETURN in the loop body or a
+  paragraph it reaches) gets no exact count (`counts._early_exit_read_keys`,
+  `_EARLY_EXIT_READ_REASON`): a row can take the exit before end of file
+  (PDBRP16A's first row selects V9 and GOBACKs after one READ). It wins
+  over a FILE STATUS end-of-file count, not over a placeholder's 1.
 - `--per-paragraph` PERFORMs a paragraph `THRU` the exit the program
   itself names (`ProgramContext.thru_exit`: every `PERFORM X` in the
   program says `THRU` the same paragraph), and computes its mocks from that
