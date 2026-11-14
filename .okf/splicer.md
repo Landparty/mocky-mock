@@ -3,7 +3,7 @@ type: Module
 title: Splicer
 description: Turns mock_surface boundary sites into spliced COBOL source — dispatch blocks, tally fields, WORKING-STORAGE reset, and the generated SQLCA.
 tags: [splicer, injection, cobol-source]
-timestamp: 2026-11-13T18:00:00Z
+timestamp: 2026-11-13T20:00:00Z
 ---
 
 # Overview
@@ -871,7 +871,13 @@ built from one copybook); the old unqualified `MOVE "N" TO REC-FLAG` was
 ambiguous there, and cobc rejected the whole driver, so no suite for the
 program could run. Full qualification is always legal, so nothing detects
 the ambiguity first. `_elementary_reset(item, target)` takes the reference
-to write to; top-level items still use their bare name.
+to write to; top-level items still use their bare name. One case full
+qualification cannot fix: the same name twice under one group (TTSIM26A's
+`WS000-INDICE` under `WS000-CONSTANTES`). When a VALUE child would need such
+a reference (`_has_ambiguous_value_child`, on the same `_name_index` /
+`_unique_reference` as #281), the group is reset with `INITIALIZE <group>
+ALL TO VALUE THEN TO DEFAULT` (WITH FILLER if it has a FILLER) instead of
+INITIALIZE plus per-child MOVEs (2026-11-13 benchmark).
 
 **FILLER groups are transparent (issue #247).** A FILLER group can still
 hold named items. `reset_targets` replaces a top-level `01 FILLER.`

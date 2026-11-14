@@ -18,6 +18,35 @@ occurrence (`LK-AMT(2)`), replacing cobol-parser's bare one, and `run
 --record-expectations` skips a bare stub on a table element instead of
 splicing a DISPLAY that does not compile.
 
+## 2026-11-13 -- benchmark: SECTION leading code reachability, configurable IMS call names
+
+[analysis](analysis.md): the reachability walk keys each section's nameless
+leading paragraph per section, so code later sections PERFORM from there is
+reached (its MOCK SQL blocks were dropped, the FETCH looped forever).
+[dsl](dsl.md) / [cli](cli.md): `ims_call_names` in mockymock's config lists
+a site's DL/I wrappers (CBLTBNC2, CBLTBNC3), which `generate` then answers
+like CBLTDLI. Tests: `test_reachability_nameless_section_code.py`,
+`test_generator_dli_end_status.py`, `test_cli_config.py`.
+
+## 2026-11-13 -- benchmark: unknown program end, duplicate child names in resets
+
+[analysis](analysis.md): a terminator never gets the `GO TO UT-PROGRAM-END`
+plan when the program's last paragraph is unknown (a bare PERFORM's
+`perform_thru` None matched it, leaving an undefined label in 8 sectioned
+programs). [splicer](splicer.md): a group whose VALUE child is named twice
+under it is reset with `INITIALIZE ... ALL TO VALUE THEN TO DEFAULT`, since
+no qualified MOVE can name either child. Tests: `test_main_line_cases.py`,
+`test_reset.py`.
+
+## 2026-11-13 -- benchmark follow-ups: IMS QD, uv.lock in releases, ~ in roots
+
+[dsl](dsl.md): a GN on the I/O PCB (the next segment of a multi-segment
+message) ends on `QD` when the program's loop waits for it, instead of a
+database GN's `GB`. [publishing](publishing.md): release-please bumps
+`uv.lock`'s mockymock version, pinned by `test_smoke.py`. [cli](cli.md):
+`test_root` and `source_root` expand `~` and `${HOME}`. Tests:
+`test_generator_dli_end_status.py`, `test_cli_config.py`, `test_smoke.py`.
+
 ## 2026-11-13 -- issue sweep: SORT record limits, IF NE TRUE, found-record mock, mock-body inputs
 
 [cli](cli.md): job SORT applies `SKIPREC=` / `STOPAFT=` from SORT or OPTION

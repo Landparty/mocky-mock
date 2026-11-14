@@ -42,6 +42,7 @@ cobol-parser-only keys you may meet: `callee_path`, `proc_path`,
 | `seed` | integer | from `project:` | Same as `project.seed`, for mockymock only. |
 | `copybook_aliases` | mapping `MEMBER: file` | none | A member whose file name the search can never match (`GTTLBI0A: export/m0042.txt`). The file must exist; relative to the config file. |
 | `copybook_extensions` | list of extensions | `.cpy .cbl .cob .copy .cblcpy .dcl .dclgen .inc .txt` and none | Which differently named files in a copybook folder are matched to a member automatically, in any case (`gttlbi0a.copy` -> `GTTLBI0A`). `[]` turns the automatic matching off. |
+| `ims_call_names` | list of program names | none | Your site's own wrappers around the IMS DL/I call interface (`[CBLTBNC2, CBLTBNC3]`), called like `CBLTDLI` (`USING function PCB ...`). `generate` then answers them as DL/I calls: a blank PCB status on success, and `QC`/`GE`/`GB` where a loop waits for the end of the messages or segments. CBLTDLI and CEETDLI are always known. |
 
 Not configurable, on purpose: `--timeout`, and every per-run choice
 (`--case`, `--tag`, report paths).

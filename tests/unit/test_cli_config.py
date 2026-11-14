@@ -41,6 +41,23 @@ def test_load_config_test_root_resolved_relative_to_config_file(tmp_path):
     assert config.test_root == str(tmp_path / "tests")
 
 
+@pytest.mark.parametrize("prefix", ["~", "${HOME}"])
+def test_load_config_expands_home_in_test_and_source_roots(
+    tmp_path, monkeypatch, prefix
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # expanduser on Windows
+    project = tmp_path / "app"
+    project.mkdir()
+    (project / "mockymock.toml").write_text(
+        f'test_root = "{prefix}/tests"\nsource_root = "{prefix}/src"\n'
+    )
+    config = load_config(project)
+    assert config.test_root == str(home / "tests")
+    assert config.source_root == str(home / "src")
+
+
 def test_load_config_absolute_test_root_left_as_is(tmp_path):
     absolute = tmp_path / "elsewhere"
     (tmp_path / "mockymock.toml").write_text(f'test_root = "{absolute.as_posix()}"\n')
@@ -158,3 +175,19 @@ def test_resolve_copybook_paths_falls_back_to_config_list():
 
 def test_resolve_copybook_paths_empty_list_when_no_config():
     assert resolve_copybook_paths(None, MockymockConfig()) == []
+
+
+def test_load_config_reads_ims_call_names_upper_cased(tmp_path):
+    (tmp_path / "mockymock.toml").write_text(
+        'ims_call_names = ["cbltbnc2", "CBLTBNC3"]\n'
+    )
+    assert load_config(tmp_path).ims_call_names == ("CBLTBNC2", "CBLTBNC3")
+
+
+@pytest.mark.parametrize(
+    "body", ['ims_call_names = "CBLTBNC3"\n', 'ims_call_names = ["../X"]\n']
+)
+def test_load_config_validates_ims_call_names(tmp_path, body):
+    (tmp_path / "mockymock.toml").write_text(body)
+    with pytest.raises(ConfigError, match="ims_call_names"):
+        load_config(tmp_path)

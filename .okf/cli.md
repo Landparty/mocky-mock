@@ -3,7 +3,7 @@ type: Module
 title: CLI
 description: argparse entry point (setup, init, generate, fixtures, run, debug, lint, mutate, collect, suites, explain, dashboard, doctor, export, analyze, skills, report, journal, clean, runner) that orchestrates the splicer, GnuCOBOL runtime, and report formatters.
 tags: [cli, entrypoint]
-timestamp: 2026-11-13T18:00:00Z
+timestamp: 2026-11-13T21:00:00Z
 ---
 
 # Overview
@@ -272,8 +272,12 @@ each explicit `copybook_aliases` entry (`GTTLBI0A = "export/m0042.txt"`,
 relative to its config file after `~` and `$VAR`/`${VAR}` expansion, as
 cobol-parser does for `project.copybook_path`; must exist; wins over an
 automatic match). A `copybook_path` in mockymock's own config is expanded
-the same way (`config._expanded`).
-`copybook_extensions = []` turns the automatic part off. The staging
+the same way (`config._expanded`), and so are `test_root` and
+`source_root`.
+`copybook_extensions = []` turns the automatic part off. `ims_call_names`
+(a list of program names, upper-cased) is read here too and handed to
+`generate` only, as `ProgramContext.build(ims_call_names=...)`: see
+[dsl](dsl.md). The staging
 directory lives under `$TMPDIR/mockymock-copybook-aliases/<digest>`, keyed
 by member, path, size and mtime, so an unchanged copylib is staged once;
 files are hard-linked or copied, never symlinked (cobol-parser's

@@ -166,6 +166,23 @@ def test_the_same_stop_run_is_still_refused_for_a_bare_perform():
     assert program_end_thru(program, plans) is None
 
 
+def test_an_unknown_last_paragraph_never_ends_a_bare_perform():
+    # 2026-11-13 benchmark: with the last paragraph unknown (here the last
+    # SECTION has its statements under no paragraph), a bare PERFORM's
+    # perform_thru None equalled it and the STOP RUN got a GO TO
+    # UT-PROGRAM-END that no paragraph defined, since program_end_thru
+    # found no end to append it after.
+    source = CCVS.replace("       CCVS-999999.\n", "")
+    program, surface, scope_map, lines = _analyze(source)
+    assert program_last_paragraph(program) is None
+    plans, reasons = find_terminator_plans(
+        surface, program, _suite("OPEN-FILES", None), scope_map, lines
+    )
+    assert [p.exit_kind for p in plans] == ["RETURN"]
+    assert reasons == []
+    assert program_end_thru(program, plans) is None
+
+
 def test_a_stop_run_the_program_also_performs_cannot_end_the_main_line():
     source = CCVS.replace(
         "       TEST-2.\n           ADD 1 TO PASS-COUNTER.\n",

@@ -3,7 +3,7 @@ type: Module
 title: Analysis
 description: mock_surface.py finds every mockable boundary statement in a COBOL program; the refusal/ package decides, per test case, what must be refused fail-closed; stub_expectations.py backs run --record-expectations.
 tags: [analysis, reachability, refusal, fail-closed]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-11-13T21:00:00Z
 ---
 
 # Overview
@@ -579,3 +579,18 @@ declarative paragraph names. `MockSurface.use_procedures` carries it.
 - A terminator inside DECLARATIVES never ends a main-line case with `GO TO
   UT-PROGRAM-END` (`_plans._main_line_end_problem`): the USE section runs
   under the splice's PERFORM, and no GO TO may leave DECLARATIVES.
+- A main-line `GO TO UT-PROGRAM-END` plan needs a known last paragraph
+  (`program_last_paragraph` not None). A bare PERFORM's `perform_thru` is
+  None too, and the old `perform_thru == last_paragraph` test matched
+  None == None in a sectioned program whose last SECTION has no paragraph
+  of its own: the plan was taken, `program_end_thru` appended no
+  UT-PROGRAM-END, and cobc refused the undefined label (2026-11-13
+  benchmark, 8 programs). Such a terminator now gets the RETURN plan.
+- Code before a SECTION's first paragraph header sits in a paragraph
+  cobol-parser names "" in every section. `_reachable_bfs` keys each one
+  per section (`_NAMELESS_KEY_PREFIX` + section name) when a section is
+  expanded, and folds them back to "" in what it returns. Keyed by name
+  they were one paragraph: only the first section's leading code was
+  walked, and everything later sections' leading code PERFORMs was
+  unreachable, so `generate` dropped its MOCKs and lint missed the
+  unmocked statements (2026-11-13 benchmark, PDSTI16A, FRTFRA6A).
