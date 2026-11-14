@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.1](https://github.com/Landparty/mocky-mock/compare/v0.17.0...v0.17.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* benchmark compile and timeout causes (program-end plan, duplicate-child reset, SECTION leading code, configurable IMS call names) ([#476](https://github.com/Landparty/mocky-mock/issues/476)) ([414f045](https://github.com/Landparty/mocky-mock/commit/414f045d94df2f5699c1d74b985c1c5fd56d4625))
+* benchmark READ counts, all-FILLER CALL arguments, OOM-killed compiles, gcov blank lines ([#478](https://github.com/Landparty/mocky-mock/issues/478)) ([17bb115](https://github.com/Landparty/mocky-mock/commit/17bb1157aeed2598df59923c631359e63185cc3e))
+* end multi-segment IMS GN loops on QD, keep uv.lock in step with releases, expand ~ in test/source roots ([#472](https://github.com/Landparty/mocky-mock/issues/472)) ([d889d69](https://github.com/Landparty/mocky-mock/commit/d889d6915e2609e1e0fcdfaf44f84fefaf8a47b2))
+* keep sentence period before EJECT/SKIP, end IMS GU loops on QC, expand ~ in copybook aliases ([cd016c4](https://github.com/Landparty/mocky-mock/commit/cd016c44ea91bdd634e9e637813c514677aeb3ea))
+* SORT SKIPREC/STOPAFT, IF NE TRUE, found-record mock names, mock-body inputs ([fc89014](https://github.com/Landparty/mocky-mock/commit/fc89014bf118f7c0b6698cf48469d37948ba580a))
+* subscript OCCURS entry stubs ([#474](https://github.com/Landparty/mocky-mock/issues/474)), baseline namesakes ([#477](https://github.com/Landparty/mocky-mock/issues/477)) ([#475](https://github.com/Landparty/mocky-mock/issues/475)) ([d9f6e86](https://github.com/Landparty/mocky-mock/commit/d9f6e863f7183347393598a144ea606131a34cad))
+
 ## [0.17.0](https://github.com/Landparty/mocky-mock/compare/v0.16.1...v0.17.0) (2026-11-13)
 
 
